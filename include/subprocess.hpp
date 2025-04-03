@@ -225,12 +225,12 @@ struct env_operator {
   EnvItemAppend operator[](std::string key) { return EnvItemAppend{{key, ""}}; }
 };
 
-[[maybe_unused]] auto static devnull = path_t("/dev/null");
-[[maybe_unused]] static stdin_operator std_in{0};
-[[maybe_unused]] static stdout_operator std_out{1};
-[[maybe_unused]] static stdout_operator std_err{2};
-[[maybe_unused]] static cwd_operator cwd;
-[[maybe_unused]] static env_operator env;
+[[maybe_unused]] inline static auto devnull = path_t("/dev/null");
+[[maybe_unused]] inline static stdin_operator std_in{0};
+[[maybe_unused]] inline static stdout_operator std_out{1};
+[[maybe_unused]] inline static stdout_operator std_err{2};
+[[maybe_unused]] inline static cwd_operator cwd;
+[[maybe_unused]] inline static env_operator env;
 
 class subprocess {
   template <typename... Ts>
