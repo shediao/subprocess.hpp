@@ -5,32 +5,40 @@
 
 using namespace subprocess;
 
-# 1. simple usage
+// 1. simple usage
 int exit_code = run({"/bin/echo", "-n", "123"});
 
-# 2. capture stdout&stderr
+// 2. capture stdout&stderr
 std::vector<char> stdout_buf, stderr_buf;
-run({"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"}, std_out > stdout_buf, std_err > stderr_buf);
+run(
+    {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
+    std_out > stdout_buf,   # > is redirect
+    std_err > stderr_buf    # > is redirect
+);
 
-# 3. redirect to file
+// 3. redirect to file
 std::vector<char> stdout_buf, stderr_buf;
-run({"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"}, std_out > "/tmp/out.txt", std_err > "/tmp/err.txt");
+run(
+    {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
+    std_out > "/tmp/out.txt",
+    std_err > "/tmp/err.txt"
+);
 
-# 4. set environments && append environments
+// 4. set environments && append environments
 run({"/usr/bin/printenv"}, env={
-#                             ^ ~~~this is override environment
+//                            ^ ~~~this is override environment
   {"e1", "v1"},
   {"e2", "e2"}
 });
 
 run({"/usr/bin/printenv"}, env+={
-#                             ^ ~~~this is append environment
+//                            ^ ~~~this is append environment
   {"e1", "v1"},
   {"e2", "e2"}
 });
 
 
-# 5. set cwd
+// 5. set cwd
 run({"/bin/pwd"}, cwd="/home/my");
 
 ```
@@ -64,3 +72,8 @@ add_subdirectory(/path/to/subprocess.hpp)
 ### 2. others
 
 copy `subprocess.hpp` to myproject/dir/include
+
+## TODO
+
+1. redirect append to file
+2. support windows、bsd

@@ -56,7 +56,7 @@ TEST(SubprocessTest, RedirectOut) {
   using namespace process;
   auto tmp_file = createTemporaryFile();
   std::vector<char> content{'1', '2', '3'};
-  run({"/bin/echo", "-n", std::string(content.data(), content.size())}, std_out > std::filesystem::path(tmp_file));
+  run({"/bin/echo", "-n", std::string(content.data(), content.size())}, std_out > tmp_file);
   ASSERT_EQ(content, readFile(tmp_file));
   unlink(tmp_file.c_str());
 }
@@ -65,7 +65,7 @@ TEST(SubprocessTest, RedirectErr) {
   using namespace process;
   auto tmp_file = createTemporaryFile();
   std::vector<char> content{'1', '2', '3'};
-  run({"bash", "-c", "echo -n " + std::string(content.data(), content.size()) + " >&2"}, std_err > std::filesystem::path(tmp_file));
+  run({"bash", "-c", "echo -n " + std::string(content.data(), content.size()) + " >&2"}, std_err > tmp_file);
   ASSERT_EQ(content, readFile(tmp_file));
   unlink(tmp_file.c_str());
 }

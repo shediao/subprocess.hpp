@@ -8,19 +8,24 @@
 #pragma once
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <map>
 #include <sstream>
 #include <string>
 #include <variant>
+#include <vector>
 
 // POSIX (Linux, macOS, etc.) implementation
 extern char **environ;
 
 namespace process {
 
+using std::nullptr_t;
 using data_container = std::vector<char>;
 using path_t = std::filesystem::path;
 
@@ -241,7 +246,20 @@ public:
         _stderr{err} {}
 
   int run() {
+    setup();
+    auto pid = fork();
+    if (pid < 0) {
+      throw std::runtime_error("fork failed");
+    } else if (pid == 0) {
+      child_run();
+      return 0;
+    } else {
+      return wait_child(pid);
+    }
+  }
 
+private:
+  void setup() {
     std::visit(overloaded{[](nullptr_t) {}, [](int) {},
                           [this](std::reference_wrapper<data_container> &) {
                             if (-1 == pipe(this->_stdin.pipe_fds)) {
@@ -288,68 +306,8 @@ public:
                    }},
         _stderr.io);
 
-    auto pid = fork();
-    if (pid < 0) {
-      throw std::runtime_error("fork failed");
-    } else if (pid == 0) {
-
-      std::visit(overloaded{[](nullptr_t) {},
-                            [](int fd) { dup2(fd, STDIN_FILENO); },
-                            [this](std::reference_wrapper<data_container> &) {
-                              close(this->_stdin.pipe_fds[1]);
-                              dup2(this->_stdin.pipe_fds[0], STDIN_FILENO);
-                            },
-                            [](path_t &f) {}},
-                 _stdin.io);
-
-      std::visit(overloaded{[](nullptr_t) {},
-                            [](int fd) { dup2(fd, STDOUT_FILENO); },
-                            [this](std::reference_wrapper<data_container> &) {
-                              close(this->_stdout.pipe_fds[0]);
-                              dup2(this->_stdout.pipe_fds[1], STDOUT_FILENO);
-                            },
-                            [](path_t &f) {}},
-                 _stdout.io);
-
-      std::visit(overloaded{[](nullptr_t) {},
-                            [](int fd) { dup2(fd, STDERR_FILENO); },
-                            [this](std::reference_wrapper<data_container> &) {
-                              close(this->_stderr.pipe_fds[0]);
-                              dup2(this->_stderr.pipe_fds[1], STDERR_FILENO);
-                            },
-                            [](path_t &f) {}},
-                 _stderr.io);
-      std::vector<char *> cmd{};
-      std::transform(_cmd.begin(), _cmd.end(), std::back_inserter(cmd),
-                     [](std::string &s) { return s.data(); });
-      cmd.push_back(nullptr);
-      if (!_cwd.empty() && (-1 == chdir(_cwd.data()))) {
-        throw std::runtime_error("chdir failed: " + _cwd);
-      }
-      auto exe_file = _cmd[0];
-      if (exe_file.find('\\') == std::string::npos) {
-        auto exe_path = search_path(exe_file).string();
-        if (!exe_path.empty()) {
-          exe_file = exe_path;
-        }
-      }
-      if (!_env.empty()) {
-        std::vector<std::string> env_tmp{};
-
-        std::transform(
-            _env.begin(), _env.end(), std::back_inserter(env_tmp),
-            [](auto &entry) { return entry.first + "=" + entry.second; });
-
-        std::vector<char *> envs{};
-        std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
-                       [](auto &s) { return s.data(); });
-        envs.push_back(nullptr);
-        execve(exe_file.c_str(), cmd.data(), envs.data());
-      } else {
-        execv(exe_file.c_str(), cmd.data());
-      }
-      throw std::runtime_error(std::string("execv failed: ") + strerror(errno));
-    } else {
+  }
+  int wait_child(int pid) {
       std::visit(overloaded{[](nullptr_t) {}, [](int fd) {},
                             [this](std::reference_wrapper<data_container> &) {
                               close(this->_stdin.pipe_fds[0]);
@@ -406,6 +364,7 @@ public:
               stdin_str.remove_prefix(len);
             }
             if (len < 0) {
+              close(fds[0].fd);
               fds[0].fd = -1;
             }
           }
@@ -420,6 +379,7 @@ public:
             tmp.insert(tmp.end(), buf, buf + len);
           }
           if (len == 0) {
+            close(fds[1].fd);
             fds[1].fd = -1;
           }
           if (len < 0) {
@@ -438,6 +398,7 @@ public:
             tmp.insert(tmp.end(), buf, buf + len);
           }
           if (len == 0) {
+            close(fds[2].fd);
             fds[2].fd = -1;
           }
           if (len < 0) {
@@ -446,13 +407,16 @@ public:
             throw std::runtime_error(err);
           }
         }
-        if (fds[0].revents & POLLNVAL) {
+        if (fds[0].fd != -1 && (fds[0].revents & POLLNVAL || fds[0].revents & POLLHUP || fds[0].revents & POLLERR)) {
+          close(fds[0].fd);
           fds[0].fd = -1;
         }
-        if (fds[1].revents & POLLNVAL) {
+        if (fds[1].fd != -1 && (fds[1].revents & POLLNVAL || fds[1].revents & POLLHUP || fds[1].revents & POLLERR)) {
+          close(fds[1].fd);
           fds[1].fd = -1;
         }
-        if (fds[2].revents & POLLNVAL) {
+        if (fds[2].fd != -1 && (fds[2].revents & POLLNVAL || fds[2].revents & POLLHUP || fds[2].revents & POLLERR)) {
+          close(fds[2].fd);
           fds[2].fd = -1;
         }
         if (fds[0].fd == -1 && fds[1].fd == -1 && fds[2].fd == -1) {
@@ -469,10 +433,69 @@ public:
         return_code = 128 + (WTERMSIG(status));
       }
       return return_code;
-    }
+  }
+  void child_run() {
+      std::visit(overloaded{[](nullptr_t) {},
+                            [](int fd) { dup2(fd, STDIN_FILENO); },
+                            [this](std::reference_wrapper<data_container> &) {
+                              close(this->_stdin.pipe_fds[1]);
+                              dup2(this->_stdin.pipe_fds[0], STDIN_FILENO);
+                            },
+                            [](path_t &f) {}},
+                 _stdin.io);
+
+      std::visit(overloaded{[](nullptr_t) {},
+                            [](int fd) { dup2(fd, STDOUT_FILENO); },
+                            [this](std::reference_wrapper<data_container> &) {
+                              close(this->_stdout.pipe_fds[0]);
+                              dup2(this->_stdout.pipe_fds[1], STDOUT_FILENO);
+                            },
+                            [](path_t &f) {}},
+                 _stdout.io);
+
+      std::visit(overloaded{[](nullptr_t) {},
+                            [](int fd) { dup2(fd, STDERR_FILENO); },
+                            [this](std::reference_wrapper<data_container> &) {
+                              close(this->_stderr.pipe_fds[0]);
+                              dup2(this->_stderr.pipe_fds[1], STDERR_FILENO);
+                            },
+                            [](path_t &f) {}},
+                 _stderr.io);
+      std::vector<char *> cmd{};
+      std::transform(_cmd.begin(), _cmd.end(), std::back_inserter(cmd),
+                     [](std::string &s) { return s.data(); });
+      cmd.push_back(nullptr);
+      if (!_cwd.empty() && (-1 == chdir(_cwd.data()))) {
+        throw std::runtime_error("chdir failed: " + _cwd);
+      }
+      auto exe_file = _cmd[0];
+      if (exe_file.find('\\') == std::string::npos) {
+        auto exe_path = search_path(exe_file).string();
+        if (!exe_path.empty()) {
+          exe_file = exe_path;
+        }
+      }
+      if (!_env.empty()) {
+        std::vector<std::string> env_tmp{};
+
+        std::transform(
+            _env.begin(), _env.end(), std::back_inserter(env_tmp),
+            [](auto &entry) { return entry.first + "=" + entry.second; });
+
+        std::vector<char *> envs{};
+        std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
+                       [](auto &s) { return s.data(); });
+        envs.push_back(nullptr);
+        execve(exe_file.c_str(), cmd.data(), envs.data());
+      } else {
+        execv(exe_file.c_str(), cmd.data());
+      }
+      throw std::runtime_error(std::string("execv failed: ") + strerror(errno));
   }
 
+
 private:
+
   std::vector<std::string> _cmd;
   std::string _cwd{};
   std::map<std::string, std::string> _env;
