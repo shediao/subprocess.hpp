@@ -1,0 +1,4 @@
+BasedOnStyle: Google
+Standard: Cpp11
+InsertBraces: true
+InsertNewlineAtEOF: true

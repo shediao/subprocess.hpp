@@ -1,6 +1,6 @@
-#include "subprocess.hpp"
-
 #include <gtest/gtest.h>
+
+#include "subprocess.hpp"
 
 TEST(SubprocessTest, ExitCode) {
   using namespace process;
@@ -11,7 +11,8 @@ TEST(SubprocessTest, ExitCode) {
     ASSERT_EQ(i, run({"bash", "-c", "exit " + std::to_string(i)}));
   }
 
-  for (int i:{4,9,15}) {
-    ASSERT_EQ(128 + i, run({"bash", "-c", "kill -" + std::to_string(i) + " $BASHPID"}));
+  for (int i : {4, 9, 15}) {
+    ASSERT_EQ(128 + i,
+              run({"bash", "-c", "kill -" + std::to_string(i) + " $BASHPID"}));
   }
 }
