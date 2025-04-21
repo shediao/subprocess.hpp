@@ -143,7 +143,8 @@ class Stdio {
   const int fileno;
 
  private:
-  std::variant<nullptr_t, int, std::reference_wrapper<data_container>, path_t>
+  std::variant<decltype(nullptr), int, std::reference_wrapper<data_container>,
+               path_t>
       io{nullptr};
   bool append{false};
   int pipe_fds[2];
@@ -226,13 +227,13 @@ struct env_operator {
 };
 
 namespace named_arguments {
-  inline static auto devnull = path_t("/dev/null");
-  inline static stdin_operator std_in{0};
-  inline static stdout_operator std_out{1};
-  inline static stdout_operator std_err{2};
-  inline static cwd_operator cwd;
-  inline static env_operator env;
-}
+inline static auto devnull = path_t("/dev/null");
+inline static stdin_operator std_in{0};
+inline static stdout_operator std_out{1};
+inline static stdout_operator std_err{2};
+inline static cwd_operator cwd;
+inline static env_operator env;
+}  // namespace named_arguments
 
 using namespace named_arguments;
 
@@ -271,7 +272,7 @@ class subprocess {
  private:
   void setup() {
     std::visit(
-        overloaded{[](nullptr_t) {}, [](int) {},
+        overloaded{[](decltype(nullptr)) {}, [](int) {},
                    [this](std::reference_wrapper<data_container> &) {
                      if (-1 == pipe(this->_stdin.pipe_fds)) {
                        throw std::runtime_error{"pipe failed"};
@@ -286,7 +287,7 @@ class subprocess {
                    }},
         _stdin.io);
 
-    std::visit(overloaded{[](nullptr_t) {}, [](int) {},
+    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
                           [this](std::reference_wrapper<data_container> &) {
                             if (-1 == pipe(this->_stdout.pipe_fds)) {
                               throw std::runtime_error{"pipe failed"};
@@ -300,7 +301,7 @@ class subprocess {
                _stdout.io);
 
     std::visit(
-        overloaded{[](nullptr_t) {}, [](int) {},
+        overloaded{[](decltype(nullptr)) {}, [](int) {},
                    [this](std::reference_wrapper<data_container> &) {
                      if (-1 == pipe(this->_stderr.pipe_fds)) {
                        throw std::runtime_error{"pipe failed"};
@@ -317,21 +318,21 @@ class subprocess {
         _stderr.io);
   }
   int wait_child(int pid) {
-    std::visit(overloaded{[](nullptr_t) {}, [](int fd) {},
+    std::visit(overloaded{[](decltype(nullptr)) {}, [](int fd) {},
                           [this](std::reference_wrapper<data_container> &) {
                             close(this->_stdin.pipe_fds[0]);
                           },
                           [](path_t &f) {}},
                _stdin.io);
 
-    std::visit(overloaded{[](nullptr_t) {}, [](int fd) {},
+    std::visit(overloaded{[](decltype(nullptr)) {}, [](int fd) {},
                           [this](std::reference_wrapper<data_container> &) {
                             close(this->_stdout.pipe_fds[1]);
                           },
                           [](path_t &f) {}},
                _stdout.io);
 
-    std::visit(overloaded{[](nullptr_t) {}, [](int) {},
+    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
                           [this](std::reference_wrapper<data_container> &) {
                             close(this->_stderr.pipe_fds[1]);
                           },
@@ -451,7 +452,7 @@ class subprocess {
   }
   void child_run() {
     std::visit(
-        overloaded{[](nullptr_t) {}, [](int fd) { dup2(fd, STDIN_FILENO); },
+        overloaded{[](decltype(nullptr)) {}, [](int fd) { dup2(fd, STDIN_FILENO); },
                    [this](std::reference_wrapper<data_container> &) {
                      close(this->_stdin.pipe_fds[1]);
                      dup2(this->_stdin.pipe_fds[0], STDIN_FILENO);
@@ -460,7 +461,7 @@ class subprocess {
         _stdin.io);
 
     std::visit(
-        overloaded{[](nullptr_t) {}, [](int fd) { dup2(fd, STDOUT_FILENO); },
+        overloaded{[](decltype(nullptr)) {}, [](int fd) { dup2(fd, STDOUT_FILENO); },
                    [this](std::reference_wrapper<data_container> &) {
                      close(this->_stdout.pipe_fds[0]);
                      dup2(this->_stdout.pipe_fds[1], STDOUT_FILENO);
@@ -469,7 +470,7 @@ class subprocess {
         _stdout.io);
 
     std::visit(
-        overloaded{[](nullptr_t) {}, [](int fd) { dup2(fd, STDERR_FILENO); },
+        overloaded{[](decltype(nullptr)) {}, [](int fd) { dup2(fd, STDERR_FILENO); },
                    [this](std::reference_wrapper<data_container> &) {
                      close(this->_stderr.pipe_fds[0]);
                      dup2(this->_stderr.pipe_fds[1], STDERR_FILENO);
@@ -535,16 +536,21 @@ int run(std::vector<std::string> cmd, T... args) {
              } else if (arg.fileno == 2) {
                stderr = arg;
              }
-           } else if constexpr (std::is_same_v<ArgType, Env>) {
-             env.insert(arg.env.begin(), arg.env.end());
-           } else if constexpr (std::is_same_v<ArgType, EnvItemAppend>) {
-             env_appends.push_back(arg.kv);
-           } else if constexpr (std::is_same_v<ArgType, Cwd>) {
-             cwd = arg.cwd.string();
-           } else {
-             static_assert(false,
-                           "Invalid argument type passed to run function.");
            }
+           if constexpr (std::is_same_v<ArgType, Env>) {
+             env.insert(arg.env.begin(), arg.env.end());
+           }
+           if constexpr (std::is_same_v<ArgType, EnvItemAppend>) {
+             env_appends.push_back(arg.kv);
+           }
+           if constexpr (std::is_same_v<ArgType, Cwd>) {
+             cwd = arg.cwd.string();
+           }
+           static_assert(std::is_same_v<ArgType, Stdio> ||
+                             std::is_same_v<ArgType, Env> ||
+                             std::is_same_v<ArgType, EnvItemAppend> ||
+                             std::is_same_v<ArgType, Cwd>,
+                         "Invalid argument type passed to run function.");
          }(args)));
   return subprocess(cmd, stdin, stdout, stderr, cwd, env).run();
 }
