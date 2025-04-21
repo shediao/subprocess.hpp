@@ -50,7 +50,8 @@ std::string getHomeDirectory() {
 }
 
 TEST(SubprocessTest, CWD) {
-  using namespace process;
+  using namespace process::named_arguments;
+  using process::run;
   std::vector<char> out;
 
   auto home_dir = getHomeDirectory();

@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -25,7 +26,6 @@ extern char **environ;
 
 namespace process {
 
-using std::nullptr_t;
 using data_container = std::vector<char>;
 using path_t = std::filesystem::path;
 
@@ -225,12 +225,16 @@ struct env_operator {
   EnvItemAppend operator[](std::string key) { return EnvItemAppend{{key, ""}}; }
 };
 
-[[maybe_unused]] inline static auto devnull = path_t("/dev/null");
-[[maybe_unused]] inline static stdin_operator std_in{0};
-[[maybe_unused]] inline static stdout_operator std_out{1};
-[[maybe_unused]] inline static stdout_operator std_err{2};
-[[maybe_unused]] inline static cwd_operator cwd;
-[[maybe_unused]] inline static env_operator env;
+namespace named_arguments {
+  inline static auto devnull = path_t("/dev/null");
+  inline static stdin_operator std_in{0};
+  inline static stdout_operator std_out{1};
+  inline static stdout_operator std_err{2};
+  inline static cwd_operator cwd;
+  inline static env_operator env;
+}
+
+using namespace named_arguments;
 
 class subprocess {
   template <typename... Ts>

@@ -57,7 +57,8 @@ std::vector<char> readFile(std::string f) {
 }
 
 TEST(SubprocessTest, RedirectOut) {
-  using namespace process;
+  using namespace process::named_arguments;
+  using process::run;
   auto tmp_file = createTemporaryFile();
   std::vector<char> content{'1', '2', '3'};
   run({"/bin/echo", "-n", std::string(content.data(), content.size())},
@@ -67,7 +68,8 @@ TEST(SubprocessTest, RedirectOut) {
 }
 
 TEST(SubprocessTest, RedirectErr) {
-  using namespace process;
+  using namespace process::named_arguments;
+  using process::run;
   auto tmp_file = createTemporaryFile();
   std::vector<char> content{'1', '2', '3'};
   run({"bash", "-c",

@@ -3,7 +3,8 @@
 #include "subprocess.hpp"
 
 TEST(SubprocessTest, ExitCode) {
-  using namespace process;
+  using namespace process::named_arguments;
+  using process::run;
   ASSERT_EQ(0, run({"true"}));
   ASSERT_EQ(1, run({"false"}));
 
