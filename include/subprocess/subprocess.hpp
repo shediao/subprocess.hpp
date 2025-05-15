@@ -135,9 +135,10 @@ class Stdio {
 
  public:
   Stdio(int fileno) : fileno(fileno) {}
-  Stdio &operator=(Stdio const &s) {
-    io = s.io;
-    append = s.append;
+  Stdio(Stdio const &o) = default;
+  Stdio &operator=(Stdio const &o) {
+    this->append = o.append;
+    this->io = o.io;
     return *this;
   }
   const int fileno;
@@ -247,7 +248,8 @@ class subprocess {
 
  public:
   subprocess(std::vector<std::string> cmd, Stdio in = Stdio{0},
-             Stdio out = Stdio{1}, Stdio err = Stdio{2}, std::string working_directory = {},
+             Stdio out = Stdio{1}, Stdio err = Stdio{2},
+             std::string working_directory = {},
              std::map<std::string, std::string> environments = {})
       : _cmd{cmd},
         _cwd{working_directory},
@@ -318,28 +320,32 @@ class subprocess {
         _stderr.io);
   }
   int wait_child(int pid) {
-    std::visit(overloaded{[](decltype(nullptr)) {}, [](int fd) {},
-                          [this](std::reference_wrapper<data_container> &) {
-                            close(this->_stdin.pipe_fds[0]);
-                          },
-                          [](path_t &f) {}},
-               _stdin.io);
+    std::visit(
+        overloaded{[](decltype(nullptr)) {}, [](int) {},
+                   [this](std::reference_wrapper<data_container> &) {
+                     close(this->_stdin.pipe_fds[0]);
+                   },
+                   [](path_t &) {}},
+        _stdin.io);
 
-    std::visit(overloaded{[](decltype(nullptr)) {}, [](int fd) {},
-                          [this](std::reference_wrapper<data_container> &) {
-                            close(this->_stdout.pipe_fds[1]);
-                          },
-                          [](path_t &f) {}},
-               _stdout.io);
+    std::visit(
+        overloaded{[](decltype(nullptr)) {}, [](int) {},
+                   [this](std::reference_wrapper<data_container> &) {
+                     close(this->_stdout.pipe_fds[1]);
+                   },
+                   [](path_t &) {}},
+        _stdout.io);
 
     std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
                           [this](std::reference_wrapper<data_container> &) {
                             close(this->_stderr.pipe_fds[1]);
                           },
-                          [](path_t &f) {}},
+                          [](path_t &) {}},
                _stderr.io);
 
-    struct pollfd fds[3]{{-1, POLLOUT}, {-1, POLLIN}, {-1, POLLIN}};
+    struct pollfd fds[3]{{.fd = -1, .events = POLLOUT, .revents = 0},
+                         {.fd = -1, .events = POLLIN, .revents = 0},
+                         {.fd = -1, .events = POLLIN, .revents = 0}};
     std::string_view stdin_str{};
     if (std::holds_alternative<std::reference_wrapper<data_container>>(
             _stdin.io)) {
@@ -451,32 +457,32 @@ class subprocess {
     return return_code;
   }
   void child_run() {
-    std::visit(
-        overloaded{[](decltype(nullptr)) {}, [](int fd) { dup2(fd, STDIN_FILENO); },
-                   [this](std::reference_wrapper<data_container> &) {
-                     close(this->_stdin.pipe_fds[1]);
-                     dup2(this->_stdin.pipe_fds[0], STDIN_FILENO);
-                   },
-                   [](path_t &f) {}},
-        _stdin.io);
+    std::visit(overloaded{[](decltype(nullptr)) {},
+                          [](int fd) { dup2(fd, STDIN_FILENO); },
+                          [this](std::reference_wrapper<data_container> &) {
+                            close(this->_stdin.pipe_fds[1]);
+                            dup2(this->_stdin.pipe_fds[0], STDIN_FILENO);
+                          },
+                          [](path_t &) {}},
+               _stdin.io);
 
-    std::visit(
-        overloaded{[](decltype(nullptr)) {}, [](int fd) { dup2(fd, STDOUT_FILENO); },
-                   [this](std::reference_wrapper<data_container> &) {
-                     close(this->_stdout.pipe_fds[0]);
-                     dup2(this->_stdout.pipe_fds[1], STDOUT_FILENO);
-                   },
-                   [](path_t &f) {}},
-        _stdout.io);
+    std::visit(overloaded{[](decltype(nullptr)) {},
+                          [](int fd) { dup2(fd, STDOUT_FILENO); },
+                          [this](std::reference_wrapper<data_container> &) {
+                            close(this->_stdout.pipe_fds[0]);
+                            dup2(this->_stdout.pipe_fds[1], STDOUT_FILENO);
+                          },
+                          [](path_t &) {}},
+               _stdout.io);
 
-    std::visit(
-        overloaded{[](decltype(nullptr)) {}, [](int fd) { dup2(fd, STDERR_FILENO); },
-                   [this](std::reference_wrapper<data_container> &) {
-                     close(this->_stderr.pipe_fds[0]);
-                     dup2(this->_stderr.pipe_fds[1], STDERR_FILENO);
-                   },
-                   [](path_t &f) {}},
-        _stderr.io);
+    std::visit(overloaded{[](decltype(nullptr)) {},
+                          [](int fd) { dup2(fd, STDERR_FILENO); },
+                          [this](std::reference_wrapper<data_container> &) {
+                            close(this->_stderr.pipe_fds[0]);
+                            dup2(this->_stderr.pipe_fds[1], STDERR_FILENO);
+                          },
+                          [](path_t &) {}},
+               _stderr.io);
     std::vector<char *> cmd{};
     std::transform(_cmd.begin(), _cmd.end(), std::back_inserter(cmd),
                    [](std::string &s) { return s.data(); });
@@ -552,7 +558,8 @@ int run(std::vector<std::string> cmd, T... args) {
                              std::is_same_v<ArgType, Cwd>,
                          "Invalid argument type passed to run function.");
          }(args)));
-  return subprocess(cmd, stdin, stdout, stderr, working_directory, environments).run();
+  return subprocess(cmd, stdin, stdout, stderr, working_directory, environments)
+      .run();
 }
 
 }  // namespace process
