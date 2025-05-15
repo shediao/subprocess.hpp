@@ -247,11 +247,11 @@ class subprocess {
 
  public:
   subprocess(std::vector<std::string> cmd, Stdio in = Stdio{0},
-             Stdio out = Stdio{1}, Stdio err = Stdio{2}, std::string cwd = {},
-             std::map<std::string, std::string> env = {})
+             Stdio out = Stdio{1}, Stdio err = Stdio{2}, std::string working_directory = {},
+             std::map<std::string, std::string> environments = {})
       : _cmd{cmd},
-        _cwd{cwd},
-        _env{env},
+        _cwd{working_directory},
+        _env{environments},
         _stdin{in},
         _stdout{out},
         _stderr{err} {}
@@ -371,7 +371,7 @@ class subprocess {
         } else {
           auto len = write(fds[0].fd, stdin_str.data(), stdin_str.size());
           if (len > 0) {
-            stdin_str.remove_prefix(len);
+            stdin_str.remove_prefix(static_cast<size_t>(len));
           }
           if (len < 0) {
             close(fds[0].fd);
@@ -523,8 +523,8 @@ int run(std::vector<std::string> cmd, T... args) {
   Stdio stdin{0};
   Stdio stdout{1};
   Stdio stderr{2};
-  std::string cwd;
-  std::map<std::string, std::string> env;
+  std::string working_directory;
+  std::map<std::string, std::string> environments;
   std::vector<std::pair<std::string, std::string>> env_appends;
   (void)(..., ([&](auto arg) {
            using ArgType = std::decay_t<decltype(arg)>;
@@ -538,13 +538,13 @@ int run(std::vector<std::string> cmd, T... args) {
              }
            }
            if constexpr (std::is_same_v<ArgType, Env>) {
-             env.insert(arg.env.begin(), arg.env.end());
+             environments.insert(arg.env.begin(), arg.env.end());
            }
            if constexpr (std::is_same_v<ArgType, EnvItemAppend>) {
              env_appends.push_back(arg.kv);
            }
            if constexpr (std::is_same_v<ArgType, Cwd>) {
-             cwd = arg.cwd.string();
+             working_directory = arg.cwd.string();
            }
            static_assert(std::is_same_v<ArgType, Stdio> ||
                              std::is_same_v<ArgType, Env> ||
@@ -552,7 +552,7 @@ int run(std::vector<std::string> cmd, T... args) {
                              std::is_same_v<ArgType, Cwd>,
                          "Invalid argument type passed to run function.");
          }(args)));
-  return subprocess(cmd, stdin, stdout, stderr, cwd, env).run();
+  return subprocess(cmd, stdin, stdout, stderr, working_directory, environments).run();
 }
 
 }  // namespace process

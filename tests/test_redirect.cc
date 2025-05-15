@@ -2,7 +2,7 @@
 
 #include <fstream>
 
-#include "subprocess.hpp"
+#include "subprocess/subprocess.hpp"
 
 std::string createTemporaryFile() {
 #ifdef _WIN32

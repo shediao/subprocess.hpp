@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "subprocess.hpp"
+#include "subprocess/subprocess.hpp"
 
 TEST(SubprocessTest, ExitCode) {
   using namespace process::named_arguments;

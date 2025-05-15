@@ -8,7 +8,11 @@ set("PROJECT_DESCRIPTION"
     "A header-only lightweight subprocess for c++17")
 set("PROJECT_HOMEPAGE_URL" "https://github.com/shediao/subprocess.hpp")
 
-option(SUBPROCESS_BUILD_TESTS "Set to ON to build tests" OFF)
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+  option(SUBPROCESS_BUILD_TESTS "Set to ON to build tests" ON)
+else()
+  option(SUBPROCESS_BUILD_TESTS "Set to ON to build tests" OFF)
+endif()
 
 add_library(subprocess INTERFACE)
 

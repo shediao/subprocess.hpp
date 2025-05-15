@@ -3,7 +3,7 @@
 #include <cstdlib>  // For getenv
 #include <string>
 
-#include "subprocess.hpp"
+#include "subprocess/subprocess.hpp"
 
 #ifdef _WIN32
 #include <windows.h>  // For GetUserProfileDirectory
