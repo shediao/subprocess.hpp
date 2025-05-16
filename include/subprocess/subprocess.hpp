@@ -228,12 +228,12 @@ struct env_operator {
 };
 
 namespace named_arguments {
-inline static auto devnull = path_t("/dev/null");
-inline static stdin_operator std_in{0};
-inline static stdout_operator std_out{1};
-inline static stdout_operator std_err{2};
-inline static cwd_operator cwd;
-inline static env_operator env;
+[[maybe_unused]] inline static auto devnull = path_t("/dev/null");
+[[maybe_unused]] inline static stdin_operator std_in{0};
+[[maybe_unused]] inline static stdout_operator std_out{1};
+[[maybe_unused]] inline static stdout_operator std_err{2};
+[[maybe_unused]] inline static cwd_operator cwd;
+[[maybe_unused]] inline static env_operator env;
 }  // namespace named_arguments
 
 using namespace named_arguments;
@@ -320,21 +320,19 @@ class subprocess {
         _stderr.io);
   }
   int wait_child(int pid) {
-    std::visit(
-        overloaded{[](decltype(nullptr)) {}, [](int) {},
-                   [this](std::reference_wrapper<data_container> &) {
-                     close(this->_stdin.pipe_fds[0]);
-                   },
-                   [](path_t &) {}},
-        _stdin.io);
+    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
+                          [this](std::reference_wrapper<data_container> &) {
+                            close(this->_stdin.pipe_fds[0]);
+                          },
+                          [](path_t &) {}},
+               _stdin.io);
 
-    std::visit(
-        overloaded{[](decltype(nullptr)) {}, [](int) {},
-                   [this](std::reference_wrapper<data_container> &) {
-                     close(this->_stdout.pipe_fds[1]);
-                   },
-                   [](path_t &) {}},
-        _stdout.io);
+    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
+                          [this](std::reference_wrapper<data_container> &) {
+                            close(this->_stdout.pipe_fds[1]);
+                          },
+                          [](path_t &) {}},
+               _stdout.io);
 
     std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
                           [this](std::reference_wrapper<data_container> &) {
@@ -524,7 +522,18 @@ class subprocess {
   Stdio _stderr{2};
 };
 
+#if __cplusplus >= 202002L
+template <typename T>
+concept is_run_args_type = std::is_same_v<Env, std::decay_t<T>> ||
+                           std::is_same_v<Stdio, std::decay_t<T>> ||
+                           std::is_same_v<Cwd, std::decay_t<T>> ||
+                           std::is_same_v<EnvItemAppend, std::decay_t<T>>;
+#endif
+
 template <typename... T>
+#if __cplusplus >= 202002L
+  requires(is_run_args_type<T> && ...)
+#endif
 int run(std::vector<std::string> cmd, T... args) {
   Stdio stdin{0};
   Stdio stdout{1};

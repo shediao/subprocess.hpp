@@ -14,6 +14,6 @@ TEST(SubprocessTest, ExitCode) {
 
   for (int i : {4, 9, 15}) {
     ASSERT_EQ(128 + i,
-              run({"bash", "-c", "kill -" + std::to_string(i) + " $BASHPID"}));
+              run({"bash", "-c", "kill -" + std::to_string(i) + " $$"}));
   }
 }
