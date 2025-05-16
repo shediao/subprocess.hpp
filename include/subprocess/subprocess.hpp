@@ -6,16 +6,22 @@
 #endif
 
 #pragma once
+#if defined(_WIN32)
+#include <io.h>
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <variant>
@@ -25,6 +31,16 @@
 extern char **environ;
 
 namespace process {
+namespace {
+bool fd_is_open(int fd) {
+  if (fd < 0) {
+    return false;
+  }
+  if (fcntl(fd, F_GETFL) == -1 && errno == EBADF) {
+    return false;  // fd 无效
+  }
+  return true;
+}
 
 inline std::filesystem::path search_path(std::string const &exe_file) {
 #ifdef _WIN32
@@ -58,7 +74,8 @@ inline std::filesystem::path search_path(std::string const &exe_file) {
           return f;
         } else {
           for (auto &ext : path_exts) {
-            if (auto f = std::filesystem::path(p) / (exe_file + ext); exists(f)) {
+            if (auto f = std::filesystem::path(p) / (exe_file + ext);
+                exists(f)) {
               return f;
             }
           }
@@ -124,28 +141,136 @@ inline std::map<std::string, std::string> environments() {
 #endif
   return envMap;
 }
+}  // namespace
 
 class Stdio {
   friend class subprocess;
-  friend struct stdin_operator;
-  friend struct stdout_operator;
 
  public:
-  Stdio(int fileno) : fileno(fileno) {}
-  Stdio(Stdio const &o) = default;
-  Stdio &operator=(Stdio const &o) {
-    this->append = o.append;
-    this->io = o.io;
-    return *this;
+  Stdio() : redirect_(std::nullopt) {}
+  Stdio(int fd) : redirect_(fd) {}
+  Stdio(std::string const &file) : redirect_(file) {}
+  Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
+  void setup_for_child() {
+    if (!redirect_.has_value()) {
+      return;
+    }
+    std::visit(
+        [this]<typename T>(T &value) {
+          if constexpr (std::is_same_v<T, int>) {
+            // TODO: check value is open
+          } else if constexpr (std::is_same_v<T, std::string>) {
+            auto fd =
+                open(value.c_str(), this->fileno() == 0 ? O_RDONLY : O_WRONLY);
+            if (fd == -1) {
+              throw std::runtime_error{"open failed: " + value};
+            }
+            this->redirect_.value() = fd;
+          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
+                                                     std::vector<char>>>) {
+            if (-1 == pipe(this->pipe_fds_)) {
+              throw std::runtime_error{"pipe failed"};
+            }
+          } else {
+            static_assert(false);
+          }
+        },
+        redirect_.value());
   }
-  const int fileno;
+  void wait_for_child() {
+    if (!redirect_.has_value()) {
+      return;
+    }
+    std::visit(
+        [this]<typename T>(T &value) {
+          if constexpr (std::is_same_v<T, int>) {
+          } else if constexpr (std::is_same_v<T, std::string>) {
+          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
+                                                     std::vector<char>>>) {
+            close(pipe_fds_[this->fileno() == 0 ? 0 : 1]);
+          } else {
+            static_assert(false);
+          }
+        },
+        redirect_.value());
+  }
+  void child_on_setup() {
+    if (!redirect_.has_value()) {
+      return;
+    }
+    std::visit(
+        [this]<typename T>(T &value) {
+          if constexpr (std::is_same_v<T, int>) {
+            if (value >= 0 && value != this->fileno()) {
+              dup2(value, this->fileno());
+            }
+          } else if constexpr (std::is_same_v<T, std::string>) {
+          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
+                                                     std::vector<char>>>) {
+            dup2(pipe_fds_[this->fileno() == 0 ? 0 : 1], this->fileno());
+            close(pipe_fds_[this->fileno() == 0 ? 1 : 0]);
+          } else {
+            static_assert(false);
+          }
+        },
+        redirect_.value());
+  }
+  std::optional<int> fd_for_poll() {
+    if (!redirect_.has_value()) {
+      return std::nullopt;
+    }
+    return std::visit(
+        [this]<typename T>(T &value) -> std::optional<int> {
+          if constexpr (std::is_same_v<
+                            T, std::reference_wrapper<std::vector<char>>>) {
+            return pipe_fds_[this->fileno() == 0 ? 1 : 0];
+          } else {
+            return std::nullopt;
+          }
+        },
+        redirect_.value());
+  }
+  virtual int fileno() = 0;
 
- private:
-  std::variant<decltype(nullptr), int, std::reference_wrapper<std::vector<char>>,
-               std::filesystem::path>
-      io{nullptr};
-  bool append{false};
-  int pipe_fds[2];
+ protected:
+  std::optional<
+      std::variant<int, std::reference_wrapper<std::vector<char>>, std::string>>
+      redirect_{std::nullopt};
+  int pipe_fds_[2];
+};
+
+class Stdin : public Stdio {
+ public:
+  using Stdio::Stdio;
+  int fileno() override { return STDIN_FILENO; }
+};
+class Stdout : public Stdio {
+ public:
+  using Stdio::Stdio;
+  int fileno() override { return STDOUT_FILENO; }
+};
+class Stderr : public Stdio {
+ public:
+  using Stdio::Stdio;
+  int fileno() override { return STDERR_FILENO; }
+};
+
+struct stdin_redirector {
+  Stdin operator<(int fd) const { return Stdin{fd}; }
+  Stdin operator<(std::string const &file) const { return Stdin{file}; }
+  Stdin operator<(std::vector<char> &buf) const { return Stdin{buf}; }
+};
+
+struct stdout_redirector {
+  Stdout operator>(int fd) const { return Stdout{fd}; }
+  Stdout operator>(std::string const &file) const { return Stdout{file}; }
+  Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
+};
+
+struct stderr_redirector {
+  Stderr operator>(int fd) const { return Stderr{fd}; }
+  Stderr operator>(std::string const &file) const { return Stderr{file}; }
+  Stderr operator>(std::vector<char> &buf) const { return Stderr{buf}; }
 };
 
 struct Cwd {
@@ -165,62 +290,6 @@ struct EnvItemAppend {
   std::pair<std::string, std::string> kv;
 };
 
-struct stdin_operator {
-  Stdio operator<(int fd) const {
-    Stdio ret{this->fileno};
-    ret.io = fd;
-    return ret;
-  }
-  Stdio operator<(std::vector<char> &c) const {
-    Stdio ret{this->fileno};
-    ret.io = std::ref(c);
-    return ret;
-  }
-  Stdio operator<(decltype(nullptr)) const = delete;
-  Stdio operator<(const char* f) const {
-    return this->operator<(std::filesystem::path(f));
-  }
-  Stdio operator<(std::filesystem::path const &f) const {
-    Stdio ret{this->fileno};
-    ret.io = f;
-    return ret;
-  }
-  int fileno{-1};
-};
-
-struct stdout_operator {
-  Stdio operator>(int fd) const {
-    Stdio ret{this->fileno};
-    ret.io = fd;
-    return ret;
-  }
-  Stdio operator>(std::vector<char> &c) const {
-    Stdio ret{this->fileno};
-    ret.io = std::ref(c);
-    return ret;
-  }
-  Stdio operator>(std::filesystem::path const &f) const {
-    Stdio ret{this->fileno};
-    ret.io = f;
-    return ret;
-  }
-  Stdio operator>(decltype(nullptr)) const = delete;
-  Stdio operator>(const char* f) const {
-    return this->operator>(std::filesystem::path(f));
-  }
-  Stdio operator>>(std::filesystem::path const &f) const {
-    Stdio ret{this->fileno};
-    ret.io = f;
-    ret.append = true;
-    return ret;
-  }
-  Stdio operator>>(decltype(nullptr)) const = delete;
-  Stdio operator>>(const char* f) const {
-    return this->operator>>(std::filesystem::path(f));
-  }
-  int fileno{-1};
-};
-
 struct cwd_operator {
   Cwd operator=(std::string const &p) { return Cwd{p}; }
 };
@@ -237,10 +306,11 @@ struct env_operator {
 };
 
 namespace named_arguments {
-[[maybe_unused]] inline static auto devnull = std::filesystem::path("/dev/null");
-[[maybe_unused]] inline static stdin_operator std_in{0};
-[[maybe_unused]] inline static stdout_operator std_out{1};
-[[maybe_unused]] inline static stdout_operator std_err{2};
+[[maybe_unused]] inline static auto devnull =
+    std::filesystem::path("/dev/null");
+[[maybe_unused]] inline static stdin_redirector std_in;
+[[maybe_unused]] inline static stdout_redirector std_out;
+[[maybe_unused]] inline static stderr_redirector std_err;
 [[maybe_unused]] inline static cwd_operator cwd;
 [[maybe_unused]] inline static env_operator env;
 }  // namespace named_arguments
@@ -256,16 +326,15 @@ class subprocess {
   overloaded(Ts...) -> overloaded<Ts...>;
 
  public:
-  subprocess(std::vector<std::string> cmd, Stdio in = Stdio{0},
-             Stdio out = Stdio{1}, Stdio err = Stdio{2},
+  subprocess(std::vector<std::string> cmd, Stdin in, Stdout out, Stderr err,
              std::string working_directory = {},
              std::map<std::string, std::string> environments = {})
-      : _cmd{cmd},
-        _cwd{working_directory},
-        _env{environments},
-        _stdin{in},
-        _stdout{out},
-        _stderr{err} {}
+      : _cmd{std::move(cmd)},
+        _cwd{std::move(working_directory)},
+        _env{std::move(environments)},
+        _stdin{std::move(in)},
+        _stdout{std::move(out)},
+        _stderr{std::move(err)} {}
 
   int run() {
     setup();
@@ -282,93 +351,33 @@ class subprocess {
 
  private:
   void setup() {
-    std::visit(
-        overloaded{[](decltype(nullptr)) {}, [](int) {},
-                   [this](std::reference_wrapper<std::vector<char>> &) {
-                     if (-1 == pipe(this->_stdin.pipe_fds)) {
-                       throw std::runtime_error{"pipe failed"};
-                     }
-                   },
-                   [this](std::filesystem::path &f) {
-                     auto fd = open(f.c_str(), O_RDONLY);
-                     if (fd == -1) {
-                       throw std::runtime_error{"open failed: " + f.string()};
-                     }
-                     this->_stdin.io = fd;
-                   }},
-        _stdin.io);
-
-    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<std::vector<char>> &) {
-                            if (-1 == pipe(this->_stdout.pipe_fds)) {
-                              throw std::runtime_error{"pipe failed"};
-                            }
-                          },
-                          [this](std::filesystem::path &f) {
-                            auto fd = open(f.c_str(),
-                                           O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                            this->_stdout.io = fd;
-                          }},
-               _stdout.io);
-
-    std::visit(
-        overloaded{[](decltype(nullptr)) {}, [](int) {},
-                   [this](std::reference_wrapper<std::vector<char>> &) {
-                     if (-1 == pipe(this->_stderr.pipe_fds)) {
-                       throw std::runtime_error{"pipe failed"};
-                     }
-                   },
-                   [this](std::filesystem::path &f) {
-                     auto fd = open(f.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
-                                    S_IWUSR | S_IRUSR);
-                     if (fd == -1) {
-                       throw std::runtime_error{"open failed: " + f.string()};
-                     }
-                     this->_stderr.io = fd;
-                   }},
-        _stderr.io);
+    _stdin.setup_for_child();
+    _stdout.setup_for_child();
+    _stderr.setup_for_child();
   }
   int wait_child(int pid) {
-    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<std::vector<char>> &) {
-                            close(this->_stdin.pipe_fds[0]);
-                          },
-                          [](std::filesystem::path &) {}},
-               _stdin.io);
-
-    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<std::vector<char>> &) {
-                            close(this->_stdout.pipe_fds[1]);
-                          },
-                          [](std::filesystem::path &) {}},
-               _stdout.io);
-
-    std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<std::vector<char>> &) {
-                            close(this->_stderr.pipe_fds[1]);
-                          },
-                          [](std::filesystem::path &) {}},
-               _stderr.io);
+    _stdin.wait_for_child();
+    _stdout.wait_for_child();
+    _stderr.wait_for_child();
 
     struct pollfd fds[3]{{.fd = -1, .events = POLLOUT, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0}};
+
+    for (auto *stdio :
+         {(Stdio *)&_stdin, (Stdio *)&_stdout, (Stdio *)&_stderr}) {
+      if (auto fd = stdio->fd_for_poll(); fd.has_value()) {
+        fds[stdio->fileno()].fd = fd.value();
+      }
+    }
     std::string_view stdin_str{};
-    if (std::holds_alternative<std::reference_wrapper<std::vector<char>>>(
-            _stdin.io)) {
-      fds[0].fd = _stdin.pipe_fds[1];
-      auto &tmp =
-          std::get<std::reference_wrapper<std::vector<char>>>(_stdin.io).get();
-      stdin_str = {tmp.data(), tmp.size()};
+    if (_stdin.fd_for_poll().has_value()) {
+      auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
+                      _stdin.redirect_.value())
+                      .get();
+      stdin_str = std::string_view{tmp.data(), tmp.size()};
     }
-    if (std::holds_alternative<std::reference_wrapper<std::vector<char>>>(
-            _stdout.io)) {
-      fds[1].fd = _stdout.pipe_fds[0];
-    }
-    if (std::holds_alternative<std::reference_wrapper<std::vector<char>>>(
-            _stderr.io)) {
-      fds[2].fd = _stderr.pipe_fds[0];
-    }
+
     while (fds[0].fd != -1 || fds[1].fd != -1 || fds[2].fd != -1) {
       int ret = poll(fds, 3, -1);
       if (ret == -1) {
@@ -396,9 +405,9 @@ class subprocess {
         char buf[1024];
         auto len = read(fds[1].fd, buf, 1024);
         if (len > 0) {
-          auto &tmp =
-              std::get<std::reference_wrapper<std::vector<char>>>(_stdout.io)
-                  .get();
+          auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
+                          _stdout.redirect_.value())
+                          .get();
           tmp.insert(tmp.end(), buf, buf + len);
         }
         if (len == 0) {
@@ -415,9 +424,9 @@ class subprocess {
         char buf[1024];
         auto len = read(fds[2].fd, buf, 1024);
         if (len > 0) {
-          auto &tmp =
-              std::get<std::reference_wrapper<std::vector<char>>>(_stderr.io)
-                  .get();
+          auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
+                          _stderr.redirect_.value())
+                          .get();
           tmp.insert(tmp.end(), buf, buf + len);
         }
         if (len == 0) {
@@ -464,32 +473,10 @@ class subprocess {
     return return_code;
   }
   void child_run() {
-    std::visit(overloaded{[](decltype(nullptr)) {},
-                          [](int fd) { dup2(fd, STDIN_FILENO); },
-                          [this](std::reference_wrapper<std::vector<char>> &) {
-                            close(this->_stdin.pipe_fds[1]);
-                            dup2(this->_stdin.pipe_fds[0], STDIN_FILENO);
-                          },
-                          [](std::filesystem::path &) {}},
-               _stdin.io);
+    _stdin.child_on_setup();
+    _stdout.child_on_setup();
+    _stderr.child_on_setup();
 
-    std::visit(overloaded{[](decltype(nullptr)) {},
-                          [](int fd) { dup2(fd, STDOUT_FILENO); },
-                          [this](std::reference_wrapper<std::vector<char>> &) {
-                            close(this->_stdout.pipe_fds[0]);
-                            dup2(this->_stdout.pipe_fds[1], STDOUT_FILENO);
-                          },
-                          [](std::filesystem::path &) {}},
-               _stdout.io);
-
-    std::visit(overloaded{[](decltype(nullptr)) {},
-                          [](int fd) { dup2(fd, STDERR_FILENO); },
-                          [this](std::reference_wrapper<std::vector<char>> &) {
-                            close(this->_stderr.pipe_fds[0]);
-                            dup2(this->_stderr.pipe_fds[1], STDERR_FILENO);
-                          },
-                          [](std::filesystem::path &) {}},
-               _stderr.io);
     std::vector<char *> cmd{};
     std::transform(_cmd.begin(), _cmd.end(), std::back_inserter(cmd),
                    [](std::string &s) { return s.data(); });
@@ -526,15 +513,17 @@ class subprocess {
   std::vector<std::string> _cmd;
   std::string _cwd{};
   std::map<std::string, std::string> _env;
-  Stdio _stdin{0};
-  Stdio _stdout{1};
-  Stdio _stderr{2};
+  Stdin _stdin;
+  Stdout _stdout;
+  Stderr _stderr;
 };
 
 #if __cplusplus >= 202002L
 template <typename T>
 concept is_run_args_type = std::is_same_v<Env, std::decay_t<T>> ||
-                           std::is_same_v<Stdio, std::decay_t<T>> ||
+                           std::is_same_v<Stdin, std::decay_t<T>> ||
+                           std::is_same_v<Stdout, std::decay_t<T>> ||
+                           std::is_same_v<Stderr, std::decay_t<T>> ||
                            std::is_same_v<Cwd, std::decay_t<T>> ||
                            std::is_same_v<EnvItemAppend, std::decay_t<T>>;
 #endif
@@ -543,23 +532,23 @@ template <typename... T>
 #if __cplusplus >= 202002L
   requires(is_run_args_type<T> && ...)
 #endif
-int run(std::vector<std::string> cmd, T... args) {
-  Stdio stdin{0};
-  Stdio stdout{1};
-  Stdio stderr{2};
+int run(std::vector<std::string> cmd, T &&...args) {
+  Stdin stdin_;
+  Stdout stdout_;
+  Stderr stderr_;
   std::string working_directory;
   std::map<std::string, std::string> environments;
   std::vector<std::pair<std::string, std::string>> env_appends;
-  (void)(..., ([&](auto arg) {
-           using ArgType = std::decay_t<decltype(arg)>;
-           if constexpr (std::is_same_v<ArgType, Stdio>) {
-             if (arg.fileno == 0) {
-               stdin = arg;
-             } else if (arg.fileno == 1) {
-               stdout = arg;
-             } else if (arg.fileno == 2) {
-               stderr = arg;
-             }
+  (void)(..., ([&]<typename Arg>(Arg &&arg) {
+           using ArgType = std::decay_t<Arg>;
+           if constexpr (std::is_same_v<ArgType, Stdin>) {
+             stdin_ = std::forward<Arg>(arg);
+           }
+           if constexpr (std::is_same_v<ArgType, Stdout>) {
+             stdout_ = std::forward<Arg>(arg);
+           }
+           if constexpr (std::is_same_v<ArgType, Stderr>) {
+             stderr_ = std::forward<Arg>(arg);
            }
            if constexpr (std::is_same_v<ArgType, Env>) {
              environments.insert(arg.env.begin(), arg.env.end());
@@ -570,13 +559,16 @@ int run(std::vector<std::string> cmd, T... args) {
            if constexpr (std::is_same_v<ArgType, Cwd>) {
              working_directory = arg.cwd.string();
            }
-           static_assert(std::is_same_v<ArgType, Stdio> ||
-                             std::is_same_v<ArgType, Env> ||
-                             std::is_same_v<ArgType, EnvItemAppend> ||
-                             std::is_same_v<ArgType, Cwd>,
+           static_assert(std::is_same_v<Env, std::decay_t<T>> ||
+                             std::is_same_v<Stdin, std::decay_t<T>> ||
+                             std::is_same_v<Stdout, std::decay_t<T>> ||
+                             std::is_same_v<Stderr, std::decay_t<T>> ||
+                             std::is_same_v<Cwd, std::decay_t<T>> ||
+                             std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                          "Invalid argument type passed to run function.");
-         }(args)));
-  return subprocess(cmd, stdin, stdout, stderr, working_directory, environments)
+         }(std::forward<T>(args))));
+  return subprocess(cmd, stdin_, stdout_, stderr_, working_directory,
+                    environments)
       .run();
 }
 
