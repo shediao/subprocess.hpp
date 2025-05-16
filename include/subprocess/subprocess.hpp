@@ -172,7 +172,6 @@ class Stdio {
               throw std::runtime_error{"pipe failed"};
             }
           } else {
-            static_assert(false);
           }
         },
         redirect_.value());
@@ -188,8 +187,6 @@ class Stdio {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
             close(pipe_fds_[this->fileno() == 0 ? 0 : 1]);
-          } else {
-            static_assert(false);
           }
         },
         redirect_.value());
@@ -209,8 +206,6 @@ class Stdio {
                                                      std::vector<char>>>) {
             dup2(pipe_fds_[this->fileno() == 0 ? 0 : 1], this->fileno());
             close(pipe_fds_[this->fileno() == 0 ? 1 : 0]);
-          } else {
-            static_assert(false);
           }
         },
         redirect_.value());
