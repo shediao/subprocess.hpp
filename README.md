@@ -1,7 +1,7 @@
 ## Basics
 
 ```cpp
-#include <subprocess.hpp>
+#include <subprocess/subprocess.hpp>
 
 using namespace subprocess;
 
@@ -63,15 +63,13 @@ OR
 ```
 git clone https://github.com/shediao/subprocess.hpp /path/to/subprocess.hpp
 add_subdirectory(/path/to/subprocess.hpp)
-```
 
-```
-#include <subprocess.hpp>
+#include <subprocess/subprocess.hpp>
 ```
 
 ### 2. others
 
-copy `subprocess.hpp` to myproject/dir/include
+copy `subprocess.hpp` to myproject/dir/include/subprocess/
 
 ## TODO
 

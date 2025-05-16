@@ -26,10 +26,7 @@ extern char **environ;
 
 namespace process {
 
-using data_container = std::vector<char>;
-using path_t = std::filesystem::path;
-
-inline path_t search_path(std::string const &exe_file) {
+inline std::filesystem::path search_path(std::string const &exe_file) {
 #ifdef _WIN32
   char separator = '\\';
   char path_env_sep = ';';
@@ -57,23 +54,23 @@ inline path_t search_path(std::string const &exe_file) {
     for (auto &p : paths) {
 #ifdef _WIN32
       if (exe_file.find('.') == std::string::npos) {
-        if (auto f = path_t(p) / exe_file; exists(f)) {
+        if (auto f = std::filesystem::path(p) / exe_file; exists(f)) {
           return f;
         } else {
           for (auto &ext : path_exts) {
-            if (auto f = path_t(p) / (exe_file + ext); exists(f)) {
+            if (auto f = std::filesystem::path(p) / (exe_file + ext); exists(f)) {
               return f;
             }
           }
         }
       } else {
-        auto f = path_t(p) / exe_file;
+        auto f = std::filesystem::path(p) / exe_file;
         if (exists(f)) {
           return f;
         }
       }
 #else
-      auto f = path_t(p) / exe_file;
+      auto f = std::filesystem::path(p) / exe_file;
       if (0 == access(f.c_str(), X_OK)) {
         return f;
       }
@@ -144,15 +141,15 @@ class Stdio {
   const int fileno;
 
  private:
-  std::variant<decltype(nullptr), int, std::reference_wrapper<data_container>,
-               path_t>
+  std::variant<decltype(nullptr), int, std::reference_wrapper<std::vector<char>>,
+               std::filesystem::path>
       io{nullptr};
   bool append{false};
   int pipe_fds[2];
 };
 
 struct Cwd {
-  path_t cwd;
+  std::filesystem::path cwd;
 };
 
 struct Env {
@@ -169,17 +166,21 @@ struct EnvItemAppend {
 };
 
 struct stdin_operator {
-  Stdio operator<(int fd) {
+  Stdio operator<(int fd) const {
     Stdio ret{this->fileno};
     ret.io = fd;
     return ret;
   }
-  Stdio operator<(data_container &c) {
+  Stdio operator<(std::vector<char> &c) const {
     Stdio ret{this->fileno};
     ret.io = std::ref(c);
     return ret;
   }
-  Stdio operator<(path_t const &f) {
+  Stdio operator<(decltype(nullptr)) const = delete;
+  Stdio operator<(const char* f) const {
+    return this->operator<(std::filesystem::path(f));
+  }
+  Stdio operator<(std::filesystem::path const &f) const {
     Stdio ret{this->fileno};
     ret.io = f;
     return ret;
@@ -188,26 +189,34 @@ struct stdin_operator {
 };
 
 struct stdout_operator {
-  Stdio operator>(int fd) {
+  Stdio operator>(int fd) const {
     Stdio ret{this->fileno};
     ret.io = fd;
     return ret;
   }
-  Stdio operator>(data_container &c) {
+  Stdio operator>(std::vector<char> &c) const {
     Stdio ret{this->fileno};
     ret.io = std::ref(c);
     return ret;
   }
-  Stdio operator>(path_t const &f) {
+  Stdio operator>(std::filesystem::path const &f) const {
     Stdio ret{this->fileno};
     ret.io = f;
     return ret;
   }
-  Stdio operator>>(path_t const &f) {
+  Stdio operator>(decltype(nullptr)) const = delete;
+  Stdio operator>(const char* f) const {
+    return this->operator>(std::filesystem::path(f));
+  }
+  Stdio operator>>(std::filesystem::path const &f) const {
     Stdio ret{this->fileno};
     ret.io = f;
     ret.append = true;
     return ret;
+  }
+  Stdio operator>>(decltype(nullptr)) const = delete;
+  Stdio operator>>(const char* f) const {
+    return this->operator>>(std::filesystem::path(f));
   }
   int fileno{-1};
 };
@@ -228,7 +237,7 @@ struct env_operator {
 };
 
 namespace named_arguments {
-[[maybe_unused]] inline static auto devnull = path_t("/dev/null");
+[[maybe_unused]] inline static auto devnull = std::filesystem::path("/dev/null");
 [[maybe_unused]] inline static stdin_operator std_in{0};
 [[maybe_unused]] inline static stdout_operator std_out{1};
 [[maybe_unused]] inline static stdout_operator std_err{2};
@@ -275,12 +284,12 @@ class subprocess {
   void setup() {
     std::visit(
         overloaded{[](decltype(nullptr)) {}, [](int) {},
-                   [this](std::reference_wrapper<data_container> &) {
+                   [this](std::reference_wrapper<std::vector<char>> &) {
                      if (-1 == pipe(this->_stdin.pipe_fds)) {
                        throw std::runtime_error{"pipe failed"};
                      }
                    },
-                   [this](path_t &f) {
+                   [this](std::filesystem::path &f) {
                      auto fd = open(f.c_str(), O_RDONLY);
                      if (fd == -1) {
                        throw std::runtime_error{"open failed: " + f.string()};
@@ -290,12 +299,12 @@ class subprocess {
         _stdin.io);
 
     std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<data_container> &) {
+                          [this](std::reference_wrapper<std::vector<char>> &) {
                             if (-1 == pipe(this->_stdout.pipe_fds)) {
                               throw std::runtime_error{"pipe failed"};
                             }
                           },
-                          [this](path_t &f) {
+                          [this](std::filesystem::path &f) {
                             auto fd = open(f.c_str(),
                                            O_WRONLY | O_CREAT | O_TRUNC, 0666);
                             this->_stdout.io = fd;
@@ -304,12 +313,12 @@ class subprocess {
 
     std::visit(
         overloaded{[](decltype(nullptr)) {}, [](int) {},
-                   [this](std::reference_wrapper<data_container> &) {
+                   [this](std::reference_wrapper<std::vector<char>> &) {
                      if (-1 == pipe(this->_stderr.pipe_fds)) {
                        throw std::runtime_error{"pipe failed"};
                      }
                    },
-                   [this](path_t &f) {
+                   [this](std::filesystem::path &f) {
                      auto fd = open(f.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
                                     S_IWUSR | S_IRUSR);
                      if (fd == -1) {
@@ -321,42 +330,42 @@ class subprocess {
   }
   int wait_child(int pid) {
     std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<data_container> &) {
+                          [this](std::reference_wrapper<std::vector<char>> &) {
                             close(this->_stdin.pipe_fds[0]);
                           },
-                          [](path_t &) {}},
+                          [](std::filesystem::path &) {}},
                _stdin.io);
 
     std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<data_container> &) {
+                          [this](std::reference_wrapper<std::vector<char>> &) {
                             close(this->_stdout.pipe_fds[1]);
                           },
-                          [](path_t &) {}},
+                          [](std::filesystem::path &) {}},
                _stdout.io);
 
     std::visit(overloaded{[](decltype(nullptr)) {}, [](int) {},
-                          [this](std::reference_wrapper<data_container> &) {
+                          [this](std::reference_wrapper<std::vector<char>> &) {
                             close(this->_stderr.pipe_fds[1]);
                           },
-                          [](path_t &) {}},
+                          [](std::filesystem::path &) {}},
                _stderr.io);
 
     struct pollfd fds[3]{{.fd = -1, .events = POLLOUT, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0}};
     std::string_view stdin_str{};
-    if (std::holds_alternative<std::reference_wrapper<data_container>>(
+    if (std::holds_alternative<std::reference_wrapper<std::vector<char>>>(
             _stdin.io)) {
       fds[0].fd = _stdin.pipe_fds[1];
       auto &tmp =
-          std::get<std::reference_wrapper<data_container>>(_stdin.io).get();
+          std::get<std::reference_wrapper<std::vector<char>>>(_stdin.io).get();
       stdin_str = {tmp.data(), tmp.size()};
     }
-    if (std::holds_alternative<std::reference_wrapper<data_container>>(
+    if (std::holds_alternative<std::reference_wrapper<std::vector<char>>>(
             _stdout.io)) {
       fds[1].fd = _stdout.pipe_fds[0];
     }
-    if (std::holds_alternative<std::reference_wrapper<data_container>>(
+    if (std::holds_alternative<std::reference_wrapper<std::vector<char>>>(
             _stderr.io)) {
       fds[2].fd = _stderr.pipe_fds[0];
     }
@@ -388,7 +397,7 @@ class subprocess {
         auto len = read(fds[1].fd, buf, 1024);
         if (len > 0) {
           auto &tmp =
-              std::get<std::reference_wrapper<data_container>>(_stdout.io)
+              std::get<std::reference_wrapper<std::vector<char>>>(_stdout.io)
                   .get();
           tmp.insert(tmp.end(), buf, buf + len);
         }
@@ -407,7 +416,7 @@ class subprocess {
         auto len = read(fds[2].fd, buf, 1024);
         if (len > 0) {
           auto &tmp =
-              std::get<std::reference_wrapper<data_container>>(_stderr.io)
+              std::get<std::reference_wrapper<std::vector<char>>>(_stderr.io)
                   .get();
           tmp.insert(tmp.end(), buf, buf + len);
         }
@@ -457,29 +466,29 @@ class subprocess {
   void child_run() {
     std::visit(overloaded{[](decltype(nullptr)) {},
                           [](int fd) { dup2(fd, STDIN_FILENO); },
-                          [this](std::reference_wrapper<data_container> &) {
+                          [this](std::reference_wrapper<std::vector<char>> &) {
                             close(this->_stdin.pipe_fds[1]);
                             dup2(this->_stdin.pipe_fds[0], STDIN_FILENO);
                           },
-                          [](path_t &) {}},
+                          [](std::filesystem::path &) {}},
                _stdin.io);
 
     std::visit(overloaded{[](decltype(nullptr)) {},
                           [](int fd) { dup2(fd, STDOUT_FILENO); },
-                          [this](std::reference_wrapper<data_container> &) {
+                          [this](std::reference_wrapper<std::vector<char>> &) {
                             close(this->_stdout.pipe_fds[0]);
                             dup2(this->_stdout.pipe_fds[1], STDOUT_FILENO);
                           },
-                          [](path_t &) {}},
+                          [](std::filesystem::path &) {}},
                _stdout.io);
 
     std::visit(overloaded{[](decltype(nullptr)) {},
                           [](int fd) { dup2(fd, STDERR_FILENO); },
-                          [this](std::reference_wrapper<data_container> &) {
+                          [this](std::reference_wrapper<std::vector<char>> &) {
                             close(this->_stderr.pipe_fds[0]);
                             dup2(this->_stderr.pipe_fds[1], STDERR_FILENO);
                           },
-                          [](path_t &) {}},
+                          [](std::filesystem::path &) {}},
                _stderr.io);
     std::vector<char *> cmd{};
     std::transform(_cmd.begin(), _cmd.end(), std::back_inserter(cmd),
