@@ -160,8 +160,11 @@ class Stdio {
           if constexpr (std::is_same_v<T, int>) {
             // TODO: check value is open
           } else if constexpr (std::is_same_v<T, std::string>) {
-            auto fd =
-                open(value.c_str(), this->fileno() == 0 ? O_RDONLY : O_WRONLY);
+            auto fd = open(
+                value.c_str(),
+                this->fileno() == 0
+                    ? O_RDONLY
+                    : (this->is_append() ? (O_WRONLY | O_APPEND) : O_WRONLY));
             if (fd == -1) {
               throw std::runtime_error{"open failed: " + value};
             }
@@ -226,6 +229,7 @@ class Stdio {
         redirect_.value());
   }
   virtual int fileno() = 0;
+  virtual bool is_append() = 0;
 
  protected:
   std::optional<
@@ -238,16 +242,27 @@ class Stdin : public Stdio {
  public:
   using Stdio::Stdio;
   int fileno() override { return STDIN_FILENO; }
+  bool is_append() override { return false; }
 };
 class Stdout : public Stdio {
  public:
   using Stdio::Stdio;
+  Stdout(std::string const &file, bool append) : Stdio(file), append_(append) {}
   int fileno() override { return STDOUT_FILENO; }
+  bool is_append() override { return append_; }
+
+ private:
+  bool append_{false};
 };
 class Stderr : public Stdio {
  public:
   using Stdio::Stdio;
+  Stderr(std::string const &file, bool append) : Stdio(file), append_(append) {}
   int fileno() override { return STDERR_FILENO; }
+  bool is_append() override { return append_; }
+
+ private:
+  bool append_{false};
 };
 
 struct stdin_redirector {
@@ -260,12 +275,19 @@ struct stdout_redirector {
   Stdout operator>(int fd) const { return Stdout{fd}; }
   Stdout operator>(std::string const &file) const { return Stdout{file}; }
   Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
+
+  Stdout operator>>(std::string const &file) const {
+    return Stdout{file, true};
+  }
 };
 
 struct stderr_redirector {
   Stderr operator>(int fd) const { return Stderr{fd}; }
   Stderr operator>(std::string const &file) const { return Stderr{file}; }
   Stderr operator>(std::vector<char> &buf) const { return Stderr{buf}; }
+  Stderr operator>>(std::string const &file) const {
+    return Stderr{file, true};
+  }
 };
 
 struct Cwd {

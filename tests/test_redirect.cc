@@ -27,7 +27,7 @@ std::string createTemporaryFile() {
 #else
   // POSIX (Linux, macOS, etc.)
   std::string tempDir;
-  const char *tmpDirEnv = std::getenv("TMPDIR");
+  const char* tmpDirEnv = std::getenv("TMPDIR");
   if (tmpDirEnv != nullptr) {
     tempDir = tmpDirEnv;
   } else {
@@ -46,7 +46,6 @@ std::string createTemporaryFile() {
   return filenameTemplate;
 #endif
 }
-
 std::vector<char> readFile(std::string f) {
   std::ifstream input(f);
   if (input.is_open()) {
@@ -56,25 +55,82 @@ std::vector<char> readFile(std::string f) {
   return {};
 }
 
+class TempFile {
+ public:
+  TempFile() : path_{createTemporaryFile()} {}
+  ~TempFile() {
+    if (std::filesystem::exists(path_)) {
+      std::filesystem::remove(path_);
+    }
+  }
+  std::string const& path() { return path_; }
+  std::vector<char> content() {
+    std::ifstream input(path_);
+    if (input.is_open()) {
+      return std::vector<char>{std::istreambuf_iterator<char>(input),
+                               std::istreambuf_iterator<char>()};
+    }
+    return {};
+  }
+  std::string content_str() {
+    std::ifstream input(path_);
+    if (input.is_open()) {
+      return std::string{std::istreambuf_iterator<char>(input),
+                         std::istreambuf_iterator<char>()};
+    }
+    return {};
+  }
+
+  template <typename T>
+  auto write(T const& content) {
+    std::ofstream output{path_};
+    output.write(content.data(), content.size());
+    return content.size();
+  }
+
+ private:
+  std::string path_;
+};
+
 TEST(SubprocessTest, RedirectOut) {
   using namespace process::named_arguments;
   using process::run;
-  auto tmp_file = createTemporaryFile();
+  TempFile tmp_file;
   std::vector<char> content{'1', '2', '3'};
   run({"/bin/echo", "-n", std::string(content.data(), content.size())},
-      std_out > tmp_file);
-  ASSERT_EQ(content, readFile(tmp_file));
-  unlink(tmp_file.c_str());
+      std_out > tmp_file.path());
+  ASSERT_EQ(content, tmp_file.content());
+}
+TEST(SubprocessTest, RedirectOutAppend) {
+  using namespace process::named_arguments;
+  using process::run;
+  TempFile tmp_file;
+  tmp_file.write(std::string{"000"});
+  std::vector<char> content{'1', '2', '3'};
+  run({"/bin/echo", "-n", std::string(content.data(), content.size())},
+      std_out >> tmp_file.path());
+  ASSERT_EQ("000123", tmp_file.content_str());
 }
 
 TEST(SubprocessTest, RedirectErr) {
   using namespace process::named_arguments;
   using process::run;
-  auto tmp_file = createTemporaryFile();
+  TempFile tmp_file;
   std::vector<char> content{'1', '2', '3'};
   run({"bash", "-c",
        "echo -n " + std::string(content.data(), content.size()) + " >&2"},
-      std_err > tmp_file);
-  ASSERT_EQ(content, readFile(tmp_file));
-  unlink(tmp_file.c_str());
+      std_err > tmp_file.path());
+  ASSERT_EQ(content, tmp_file.content());
+}
+
+TEST(SubprocessTest, RedirectErrAppend) {
+  using namespace process::named_arguments;
+  using process::run;
+  TempFile tmp_file;
+  tmp_file.write(std::string("999"));
+  std::vector<char> content{'1', '2', '3'};
+  run({"bash", "-c",
+       "echo -n " + std::string(content.data(), content.size()) + " >&2"},
+      std_err >> tmp_file.path());
+  ASSERT_EQ("999123", tmp_file.content_str());
 }
