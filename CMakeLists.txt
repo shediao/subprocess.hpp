@@ -4,8 +4,7 @@ project(
   VERSION "0.1"
   LANGUAGES CXX)
 
-set("PROJECT_DESCRIPTION"
-    "A header-only lightweight subprocess for c++17")
+set("PROJECT_DESCRIPTION" "A header-only lightweight subprocess for c++20")
 set("PROJECT_HOMEPAGE_URL" "https://github.com/shediao/subprocess.hpp")
 
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
@@ -18,14 +17,20 @@ add_library(subprocess INTERFACE)
 
 target_include_directories(
   subprocess INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-                     $<INSTALL_INTERFACE:include>)
+                       $<INSTALL_INTERFACE:include>)
 
-target_compile_features(subprocess INTERFACE cxx_std_17)
+target_compile_features(subprocess INTERFACE cxx_std_20)
 add_library(subprocess::subprocess ALIAS subprocess)
 
 if(SUBPROCESS_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+else()
+  add_executable(simple_test tests/simple_test.cpp)
+  if(MSVC)
+    target_compile_options(simple_test PRIVATE /utf-8 /EHsc)
+  endif()
+  target_link_libraries(simple_test PRIVATE subprocess::subprocess)
 endif()
 
 install(
