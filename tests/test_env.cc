@@ -17,7 +17,7 @@ TEST(SubprocessTest, Environment2) {
   using process::run;
   std::vector<char> out;
   auto ret = run({"/bin/bash", "-c", "echo -n $env1"},
-                 env = {{"env1", "value1"}}, std_out > out);
+                 $env = {{"env1", "value1"}}, $stdout > out);
 
   ASSERT_EQ(std::string_view(out.data(), out.size()), "value1");
 }

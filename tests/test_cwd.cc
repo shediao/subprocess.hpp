@@ -56,7 +56,7 @@ TEST(SubprocessTest, CWD) {
 
   auto home_dir = getHomeDirectory();
 
-  run({"/bin/pwd"}, std_out > out, cwd = home_dir);
+  run({"/bin/pwd"}, $stdout > out, $cwd = home_dir);
 
   ASSERT_FALSE(out.empty());
 

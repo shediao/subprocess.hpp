@@ -330,6 +330,14 @@ namespace named_arguments {
 [[maybe_unused]] inline static stderr_redirector std_err;
 [[maybe_unused]] inline static cwd_operator cwd;
 [[maybe_unused]] inline static env_operator env;
+
+[[maybe_unused]] inline static auto $devnull =
+    std::filesystem::path("/dev/null");
+[[maybe_unused]] inline static stdin_redirector $stdin;
+[[maybe_unused]] inline static stdout_redirector $stdout;
+[[maybe_unused]] inline static stderr_redirector $stderr;
+[[maybe_unused]] inline static cwd_operator $cwd;
+[[maybe_unused]] inline static env_operator $env;
 }  // namespace named_arguments
 
 using namespace named_arguments;
@@ -590,4 +598,11 @@ int run(std::vector<std::string> cmd, T &&...args) {
 }
 
 }  // namespace process
+
+using process::named_arguments::$cwd;
+using process::named_arguments::$devnull;
+using process::named_arguments::$env;
+using process::named_arguments::$stderr;
+using process::named_arguments::$stdin;
+using process::named_arguments::$stdout;
 #endif  // __SUBPROCESS_HPP__
