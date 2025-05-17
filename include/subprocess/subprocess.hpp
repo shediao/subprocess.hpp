@@ -32,7 +32,7 @@ extern char **environ;
 
 namespace process {
 namespace {
-bool fd_is_open(int fd) {
+[[maybe_unused]] bool fd_is_open(int fd) {
   if (fd < 0) {
     return false;
   }
@@ -156,7 +156,7 @@ class Stdio {
       return;
     }
     std::visit(
-        [this]<typename T>(T &value) {
+        [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, int>) {
             // TODO: check value is open
           } else if constexpr (std::is_same_v<T, std::string>) {
@@ -184,7 +184,7 @@ class Stdio {
       return;
     }
     std::visit(
-        [this]<typename T>(T &value) {
+        [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, int>) {
           } else if constexpr (std::is_same_v<T, std::string>) {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
@@ -199,7 +199,7 @@ class Stdio {
       return;
     }
     std::visit(
-        [this]<typename T>(T &value) {
+        [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, int>) {
             if (value >= 0 && value != this->fileno()) {
               dup2(value, this->fileno());
@@ -218,7 +218,7 @@ class Stdio {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>(T &value) -> std::optional<int> {
+        [this]<typename T>([[maybe_unused]] T &value) -> std::optional<int> {
           if constexpr (std::is_same_v<
                             T, std::reference_wrapper<std::vector<char>>>) {
             return pipe_fds_[this->fileno() == 0 ? 1 : 0];
