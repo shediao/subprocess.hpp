@@ -12,16 +12,16 @@ FetchContent_MakeAvailable(googletest)
 
 function(add_subprocess_test test_name)
   add_executable(${test_name} ${test_name}.cc)
-  if(Clang
-     OR AppleClang
-     OR GNU)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+     OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+     OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror)
   endif()
   if(MSVC)
     target_compile_options(${test_name} PRIVATE /utf-8 /EHsc)
   endif()
-  target_link_libraries(${test_name} PRIVATE subprocess::subprocess GTest::gtest
-                                             GTest::gtest_main)
+  target_link_libraries(${test_name} PRIVATE subprocess::subprocess
+                                             GTest::gtest GTest::gtest_main)
   add_test(NAME ${test_name} COMMAND ${test_name})
 endfunction()
 
