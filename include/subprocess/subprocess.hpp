@@ -235,7 +235,7 @@ class Stdio {
   std::optional<
       std::variant<int, std::reference_wrapper<std::vector<char>>, std::string>>
       redirect_{std::nullopt};
-  int pipe_fds_[2];
+  int pipe_fds_[2]{-1, -1};
 };
 
 class Stdin : public Stdio {
