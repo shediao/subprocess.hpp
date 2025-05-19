@@ -240,9 +240,13 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
   // Output format of `cmd /c cd` is "C:\Windows", no trailing newline typically
   std::string output = vecCharToString(stdout_buf);
   // Remove potential trailing \r\n
-    if (!output.empty() && output.back() == \'\\n\') output.pop_back();
-    if (!output.empty() && output.back() == \'\\r\') output.pop_back();
-    ASSERT_EQ(output, "C:\\Windows");
+  if (!output.empty() && output.back() == '\n') {
+    output.pop_back();
+  }
+  if (!output.empty() && output.back() == '\r') {
+    output.pop_back();
+  }
+  ASSERT_EQ(output, "C:\\Windows");
 #else
   int exit_code = run({"/bin/pwd"}, cwd = "/tmp", std_out > stdout_buf);
   ASSERT_EQ(exit_code, 0);
@@ -276,11 +280,15 @@ TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
   ASSERT_EQ(exit_code, 0);
   std::string output = vecCharToString(stdout_buf);
 #ifdef _WIN32  // `type` command might add \r\n
-    if (!output.empty() && output.back() == \'\\n\') output.pop_back();
-    if (!output.empty() && output.back() == \'\\r\') output.pop_back();
+  if (!output.empty() && output.back() == '\n') {
+    output.pop_back();
+  }
+  if (!output.empty() && output.back() == '\r') {
+    output.pop_back();
+  }
 #endif
-    ASSERT_EQ(output, "Relative Content");
-    removeFile(full_file_path);
+  ASSERT_EQ(output, "Relative Content");
+  removeFile(full_file_path);
 }
 
 // 18. Test command with multiple arguments, including one with spaces
