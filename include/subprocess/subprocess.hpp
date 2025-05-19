@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -28,10 +29,13 @@
 #include <vector>
 
 // POSIX (Linux, macOS, etc.) implementation
+#if !defined(_WIN32)
 extern char **environ;
+#endif  // !_WIN32
 
 namespace process {
 namespace {
+#if !defined(_WIN32)
 [[maybe_unused]] bool fd_is_open(int fd) {
   if (fd < 0) {
     return false;
@@ -41,6 +45,7 @@ namespace {
   }
   return true;
 }
+#endif  // !_WIN32
 
 inline std::filesystem::path search_path(std::string const &exe_file) {
 #ifdef _WIN32
@@ -52,7 +57,18 @@ inline std::filesystem::path search_path(std::string const &exe_file) {
 #endif
   auto split_env = [](const char *env, char sep) {
     std::istringstream stream;
+#if defined(_WIN32)
+    char *buf{nullptr};
+    size_t len = 0;
+    _dupenv_s(&buf, &len, env);
+    if (buf != nullptr) {
+      stream.str(std::string(buf));
+      free(buf);
+    }
+#else
     stream.str(getenv(env));
+#endif
+
     std::vector<std::string> ret;
     std::string line;
     while (std::getline(stream, line, sep)) {
@@ -102,7 +118,11 @@ inline std::map<std::string, std::string> environments() {
 
 #ifdef _WIN32
   // Windows implementation
+#if defined(UNICODE)
+  char *envBlock = GetEnvironmentStringsA();
+#else
   char *envBlock = GetEnvironmentStrings();
+#endif
   if (envBlock == nullptr) {
     std::cerr << "Error getting environment strings." << std::endl;
     return envMap;  // Return an empty map in case of error
@@ -121,7 +141,11 @@ inline std::map<std::string, std::string> environments() {
         envString.length() + 1;  // Move to the next environment variable
   }
 
+#if defined(UNICODE)
+  FreeEnvironmentStringsA(envBlock);
+#else
   FreeEnvironmentStrings(envBlock);
+#endif
 
 #else
 
@@ -160,20 +184,28 @@ class Stdio {
           if constexpr (std::is_same_v<T, int>) {
             // TODO: check value is open
           } else if constexpr (std::is_same_v<T, std::string>) {
-            auto fd = open(
-                value.c_str(),
+#if defined(_WIN32)
+#else
+            auto fd =
                 this->fileno() == 0
-                    ? O_RDONLY
-                    : (this->is_append() ? (O_WRONLY | O_APPEND) : O_WRONLY));
+                    ? open(value.c_str(), O_RDONLY)
+                    : open(value.c_str(),
+                           this->is_append() ? (O_WRONLY | O_CREAT | O_APPEND)
+                                             : (O_WRONLY | O_CREAT | O_TRUNC),
+                           0644);
             if (fd == -1) {
               throw std::runtime_error{"open failed: " + value};
             }
             this->redirect_.value() = fd;
+#endif
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
+#if defined(_WIN32)
+#else
             if (-1 == pipe(this->pipe_fds_)) {
               throw std::runtime_error{"pipe failed"};
             }
+#endif
           } else {
           }
         },
@@ -189,11 +221,15 @@ class Stdio {
           } else if constexpr (std::is_same_v<T, std::string>) {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
+#if defined(_WIN32)
+#else
             close(pipe_fds_[this->fileno() == 0 ? 0 : 1]);
+#endif
           }
         },
         redirect_.value());
   }
+#if !defined(_WIN32)
   void child_on_setup() {
     if (!redirect_.has_value()) {
       return;
@@ -228,8 +264,9 @@ class Stdio {
         },
         redirect_.value());
   }
-  virtual int fileno() = 0;
-  virtual bool is_append() = 0;
+#endif  // !_WIN32
+  virtual int fileno() const = 0;
+  virtual bool is_append() const = 0;
 
  protected:
   std::optional<
@@ -241,15 +278,15 @@ class Stdio {
 class Stdin : public Stdio {
  public:
   using Stdio::Stdio;
-  int fileno() override { return STDIN_FILENO; }
-  bool is_append() override { return false; }
+  int fileno() const override { return 0; }
+  bool is_append() const override { return false; }
 };
 class Stdout : public Stdio {
  public:
   using Stdio::Stdio;
   Stdout(std::string const &file, bool append) : Stdio(file), append_(append) {}
-  int fileno() override { return STDOUT_FILENO; }
-  bool is_append() override { return append_; }
+  int fileno() const override { return 1; }
+  bool is_append() const override { return append_; }
 
  private:
   bool append_{false};
@@ -258,8 +295,8 @@ class Stderr : public Stdio {
  public:
   using Stdio::Stdio;
   Stderr(std::string const &file, bool append) : Stdio(file), append_(append) {}
-  int fileno() override { return STDERR_FILENO; }
-  bool is_append() override { return append_; }
+  int fileno() const override { return 2; }
+  bool is_append() const override { return append_; }
 
  private:
   bool append_{false};
@@ -362,16 +399,20 @@ class subprocess {
         _stderr{std::move(err)} {}
 
   int run() {
+#if defined(_WIN32)
+    return 0;
+#else
     setup();
     auto pid = fork();
     if (pid < 0) {
       throw std::runtime_error("fork failed");
     } else if (pid == 0) {
       child_run();
-      return 0;
+      return 127;
     } else {
       return wait_child(pid);
     }
+#endif
   }
 
  private:
@@ -385,6 +426,9 @@ class subprocess {
     _stdout.wait_for_child();
     _stderr.wait_for_child();
 
+#if defined(_WIN32)
+    return 0;
+#else
     struct pollfd fds[3]{{.fd = -1, .events = POLLOUT, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0}};
@@ -496,7 +540,9 @@ class subprocess {
       return_code = 128 + (WTERMSIG(status));
     }
     return return_code;
+#endif
   }
+#if !defined(_WIN32)
   void child_run() {
     _stdin.child_on_setup();
     _stdout.child_on_setup();
@@ -531,8 +577,10 @@ class subprocess {
     } else {
       execv(exe_file.c_str(), cmd.data());
     }
-    throw std::runtime_error(std::string("execv failed: ") + strerror(errno));
+    std::cerr << "execv failed: " << strerror(errno) << '\n';
+    _Exit(127);
   }
+#endif  // !_WIN32
 
  private:
   std::vector<std::string> _cmd;

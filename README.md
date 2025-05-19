@@ -12,8 +12,8 @@ int exit_code = run({"/bin/echo", "-n", "123"});
 std::vector<char> stdout_buf, stderr_buf;
 run(
     {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
-    std_out > stdout_buf,   # > is redirect
-    std_err > stderr_buf    # > is redirect
+    std_out > stdout_buf,   // > is redirect
+    std_err > stderr_buf    // > is redirect
 );
 
 // 3. redirect to file
@@ -22,6 +22,13 @@ run(
     {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
     std_out > "/tmp/out.txt",
     std_err > "/tmp/err.txt"
+);
+
+std::vector<char> stdout_buf, stderr_buf;
+run(
+    {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
+    std_out >> "/tmp/out.txt",  // >> is append to file
+    std_err >> "/tmp/err.txt"   // >> is append to file
 );
 
 // 4. set environments && append environments
