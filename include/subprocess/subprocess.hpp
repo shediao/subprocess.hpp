@@ -34,6 +34,11 @@ extern char **environ;
 #endif  // !_WIN32
 
 namespace process {
+#if defined(_WIN32)
+using NativeHandle = HANDLE;
+#else   // _WIN32
+using NativeHandle = int;
+#endif  // !_WIN32
 namespace {
 #if !defined(_WIN32)
 [[maybe_unused]] bool fd_is_open(int fd) {
@@ -172,7 +177,7 @@ class Stdio {
 
  public:
   Stdio() : redirect_(std::nullopt) {}
-  Stdio(int fd) : redirect_(fd) {}
+  Stdio(NativeHandle fd) : redirect_(fd) {}
   Stdio(std::string const &file) : redirect_(file) {}
   Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
   void setup_for_child() {
@@ -181,10 +186,25 @@ class Stdio {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
-          if constexpr (std::is_same_v<T, int>) {
+          if constexpr (std::is_same_v<T, NativeHandle>) {
             // TODO: check value is open
           } else if constexpr (std::is_same_v<T, std::string>) {
 #if defined(_WIN32)
+            const HANDLE hFile = CreateFileA(
+                value.c_str(),
+                this->fileno() == 0 ? GENERIC_READ
+                : this->is_append() ? FILE_APPEND_DATA
+                                    : GENERIC_WRITE,
+                0, nullptr,
+                this->fileno() == 0
+                    ? OPEN_EXISTING
+                    : (this->is_append() ? OPEN_ALWAYS : CREATE_ALWAYS),
+                FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile == INVALID_HANDLE_VALUE) {
+              throw std::runtime_error{"open failed: " + value + ", error: " +
+                                       std::to_string(GetLastError())};
+            }
+            this->redirect_.value() = hFile;
 #else
             auto fd =
                 this->fileno() == 0
@@ -201,6 +221,25 @@ class Stdio {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
 #if defined(_WIN32)
+            SECURITY_ATTRIBUTES at;
+            at.bInheritHandle = true;
+            at.nLength = sizeof(SECURITY_ATTRIBUTES);
+            at.lpSecurityDescriptor = nullptr;
+
+            if (!CreatePipe(&(this->pipe_fds_[0]), &(this->pipe_fds_[1]), &at,
+                            0)) {
+              throw std::runtime_error{"pipe failed: " +
+                                       std::to_string(GetLastError())};
+            }
+
+            // child process close
+            if (!SetHandleInformation(
+                    this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
+                    HANDLE_FLAG_INHERIT, 0)) {
+              throw std::runtime_error("SetHandleInformation Failed: " +
+                                       std::to_string(GetLastError()));
+            }
+
 #else
             if (-1 == pipe(this->pipe_fds_)) {
               throw std::runtime_error{"pipe failed"};
@@ -217,11 +256,12 @@ class Stdio {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
-          if constexpr (std::is_same_v<T, int>) {
+          if constexpr (std::is_same_v<T, NativeHandle>) {
           } else if constexpr (std::is_same_v<T, std::string>) {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
 #if defined(_WIN32)
+            CloseHandle(pipe_fds_[this->fileno() == 0 ? 0 : 1]);
 #else
             close(pipe_fds_[this->fileno() == 0 ? 0 : 1]);
 #endif
@@ -229,6 +269,42 @@ class Stdio {
         },
         redirect_.value());
   }
+#if defined(_WIN32)
+  std::optional<NativeHandle> native_handle_for_child() {
+    if (!redirect_.has_value()) {
+      return std::nullopt;
+    }
+    return std::visit(
+        [this]<typename T>(
+            [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
+          if constexpr (std::is_same_v<T, NativeHandle>) {
+            return value;
+          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
+                                                     std::vector<char>>>) {
+            return pipe_fds_[this->fileno() == 0 ? 0 : 1];
+          } else {
+            return std::nullopt;
+          }
+        },
+        redirect_.value());
+  }
+  std::optional<NativeHandle> native_handle_for_pipe() {
+    if (!redirect_.has_value()) {
+      return std::nullopt;
+    }
+    return std::visit(
+        [this]<typename T>(
+            [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
+          if constexpr (std::is_same_v<
+                            T, std::reference_wrapper<std::vector<char>>>) {
+            return pipe_fds_[this->fileno() == 0 ? 1 : 0];
+          } else {
+            return std::nullopt;
+          }
+        },
+        redirect_.value());
+  }
+#endif
 #if !defined(_WIN32)
   void child_on_setup() {
     if (!redirect_.has_value()) {
@@ -236,7 +312,7 @@ class Stdio {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
-          if constexpr (std::is_same_v<T, int>) {
+          if constexpr (std::is_same_v<T, NativeHandle>) {
             if (value >= 0 && value != this->fileno()) {
               dup2(value, this->fileno());
             }
@@ -249,12 +325,13 @@ class Stdio {
         },
         redirect_.value());
   }
-  std::optional<int> fd_for_poll() {
+  std::optional<NativeHandle> fd_for_poll() {
     if (!redirect_.has_value()) {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>([[maybe_unused]] T &value) -> std::optional<int> {
+        [this]<typename T>(
+            [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
           if constexpr (std::is_same_v<
                             T, std::reference_wrapper<std::vector<char>>>) {
             return pipe_fds_[this->fileno() == 0 ? 1 : 0];
@@ -269,10 +346,16 @@ class Stdio {
   virtual bool is_append() const = 0;
 
  protected:
-  std::optional<
-      std::variant<int, std::reference_wrapper<std::vector<char>>, std::string>>
+  std::optional<std::variant<
+      NativeHandle, std::reference_wrapper<std::vector<char>>, std::string>>
       redirect_{std::nullopt};
-  int pipe_fds_[2]{-1, -1};
+  NativeHandle pipe_fds_[2]{
+#if defined(_WIN32)
+      nullptr, nullptr
+#else
+      -1, -1
+#endif
+  };
 };
 
 class Stdin : public Stdio {
@@ -303,13 +386,25 @@ class Stderr : public Stdio {
 };
 
 struct stdin_redirector {
-  Stdin operator<(int fd) const { return Stdin{fd}; }
+  Stdin operator<(NativeHandle fd) const { return Stdin{fd}; }
   Stdin operator<(std::string const &file) const { return Stdin{file}; }
   Stdin operator<(std::vector<char> &buf) const { return Stdin{buf}; }
 };
 
 struct stdout_redirector {
-  Stdout operator>(int fd) const { return Stdout{fd}; }
+#if defined(_WIN32)
+  Stdout operator>(int fd) const {
+    if (fd == 0) {
+      return Stdout{GetStdHandle(STD_INPUT_HANDLE)};
+    } else if (fd == 1) {
+      return Stdout{GetStdHandle(STD_OUTPUT_HANDLE)};
+    } else if (fd == 2) {
+      return Stdout{GetStdHandle(STD_ERROR_HANDLE)};
+    }
+    throw std::runtime_error("should redirect to 0,1,2");
+  }
+#endif  // _WIN32
+  Stdout operator>(NativeHandle fd) const { return Stdout{fd}; }
   Stdout operator>(std::string const &file) const { return Stdout{file}; }
   Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
 
@@ -319,7 +414,19 @@ struct stdout_redirector {
 };
 
 struct stderr_redirector {
-  Stderr operator>(int fd) const { return Stderr{fd}; }
+#if defined(_WIN32)
+  Stderr operator>(int fd) const {
+    if (fd == 0) {
+      return Stderr{GetStdHandle(STD_INPUT_HANDLE)};
+    } else if (fd == 1) {
+      return Stderr{GetStdHandle(STD_OUTPUT_HANDLE)};
+    } else if (fd == 2) {
+      return Stderr{GetStdHandle(STD_ERROR_HANDLE)};
+    }
+    throw std::runtime_error("should redirect to 0,1,2");
+  }
+#endif
+  Stderr operator>(NativeHandle fd) const { return Stderr{fd}; }
   Stderr operator>(std::string const &file) const { return Stderr{file}; }
   Stderr operator>(std::vector<char> &buf) const { return Stderr{buf}; }
   Stderr operator>>(std::string const &file) const {
@@ -399,10 +506,86 @@ class subprocess {
         _stderr{std::move(err)} {}
 
   int run() {
-#if defined(_WIN32)
-    return 0;
-#else
     setup();
+#if defined(_WIN32)
+    PROCESS_INFORMATION pInfo;
+    STARTUPINFOA sInfo;
+    ZeroMemory(&pInfo, sizeof(PROCESS_INFORMATION));
+    ZeroMemory(&sInfo, sizeof(STARTUPINFOA));
+    auto in = _stdin.native_handle_for_child();
+    sInfo.hStdInput =
+        in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
+    auto out = _stdout.native_handle_for_child();
+    sInfo.hStdOutput =
+        out.has_value() ? out.value() : GetStdHandle(STD_OUTPUT_HANDLE);
+    auto err = _stderr.native_handle_for_child();
+    sInfo.hStdError =
+        err.has_value() ? err.value() : GetStdHandle(STD_ERROR_HANDLE);
+
+    sInfo.dwFlags |= STARTF_USESTDHANDLES;
+
+    std::vector<char> command;
+    for (auto const &cmd : _cmd) {
+      if (!command.empty()) {
+        command.push_back(' ');
+      }
+      auto need_quota = std::any_of(cmd.begin(), cmd.end(), [](char c) {
+        return !(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') &&
+               !(c >= '0' && c <= '9') && c != '_' && c != '-';
+      });
+      if (need_quota) {
+        command.push_back('"');
+      }
+      if (need_quota) {
+        for (auto c : cmd) {
+          if (c == '"' || c == '\\') {
+            command.push_back('\\');
+          }
+          command.push_back(c);
+        }
+      } else {
+        command.insert(command.end(), cmd.begin(), cmd.end());
+      }
+      if (need_quota) {
+        command.push_back('"');
+      }
+    }
+    command.push_back('\0');
+
+    std::vector<char> env_block;
+    for (auto const &[key, value] : _env) {
+      env_block.insert(env_block.end(), key.begin(), key.end());
+      env_block.push_back('=');
+      env_block.insert(env_block.end(), value.begin(), value.end());
+      env_block.push_back('\0');
+    }
+    if (!env_block.empty()) {
+      env_block.push_back('\0');
+    }
+
+    auto success = CreateProcessA(
+        nullptr, command.data(),
+        NULL,  // Process handle not inheritable
+        NULL,  // Thread handle not inheritable
+        TRUE,  // !!! Set handle inheritance to TRUE
+        0,
+        env_block.empty() ? nullptr : env_block.data(),  // environment block
+        _cwd.empty() ? nullptr : _cwd.data(),            // working directory
+        &sInfo,  // Pointer to STARTUPINFO structure
+        &pInfo   // Pointer to PROCESS_INFORMATION structure
+    );
+
+    if (!success) {
+      throw std::runtime_error("CreateProcessA error: " +
+                               std::to_string(GetLastError()));
+    }
+
+    auto ret = wait_child(pInfo.hProcess);
+
+    CloseHandle(pInfo.hProcess);
+    CloseHandle(pInfo.hThread);
+    return ret;
+#else
     auto pid = fork();
     if (pid < 0) {
       throw std::runtime_error("fork failed");
@@ -421,13 +604,74 @@ class subprocess {
     _stdout.setup_for_child();
     _stderr.setup_for_child();
   }
-  int wait_child(int pid) {
+  int wait_child(NativeHandle pid) {
     _stdin.wait_for_child();
     _stdout.wait_for_child();
     _stderr.wait_for_child();
 
 #if defined(_WIN32)
-    return 0;
+    auto in = _stdin.native_handle_for_pipe();
+    auto out = _stdout.native_handle_for_pipe();
+    auto err = _stderr.native_handle_for_pipe();
+    NativeHandle fds[3]{nullptr, nullptr, nullptr};
+    if (in.has_value()) {
+      fds[0] = in.value();
+    }
+    if (out.has_value()) {
+      fds[1] = out.value();
+    }
+    if (err.has_value()) {
+      fds[2] = err.value();
+    }
+
+    std::string_view stdin_str{};
+    if (in.has_value()) {
+      auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
+                      _stdin.redirect_.value())
+                      .get();
+      stdin_str = std::string_view{tmp.data(), tmp.size()};
+      DWORD written{0};
+      do {
+        DWORD len{0};
+        if (!WriteFile(in.value(), stdin_str.data(), stdin_str.size(), &len,
+                       0)) {
+          break;
+        }
+        written += len;
+      } while (written < stdin_str.size());
+    }
+
+    auto readData = [](NativeHandle fd, std::vector<char> &value) {
+      char buf[1024];
+      DWORD readed{0};
+      while (ReadFile(fd, buf, sizeof(buf), &readed, 0)) {
+        value.insert(value.end(), buf, buf + readed);
+        if (readed == 0) {
+          break;
+        }
+      }
+    };
+
+    if (out.has_value()) {
+      readData(out.value(), std::get<std::reference_wrapper<std::vector<char>>>(
+                                _stdout.redirect_.value())
+                                .get());
+    }
+    if (err.has_value()) {
+      readData(err.value(), std::get<std::reference_wrapper<std::vector<char>>>(
+                                _stderr.redirect_.value())
+                                .get());
+    }
+    for (auto const h : fds) {
+      if (h != nullptr) {
+        CloseHandle(h);
+      }
+    }
+
+    WaitForSingleObject(pid, INFINITE);
+    DWORD ret;
+    GetExitCodeProcess(pid, &ret);
+    return ret;
 #else
     struct pollfd fds[3]{{.fd = -1, .events = POLLOUT, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0},
