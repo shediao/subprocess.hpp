@@ -52,7 +52,8 @@ namespace {
 }
 #endif  // !_WIN32
 
-inline std::filesystem::path search_path(std::string const &exe_file) {
+inline std::filesystem::path find_executable_in_path(
+    std::string const &exe_file) {
 #ifdef _WIN32
   char separator = '\\';
   char path_env_sep = ';';
@@ -118,7 +119,7 @@ inline std::filesystem::path search_path(std::string const &exe_file) {
   return {};
 }
 
-inline std::map<std::string, std::string> environments() {
+inline std::map<std::string, std::string> get_current_environment_variables() {
   std::map<std::string, std::string> envMap;
 
 #ifdef _WIN32
@@ -180,7 +181,7 @@ class Stdio {
   Stdio(NativeHandle fd) : redirect_(fd) {}
   Stdio(std::string const &file) : redirect_(file) {}
   Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
-  void setup_for_child() {
+  void prepare_redirection() {
     if (!redirect_.has_value()) {
       return;
     }
@@ -250,7 +251,7 @@ class Stdio {
         },
         redirect_.value());
   }
-  void wait_for_child() {
+  void close_unused_pipe_ends_in_parent() {
     if (!redirect_.has_value()) {
       return;
     }
@@ -270,7 +271,7 @@ class Stdio {
         redirect_.value());
   }
 #if defined(_WIN32)
-  std::optional<NativeHandle> native_handle_for_child() {
+  std::optional<NativeHandle> get_child_process_stdio_handle() {
     if (!redirect_.has_value()) {
       return std::nullopt;
     }
@@ -288,7 +289,7 @@ class Stdio {
         },
         redirect_.value());
   }
-  std::optional<NativeHandle> native_handle_for_pipe() {
+  std::optional<NativeHandle> get_parent_communication_pipe_handle() {
     if (!redirect_.has_value()) {
       return std::nullopt;
     }
@@ -306,7 +307,7 @@ class Stdio {
   }
 #endif
 #if !defined(_WIN32)
-  void child_on_setup() {
+  void setup_stdio_in_child_process() {
     if (!redirect_.has_value()) {
       return;
     }
@@ -325,7 +326,7 @@ class Stdio {
         },
         redirect_.value());
   }
-  std::optional<NativeHandle> fd_for_poll() {
+  std::optional<NativeHandle> get_parent_pipe_fd_for_polling() {
     if (!redirect_.has_value()) {
       return std::nullopt;
     }
@@ -459,7 +460,8 @@ struct env_operator {
     return Env{std::move(env)};
   }
   Env operator+=(std::map<std::string, std::string> env) {
-    std::map<std::string, std::string> env_tmp{environments()};
+    std::map<std::string, std::string> env_tmp{
+        get_current_environment_variables()};
     env_tmp.insert(env.begin(), env.end());
     return Env{std::move(env_tmp)};
   }
@@ -506,19 +508,19 @@ class subprocess {
         _stderr{std::move(err)} {}
 
   int run() {
-    setup();
+    prepare_all_stdio_redirections();
 #if defined(_WIN32)
     PROCESS_INFORMATION pInfo;
     STARTUPINFOA sInfo;
     ZeroMemory(&pInfo, sizeof(PROCESS_INFORMATION));
     ZeroMemory(&sInfo, sizeof(STARTUPINFOA));
-    auto in = _stdin.native_handle_for_child();
+    auto in = _stdin.get_child_process_stdio_handle();
     sInfo.hStdInput =
         in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
-    auto out = _stdout.native_handle_for_child();
+    auto out = _stdout.get_child_process_stdio_handle();
     sInfo.hStdOutput =
         out.has_value() ? out.value() : GetStdHandle(STD_OUTPUT_HANDLE);
-    auto err = _stderr.native_handle_for_child();
+    auto err = _stderr.get_child_process_stdio_handle();
     sInfo.hStdError =
         err.has_value() ? err.value() : GetStdHandle(STD_ERROR_HANDLE);
 
@@ -580,7 +582,7 @@ class subprocess {
                                std::to_string(GetLastError()));
     }
 
-    auto ret = wait_child(pInfo.hProcess);
+    auto ret = manage_pipe_io_and_wait_for_exit(pInfo.hProcess);
 
     CloseHandle(pInfo.hProcess);
     CloseHandle(pInfo.hThread);
@@ -590,29 +592,29 @@ class subprocess {
     if (pid < 0) {
       throw std::runtime_error("fork failed");
     } else if (pid == 0) {
-      child_run();
+      execute_command_in_child();
       return 127;
     } else {
-      return wait_child(pid);
+      return manage_pipe_io_and_wait_for_exit(pid);
     }
 #endif
   }
 
  private:
-  void setup() {
-    _stdin.setup_for_child();
-    _stdout.setup_for_child();
-    _stderr.setup_for_child();
+  void prepare_all_stdio_redirections() {
+    _stdin.prepare_redirection();
+    _stdout.prepare_redirection();
+    _stderr.prepare_redirection();
   }
-  int wait_child(NativeHandle pid) {
-    _stdin.wait_for_child();
-    _stdout.wait_for_child();
-    _stderr.wait_for_child();
+  int manage_pipe_io_and_wait_for_exit(NativeHandle pid) {
+    _stdin.close_unused_pipe_ends_in_parent();
+    _stdout.close_unused_pipe_ends_in_parent();
+    _stderr.close_unused_pipe_ends_in_parent();
 
 #if defined(_WIN32)
-    auto in = _stdin.native_handle_for_pipe();
-    auto out = _stdout.native_handle_for_pipe();
-    auto err = _stderr.native_handle_for_pipe();
+    auto in = _stdin.get_parent_communication_pipe_handle();
+    auto out = _stdout.get_parent_communication_pipe_handle();
+    auto err = _stderr.get_parent_communication_pipe_handle();
     NativeHandle fds[3]{nullptr, nullptr, nullptr};
     if (in.has_value()) {
       fds[0] = in.value();
@@ -679,12 +681,12 @@ class subprocess {
 
     for (auto *stdio :
          {(Stdio *)&_stdin, (Stdio *)&_stdout, (Stdio *)&_stderr}) {
-      if (auto fd = stdio->fd_for_poll(); fd.has_value()) {
+      if (auto fd = stdio->get_parent_pipe_fd_for_polling(); fd.has_value()) {
         fds[stdio->fileno()].fd = fd.value();
       }
     }
     std::string_view stdin_str{};
-    if (_stdin.fd_for_poll().has_value()) {
+    if (_stdin.get_parent_pipe_fd_for_polling().has_value()) {
       auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
                       _stdin.redirect_.value())
                       .get();
@@ -787,10 +789,10 @@ class subprocess {
 #endif
   }
 #if !defined(_WIN32)
-  void child_run() {
-    _stdin.child_on_setup();
-    _stdout.child_on_setup();
-    _stderr.child_on_setup();
+  void execute_command_in_child() {
+    _stdin.setup_stdio_in_child_process();
+    _stdout.setup_stdio_in_child_process();
+    _stderr.setup_stdio_in_child_process();
 
     std::vector<char *> cmd{};
     std::transform(_cmd.begin(), _cmd.end(), std::back_inserter(cmd),
@@ -801,7 +803,7 @@ class subprocess {
     }
     auto exe_file = _cmd[0];
     if (exe_file.find('\\') == std::string::npos) {
-      auto exe_path = search_path(exe_file).string();
+      auto exe_path = find_executable_in_path(exe_file).string();
       if (!exe_path.empty()) {
         exe_file = exe_path;
       }
