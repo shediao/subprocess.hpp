@@ -41,7 +41,8 @@ using NativeHandle = int;
 #endif  // !_WIN32
 namespace {
 #if !defined(_WIN32)
-[[maybe_unused]] bool fd_is_open(int fd) {
+inline bool fd_is_open(
+    int fd) {  // Made static as it's a utility in anonymous namespace
   if (fd < 0) {
     return false;
   }
@@ -91,32 +92,49 @@ inline std::filesystem::path find_executable_in_path(
 #endif
     for (auto &p : paths) {
 #ifdef _WIN32
-      if (exe_file.find('.') == std::string::npos) {
-        if (auto f = std::filesystem::path(p) / exe_file; exists(f)) {
-          return f;
-        } else {
-          for (auto &ext : path_exts) {
-            if (auto f = std::filesystem::path(p) / (exe_file + ext);
-                exists(f)) {
-              return f;
-            }
-          }
+      // Windows: Prefer PATHEXT, then the name itself if it's a file.
+      // If exe_file already has an extension, check it directly.
+      std::filesystem::path current_exe_path =
+          std::filesystem::path(p) / exe_file;
+      if (std::filesystem::path(exe_file).has_extension()) {
+        if (exists(current_exe_path) &&
+            std::filesystem::is_regular_file(current_exe_path)) {
+          return current_exe_path;
         }
       } else {
-        auto f = std::filesystem::path(p) / exe_file;
-        if (exists(f)) {
-          return f;
+        // No extension in exe_file, try with PATHEXT first
+        for (auto &ext : path_exts) {
+          // Ensure ext starts with a dot or handle cases where it might not.
+          // PATHEXT entries are usually like ".EXE", ".COM".
+          std::string exe_with_ext = exe_file;
+          if (!ext.empty() && ext[0] != '.') {
+            // This case should ideally not happen if PATHEXT is parsed
+            // correctly. but as a safeguard if ext is "EXE" instead of ".EXE"
+            exe_with_ext += ".";
+          }
+          exe_with_ext += ext;
+          auto f = std::filesystem::path(p) / exe_with_ext;
+          if (exists(f) && std::filesystem::is_regular_file(f)) {
+            return f;
+          }
+        }
+        // If not found with any PATHEXT, check the original name (e.g.,
+        // "myprog" itself might be executable)
+        if (exists(current_exe_path) &&
+            std::filesystem::is_regular_file(current_exe_path)) {
+          return current_exe_path;
         }
       }
-#else
+#else  // POSIX
       auto f = std::filesystem::path(p) / exe_file;
-      if (0 == access(f.c_str(), X_OK)) {
+      // On POSIX, check for executable permission and if it's a regular file.
+      if (std::filesystem::is_regular_file(f) && 0 == access(f.c_str(), X_OK)) {
         return f;
       }
 #endif
     }
   }
-  return {};
+  return {};  // Not found
 }
 
 inline std::map<std::string, std::string> get_current_environment_variables() {
@@ -188,18 +206,39 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, NativeHandle>) {
-            // TODO: check value is open
+#if !defined(_WIN32)
+            if (!fd_is_open(value)) {  // 'value' is the NativeHandle (int fd)
+              throw std::runtime_error{
+                  "Provided file descriptor is not valid: " +
+                  std::to_string(value)};
+            }
+#else
+            if (value == INVALID_HANDLE_VALUE || value == nullptr) {
+              throw std::runtime_error{"Provided native handle is invalid."};
+            }
+        // Further checks like GetHandleInformation could be added for more
+        // robustness
+#endif
           } else if constexpr (std::is_same_v<T, std::string>) {
 #if defined(_WIN32)
+            SECURITY_ATTRIBUTES sa;
+            sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+            sa.lpSecurityDescriptor = nullptr;
+            sa.bInheritHandle = TRUE;  // Make the handle inheritable
+
             const HANDLE hFile = CreateFileA(
                 value.c_str(),
-                this->fileno() == 0 ? GENERIC_READ
-                : this->is_append() ? FILE_APPEND_DATA
-                                    : GENERIC_WRITE,
-                0, nullptr,
+                this->fileno() == 0
+                    ? GENERIC_READ  // Desired access
+                    : (GENERIC_WRITE |
+                       (this->is_append() ? FILE_APPEND_DATA : 0)),
+                this->fileno() == 0 ? FILE_SHARE_READ : 0,  // Share mode
+                &sa,  // Security attributes
                 this->fileno() == 0
                     ? OPEN_EXISTING
-                    : (this->is_append() ? OPEN_ALWAYS : CREATE_ALWAYS),
+                    : (this->is_append()
+                           ? OPEN_ALWAYS
+                           : CREATE_ALWAYS),  // Creation disposition
                 FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hFile == INVALID_HANDLE_VALUE) {
               throw std::runtime_error{"open failed: " + value + ", error: " +
@@ -799,15 +838,24 @@ class subprocess {
                    [](std::string &s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!_cwd.empty() && (-1 == chdir(_cwd.data()))) {
-      throw std::runtime_error("chdir failed: " + _cwd);
+      // strerror_r or equivalent for thread-safe errno string is better for
+      // libraries
+      throw std::runtime_error("chdir failed for path: " + _cwd +
+                               " error: " + strerror(errno));
     }
-    auto exe_file = _cmd[0];
-    if (exe_file.find('\\') == std::string::npos) {
-      auto exe_path = find_executable_in_path(exe_file).string();
-      if (!exe_path.empty()) {
-        exe_file = exe_path;
+
+    std::string exe_to_exec = _cmd[0];
+    // If exe_to_exec does not contain a path separator, search for it in PATH
+    if (exe_to_exec.find('/') == std::string::npos) {
+      std::filesystem::path resolved_path =
+          find_executable_in_path(exe_to_exec);
+      if (!resolved_path.empty()) {
+        exe_to_exec = resolved_path.string();
       }
+      // If not found in PATH, execv/execve will search CWD or fail, which is
+      // standard.
     }
+
     if (!_env.empty()) {
       std::vector<std::string> env_tmp{};
 
@@ -819,12 +867,16 @@ class subprocess {
       std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
                      [](auto &s) { return s.data(); });
       envs.push_back(nullptr);
-      execve(exe_file.c_str(), cmd.data(), envs.data());
+      execve(exe_to_exec.c_str(), cmd.data(), envs.data());
     } else {
-      execv(exe_file.c_str(), cmd.data());
+      execv(exe_to_exec.c_str(), cmd.data());
     }
-    std::cerr << "execv failed: " << strerror(errno) << '\n';
-    _Exit(127);
+    // This output to std::cerr in a library might be undesirable.
+    // Consider throwing an exception or having a configurable error handler.
+    // For now, keeping original behavior.
+    std::cerr << "exec failed for: " << exe_to_exec
+              << ", error: " << strerror(errno) << '\n';
+    _Exit(127);  // _Exit is correct here to not call atexit handlers etc.
   }
 #endif  // !_WIN32
 
@@ -851,7 +903,7 @@ template <typename... T>
 #if __cplusplus >= 202002L
   requires(is_run_args_type<T> && ...)
 #endif
-int run(std::vector<std::string> cmd, T &&...args) {
+inline int run(std::vector<std::string> cmd, T &&...args) {
   Stdin stdin_;
   Stdout stdout_;
   Stderr stderr_;
@@ -889,6 +941,15 @@ int run(std::vector<std::string> cmd, T &&...args) {
   return subprocess(cmd, stdin_, stdout_, stderr_, working_directory,
                     environments)
       .run();
+}
+
+inline std::filesystem::path home() {
+  auto envs = get_current_environment_variables();
+#if defined(_WIN32)
+  return envs["HOMEDRIVE"] + envs["HOMEPATH"];
+#else
+  return envs["HOME"];
+#endif
 }
 
 }  // namespace process
