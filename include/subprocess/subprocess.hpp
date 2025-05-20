@@ -34,6 +34,54 @@ extern char **environ;
 #endif  // !_WIN32
 
 namespace process {
+#if defined(__APPLE__) && defined(__MACH__)
+constexpr bool is_macos = true;
+#else
+constexpr bool is_macos = false;
+#endif
+#if defined(_WIN32) || defined(_WIN64)
+constexpr bool is_win = true;
+#else
+constexpr bool is_win = false;
+#endif
+
+#if defined(__linux__)
+constexpr bool is_linux = true;
+#else
+constexpr bool is_linux = false;
+#endif
+#if defined(__ANDROID__)
+constexpr bool is_android = true;
+#else
+constexpr bool is_android = false;
+#endif
+
+#if defined(__CYGWIN__)
+constexpr bool is_cygwin = true;
+#else
+constexpr bool is_cygwin = false;
+#endif
+
+#if defined(__FreeBSD__)
+constexpr bool is_freebsd = true;
+#else
+constexpr bool is_freebsd = false;
+#endif
+#if defined(__NetBSD__)
+constexpr bool is_netbsd = true;
+#else
+constexpr bool is_netbsd = false;
+#endif
+#if defined(__OpenBSD__)
+constexpr bool is_openbsd = true;
+#else
+constexpr bool is_openbsd = false;
+#endif
+
+constexpr bool is_bsd = is_freebsd || is_openbsd || is_netbsd;
+constexpr bool is_posix =
+    is_macos || is_linux || is_android || is_cygwin || is_bsd;
+
 #if defined(_WIN32)
 using NativeHandle = HANDLE;
 #else   // _WIN32
@@ -949,6 +997,30 @@ inline std::filesystem::path home() {
   return envs["HOMEDRIVE"] + envs["HOMEPATH"];
 #else
   return envs["HOME"];
+#endif
+}
+
+inline std::map<std::string, std::string> envrionments() {
+  return get_current_environment_variables();
+}
+
+#if defined(_WIN32)
+using pid_type = unsigned long;
+#else
+using pid_type = int;
+#endif
+#if (defined(_WIN32) || defined(__FreeBSD__) || defined(__DragonFly__) || \
+     defined(__NetBSD__) || defined(__sun))
+constexpr static NativeHandle root_pid = 0;
+#elif (defined(__APPLE__) && defined(__MACH__) || defined(__linux__) || \
+       defined(__ANDROID__) || defined(__OpenBSD__))
+constexpr static NativeHandle root_pid = 1;
+#endif
+inline pid_type pid() {
+#if defined(_WIN32)
+  return GetCurrentProcessId();
+#else
+  return getpid();
 #endif
 }
 
