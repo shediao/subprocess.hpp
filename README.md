@@ -32,12 +32,15 @@ run(
 );
 
 // 4. set environments && append environments
+
+// env= is override environments
 run({"/usr/bin/printenv"}, env={
 //                            ^ ~~~this is override environment
   {"e1", "v1"},
   {"e2", "e2"}
 });
 
+// env+= is append to environments
 run({"/usr/bin/printenv"}, env+={
 //                            ^ ~~~this is append environment
   {"e1", "v1"},
@@ -80,5 +83,6 @@ copy `subprocess.hpp` to myproject/dir/include/subprocess/
 
 ## TODO
 
-1. redirect append to file
-2. support windows、bsd
+1. support cygwin, msys, cygwin, mingw, bsd, ...
+2. windows unicode
+
