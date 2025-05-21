@@ -1,5 +1,9 @@
 #ifndef __TESTS_UTILS_H__
 #define __TESTS_UTILS_H__
+
+#if defined(_WIN32)
+#include <Windows.h>
+#endif  // !_WIN32
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif  // !_WIN32

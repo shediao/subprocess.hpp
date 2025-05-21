@@ -617,6 +617,7 @@ class subprocess {
     STARTUPINFOA sInfo;
     ZeroMemory(&pInfo, sizeof(PROCESS_INFORMATION));
     ZeroMemory(&sInfo, sizeof(STARTUPINFOA));
+    sInfo.cb = sizeof(STARTUPINFOA);
     auto in = _stdin.get_child_process_stdio_handle();
     sInfo.hStdInput =
         in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
@@ -636,14 +637,15 @@ class subprocess {
       }
       auto need_quota = std::any_of(cmd.begin(), cmd.end(), [](char c) {
         return !(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') &&
-               !(c >= '0' && c <= '9') && c != '_' && c != '-';
+               !(c >= '0' && c <= '9') && c != '_' && c != '-' && c != '\\' &&
+               c != ':' && c != '.';
       });
       if (need_quota) {
         command.push_back('"');
       }
       if (need_quota) {
         for (auto c : cmd) {
-          if (c == '"' || c == '\\') {
+          if (c == '"') {
             command.push_back('\\');
           }
           command.push_back(c);
