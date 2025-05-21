@@ -31,6 +31,7 @@ else()
     target_compile_options(simple_test PRIVATE /utf-8 /EHsc)
   endif()
   target_link_libraries(simple_test PRIVATE subprocess::subprocess)
+  add_test(NAME simple_test COMMAND simple_test)
 endif()
 
 install(

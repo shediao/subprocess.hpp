@@ -1,8 +1,10 @@
 #ifndef __SUBPROCESS_HPP__
 #define __SUBPROCESS_HPP__
 
+#if defined(__GNUC__)
 #if __cplusplus < 201703L
 #error "This code requires C++17 or later."
+#endif
 #endif
 
 #pragma once
