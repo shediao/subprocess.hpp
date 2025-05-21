@@ -241,14 +241,12 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
 
 // 17. Test set cwd and read a relative file from that CWD
 TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
-  TempFile temp_file("", "-test_run_cwd_relative_file.txt");
+  TempFile temp_file;
   const std::string temp_dir_path =
       std::filesystem::path(temp_file.path()).parent_path().string();
-  const std::string relative_file_name = "test_run_cwd_relative_file.txt";
-  const std::string full_file_path = temp_dir_path + "/" + relative_file_name;
-  removeFile(full_file_path);  // Ensure clean state
-
-  ASSERT_TRUE(writeFileContents(full_file_path, "Relative Content"));
+  const std::string relative_file_name =
+      std::filesystem::path(temp_file.path()).filename().string();
+  ASSERT_TRUE(temp_file.write("Relative Content"s));
 
   std::vector<char> stdout_buf;
 // On Windows, use `type` instead of `cat`.
@@ -271,7 +269,6 @@ TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
   }
 #endif
   ASSERT_EQ(output, "Relative Content");
-  removeFile(full_file_path);
 }
 
 // 18. Test command with multiple arguments, including one with spaces
