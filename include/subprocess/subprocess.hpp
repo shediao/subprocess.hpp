@@ -986,21 +986,32 @@ inline int run(std::vector<std::string> cmd, T &&...args) {
                              std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                          "Invalid argument type passed to run function.");
          }(std::forward<T>(args))));
-  return subprocess(cmd, stdin_, stdout_, stderr_, working_directory,
-                    environments)
+  return subprocess(std::move(cmd), stdin_, stdout_, stderr_,
+                    std::move(working_directory), std::move(environments))
       .run();
 }
 
-inline std::filesystem::path home() {
-  auto envs = get_current_environment_variables();
-#if defined(_WIN32)
-  return envs["HOMEDRIVE"] + envs["HOMEPATH"];
-#else
-  return envs["HOME"];
+template <typename... T>
+#if __cplusplus >= 202002L
+  requires(is_run_args_type<T> && ...)
 #endif
+inline int $(std::vector<std::string> cmd, T &&...args) {
+  return run(std::move(cmd), std::forward<T>(args)...);
 }
 
-inline std::map<std::string, std::string> envrionments() {
+inline std::string const &home() {
+  static std::string home_dir = []() {
+    auto envs = get_current_environment_variables();
+#if defined(_WIN32)
+    return envs["HOMEDRIVE"] + envs["HOMEPATH"];
+#else
+    return envs["HOME"];
+#endif
+  }();
+  return home_dir;
+}
+
+inline std::map<std::string, std::string> environments() {
   return get_current_environment_variables();
 }
 
@@ -1026,6 +1037,7 @@ inline pid_type pid() {
 
 }  // namespace process
 
+using process::$;
 using process::named_arguments::$cwd;
 using process::named_arguments::$devnull;
 using process::named_arguments::$env;
