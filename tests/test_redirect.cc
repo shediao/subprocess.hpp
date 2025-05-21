@@ -1,104 +1,21 @@
 #include <gtest/gtest.h>
 
-#include <fstream>
-
+#include "./utils.h"
 #include "subprocess/subprocess.hpp"
-
-std::string createTemporaryFile() {
-#ifdef _WIN32
-  wchar_t tempPathBuffer[MAX_PATH];
-  DWORD tempPathLength = GetTempPathW(MAX_PATH, tempPathBuffer);
-  if (tempPathLength == 0 || tempPathLength > MAX_PATH) {
-    throw std::runtime_error("Failed to get temporary path.");
-  }
-
-  wchar_t tempFileNameBuffer[MAX_PATH];
-  UINT uniqueId =
-      GetTempFileNameW(tempPathBuffer, L"tmp", 0, tempFileNameBuffer);
-  if (uniqueId == 0) {
-    throw std::runtime_error("Failed to create temporary file.");
-  }
-
-  // Convert wchar_t to std::string
-  std::wstring wFilename(tempFileNameBuffer);
-  std::string filename(wFilename.begin(), wFilename.end());
-  return filename;
-
-#else
-  // POSIX (Linux, macOS, etc.)
-  std::string tempDir;
-  const char* tmpDirEnv = std::getenv("TMPDIR");
-  if (tmpDirEnv != nullptr) {
-    tempDir = tmpDirEnv;
-  } else {
-    tempDir = "/tmp";
-  }
-
-  std::string filenameTemplate =
-      tempDir + "/temp.XXXXXX";  // XXXXXX will be replaced
-
-  int fd = mkstemp(filenameTemplate.data());
-  if (fd == -1) {
-    throw std::runtime_error("Failed to create temporary file.");
-  }
-  close(fd);  // Close the file descriptor; we only need the filename.
-
-  return filenameTemplate;
-#endif
-}
-std::vector<char> readFile(std::string f) {
-  std::ifstream input(f);
-  if (input.is_open()) {
-    return std::vector<char>{std::istreambuf_iterator<char>(input),
-                             std::istreambuf_iterator<char>()};
-  }
-  return {};
-}
-
-class TempFile {
- public:
-  TempFile() : path_{createTemporaryFile()} {}
-  ~TempFile() {
-    if (std::filesystem::exists(path_)) {
-      std::filesystem::remove(path_);
-    }
-  }
-  std::string const& path() { return path_; }
-  std::vector<char> content() {
-    std::ifstream input(path_);
-    if (input.is_open()) {
-      return std::vector<char>{std::istreambuf_iterator<char>(input),
-                               std::istreambuf_iterator<char>()};
-    }
-    return {};
-  }
-  std::string content_str() {
-    std::ifstream input(path_);
-    if (input.is_open()) {
-      return std::string{std::istreambuf_iterator<char>(input),
-                         std::istreambuf_iterator<char>()};
-    }
-    return {};
-  }
-
-  template <typename T>
-  auto write(T const& content) {
-    std::ofstream output{path_};
-    output.write(content.data(), content.size());
-    return content.size();
-  }
-
- private:
-  std::string path_;
-};
 
 TEST(SubprocessTest, RedirectOut) {
   using namespace process::named_arguments;
   using process::run;
   TempFile tmp_file;
   std::vector<char> content{'1', '2', '3'};
-  run({"/bin/echo", "-n", std::string(content.data(), content.size())},
+#if !defined(_WIN32)
+  run({"echo", "-n", std::string(content.data(), content.size())},
       std_out > tmp_file.path());
+#else
+  run({"cmd", "/c",
+       "<nul set /p=" + std::string(content.data(), content.size())},
+      std_out > tmp_file.path());
+#endif
   ASSERT_EQ(content, tmp_file.content());
 }
 TEST(SubprocessTest, RedirectOutAppend) {
@@ -107,8 +24,14 @@ TEST(SubprocessTest, RedirectOutAppend) {
   TempFile tmp_file;
   tmp_file.write(std::string{"000"});
   std::vector<char> content{'1', '2', '3'};
-  run({"/bin/echo", "-n", std::string(content.data(), content.size())},
+#if !defined(_WIN32)
+  run({"echo", "-n", std::string(content.data(), content.size())},
       std_out >> tmp_file.path());
+#else
+  run({"cmd", "/c",
+       "<nul set /p=" + std::string(content.data(), content.size())},
+      std_out >> tmp_file.path());
+#endif
   ASSERT_EQ("000123", tmp_file.content_str());
 }
 
@@ -117,9 +40,15 @@ TEST(SubprocessTest, RedirectErr) {
   using process::run;
   TempFile tmp_file;
   std::vector<char> content{'1', '2', '3'};
+#if !defined(_WIN32)
   run({"bash", "-c",
        "echo -n " + std::string(content.data(), content.size()) + " >&2"},
       std_err > tmp_file.path());
+#else
+  run({"cmd", "/c",
+       "<nul set /p=" + std::string(content.data(), content.size()) + " >&2"},
+      std_err > tmp_file.path());
+#endif
   ASSERT_EQ(content, tmp_file.content());
 }
 
@@ -129,8 +58,14 @@ TEST(SubprocessTest, RedirectErrAppend) {
   TempFile tmp_file;
   tmp_file.write(std::string("999"));
   std::vector<char> content{'1', '2', '3'};
+#if !defined(_WIN32)
   run({"bash", "-c",
        "echo -n " + std::string(content.data(), content.size()) + " >&2"},
       std_err >> tmp_file.path());
+#else
+  run({"cmd", "/c",
+       "<nul set /p=" + std::string(content.data(), content.size()) + " >&2"},
+      std_err >> tmp_file.path());
+#endif
   ASSERT_EQ("999123", tmp_file.content_str());
 }

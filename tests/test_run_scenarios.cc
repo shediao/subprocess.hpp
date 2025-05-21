@@ -4,27 +4,15 @@
 #include <string>
 #include <vector>
 
+#include "./utils.h"
 #include "gtest/gtest.h"
 #include "subprocess/subprocess.hpp"
+
+using namespace std::string_literals;
 
 // Helper function to convert vector<char> to string
 static std::string vecCharToString(const std::vector<char>& vec) {
   return std::string(vec.begin(), vec.end());
-}
-
-// Helper function to read file contents
-static std::string readFileContents(const std::string& path) {
-  std::ifstream t(path);
-  if (!t.is_open()) {
-    // In a test, it might be better to throw or return a specific error
-    // indicator For simplicity here, returning empty string if file can't be
-    // opened.
-    return "";
-  }
-  std::string str((std::istreambuf_iterator<char>(t)),
-                  std::istreambuf_iterator<char>());
-  t.close();
-  return str;
 }
 
 // Helper function to write file contents (for setting up append tests)
@@ -138,47 +126,40 @@ TEST_F(RunFunctionTest, CaptureEmptyStderrFromTrue) {
 
 // 9. Test redirect stdout to file (overwrite)
 TEST_F(RunFunctionTest, RedirectStdoutToFileOverwrite) {
-  const std::string file_path = "/tmp/test_run_stdout_overwrite.txt";
-  removeFile(file_path);  // Ensure clean state
+  TempFile temp_file;
   int exit_code =
-      run({"/bin/echo", "-n", "Overwrite Content"}, std_out > file_path);
+      run({"/bin/echo", "-n", "Overwrite Content"}, std_out > temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(readFileContents(file_path), "Overwrite Content");
-  removeFile(file_path);
+  ASSERT_EQ(temp_file.content_str(), "Overwrite Content");
 }
 
 // 10. Test redirect stderr to file (overwrite)
 TEST_F(RunFunctionTest, RedirectStderrToFileOverwrite) {
-  const std::string file_path = "/tmp/test_run_stderr_overwrite.txt";
-  removeFile(file_path);  // Ensure clean state
+  TempFile temp_file;
   int exit_code = run({"/bin/bash", "-c", "echo -n 'Error Overwrite' >&2"},
-                      std_err > file_path);
+                      std_err > temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(readFileContents(file_path), "Error Overwrite");
-  removeFile(file_path);
+  ASSERT_EQ(temp_file.content_str(), "Error Overwrite");
 }
 
 // 11. Test redirect stdout to file (append)
 TEST_F(RunFunctionTest, RedirectStdoutToFileAppend) {
-  const std::string file_path = "/tmp/test_run_stdout_append.txt";
-  removeFile(file_path);  // Ensure clean state
-  ASSERT_TRUE(writeFileContents(file_path, "Initial\n"));
-  int exit_code = run({"/bin/echo", "-n", "Appended"}, std_out >> file_path);
+  TempFile temp_file;
+  ASSERT_TRUE(temp_file.write("Initial\n"s));
+  int exit_code =
+      run({"/bin/echo", "-n", "Appended"}, std_out >> temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(readFileContents(file_path), "Initial\nAppended");
-  removeFile(file_path);
+  ASSERT_EQ(temp_file.content_str(), "Initial\nAppended");
 }
 
 // 12. Test redirect stderr to file (append)
 TEST_F(RunFunctionTest, RedirectStderrToFileAppend) {
-  const std::string file_path = "/tmp/test_run_stderr_append.txt";
-  removeFile(file_path);  // Ensure clean state
-  ASSERT_TRUE(writeFileContents(file_path, "InitialError\n"));
+  TempFile temp_file;
+  ASSERT_TRUE(temp_file.write("InitialError\n"s));
   int exit_code = run({"/bin/bash", "-c", "echo -n 'AppendedError' >&2"},
-                      std_err >> file_path);
+                      std_err >> temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(readFileContents(file_path), "InitialError\nAppendedError");
-  removeFile(file_path);
+  ASSERT_EQ(temp_file.content_str(), "InitialError\nAppendedError");
 }
 
 // 13. Test set environment variables (override) - check specific var
@@ -260,7 +241,9 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
 
 // 17. Test set cwd and read a relative file from that CWD
 TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
-  const std::string temp_dir_path = "/tmp";  // Assumed writable
+  TempFile temp_file("", "-test_run_cwd_relative_file.txt");
+  const std::string temp_dir_path =
+      std::filesystem::path(temp_file.path()).parent_path().string();
   const std::string relative_file_name = "test_run_cwd_relative_file.txt";
   const std::string full_file_path = temp_dir_path + "/" + relative_file_name;
   removeFile(full_file_path);  // Ensure clean state
@@ -321,16 +304,14 @@ TEST_F(RunFunctionTest, RunShellScriptFull) {
   // Shell scripts (.sh) are not directly executable on Windows without WSL or
   // similar. This test would need to be adapted to a .bat or .ps1 script. For
   // now, skipping on Windows or using a simple .bat example.
-  const std::string script_path = "/tmp/test_run_script.bat";
-  removeFile(script_path);
-  ASSERT_TRUE(writeFileContents(
-      script_path,
-      "@echo off\necho script_out\necho script_err 1>&2\nexit /b 5"));
+  TempFile temp_file("", "-test_run_script.bat");
+  ASSERT_TRUE(temp_file.write(
+      "@echo off\necho script_out\necho script_err 1>&2\nexit /b 5"s));
 
   std::vector<char> stdout_buf;
   std::vector<char> stderr_buf;
   // cmd /c script.bat to run
-  int exit_code = run({"cmd", "/c", script_path}, std_out > stdout_buf,
+  int exit_code = run({"cmd", "/c", temp_file.path()}, std_out > stdout_buf,
                       std_err > stderr_buf);
 
   ASSERT_EQ(exit_code, 5);
@@ -339,8 +320,6 @@ TEST_F(RunFunctionTest, RunShellScriptFull) {
   ASSERT_EQ(
       vecCharToString(stderr_buf),
       "script_err \r\n");  // Note: stderr from echo might have trailing space
-  removeFile(script_path);
-
 #else
   const std::string script_path = "/tmp/test_run_script.sh";
   removeFile(script_path);  // Ensure clean state

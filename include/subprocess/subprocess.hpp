@@ -1,10 +1,9 @@
 #ifndef __SUBPROCESS_HPP__
 #define __SUBPROCESS_HPP__
 
-#if defined(__GNUC__)
-#if __cplusplus < 201703L
+#if (defined(_MSVC_LANG) && _MSVC_LANG < 201703L) || \
+    (!defined(_MSVC_LANG) && __cplusplus < 201703L)
 #error "This code requires C++17 or later."
-#endif
 #endif
 
 #pragma once
@@ -102,6 +101,21 @@ inline bool fd_is_open(
   return true;
 }
 #endif  // !_WIN32
+
+#if defined(_WIN32)
+std::string get_last_error_msg() {
+  DWORD error = GetLastError();
+  LPVOID errorMsg;
+  std::stringstream out;
+  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+                NULL, error,
+                0,  // Default language
+                (LPTSTR)&errorMsg, 0, NULL);
+  out << "Error " << error << ": " << (char *)errorMsg;
+  LocalFree(errorMsg);
+  return out.str();
+}
+#endif  // _WIN32
 
 inline std::filesystem::path find_executable_in_path(
     std::string const &exe_file) {
@@ -667,8 +681,8 @@ class subprocess {
     );
 
     if (!success) {
-      throw std::runtime_error("CreateProcessA error: " +
-                               std::to_string(GetLastError()));
+      std::cerr << get_last_error_msg() << '\n';
+      return 127;
     }
 
     auto ret = manage_pipe_io_and_wait_for_exit(pInfo.hProcess);
