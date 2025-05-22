@@ -12,7 +12,7 @@ TEST(SubprocessTest, RedirectOut) {
   run({"echo", "-n", std::string(content.data(), content.size())},
       std_out > tmp_file.path());
 #else
-  run({"cmd", "/c",
+  run({"cmd.exe", "/c",
        "<nul set /p=" + std::string(content.data(), content.size())},
       std_out > tmp_file.path());
 #endif
@@ -28,7 +28,7 @@ TEST(SubprocessTest, RedirectOutAppend) {
   run({"echo", "-n", std::string(content.data(), content.size())},
       std_out >> tmp_file.path());
 #else
-  run({"cmd", "/c",
+  run({"cmd.exe", "/c",
        "<nul set /p=" + std::string(content.data(), content.size())},
       std_out >> tmp_file.path());
 #endif
@@ -45,8 +45,8 @@ TEST(SubprocessTest, RedirectErr) {
        "echo -n " + std::string(content.data(), content.size()) + " >&2"},
       std_err > tmp_file.path());
 #else
-  run({"cmd", "/c",
-       "<nul set /p=" + std::string(content.data(), content.size()) + " >&2"},
+  run({"cmd.exe", "/c",
+       "<nul set /p=" + std::string(content.data(), content.size()) + ">&2"},
       std_err > tmp_file.path());
 #endif
   ASSERT_EQ(content, tmp_file.content());
@@ -63,8 +63,8 @@ TEST(SubprocessTest, RedirectErrAppend) {
        "echo -n " + std::string(content.data(), content.size()) + " >&2"},
       std_err >> tmp_file.path());
 #else
-  run({"cmd", "/c",
-       "<nul set /p=" + std::string(content.data(), content.size()) + " >&2"},
+  run({"cmd.exe", "/c",
+       "<nul set /p=" + std::string(content.data(), content.size()) + ">&2"},
       std_err >> tmp_file.path());
 #endif
   ASSERT_EQ("999123", tmp_file.content_str());

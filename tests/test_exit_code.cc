@@ -19,7 +19,7 @@ TEST(SubprocessTest, ExitCode) {
   }
 #else
   for (int i = 0; i < 127; i++) {
-    ASSERT_EQ(i, run({"cmd", "/c", "exit /b " + std::to_string(i)}));
+    ASSERT_EQ(i, run({"cmd.exe", "/c", "exit /b " + std::to_string(i)}));
   }
 #endif
 }

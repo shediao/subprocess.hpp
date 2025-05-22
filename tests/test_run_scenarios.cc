@@ -1,6 +1,3 @@
-#include <cstdio>   // For std::remove
-#include <cstdlib>  // For setenv, unsetenv (conditionally used for more complex append test if needed)
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -215,7 +212,7 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
   // let\'s use a command that outputs CWD in a platform-agnostic way if
   // possible, or skip/adapt for Windows. `cmd /c cd` on windows prints current
   // directory.
-  int exit_code = run({"cmd", "/c", "cd"}, cwd = "C:\\Windows",
+  int exit_code = run({"cmd.exe", "/c", "cd"}, cwd = "C:\\Windows",
                       std_out > stdout_buf);  // Example for Windows
   ASSERT_EQ(exit_code, 0);
   // Output format of `cmd /c cd` is "C:\Windows", no trailing newline typically
@@ -251,7 +248,7 @@ TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
   std::vector<char> stdout_buf;
 // On Windows, use `type` instead of `cat`.
 #ifdef _WIN32
-  int exit_code = run({"cmd", "/c", "type " + relative_file_name},
+  int exit_code = run({"cmd.exe", "/c", "type " + relative_file_name},
                       cwd = temp_dir_path, std_out > stdout_buf);
 #else
   int exit_code = run({"/bin/cat", relative_file_name}, cwd = temp_dir_path,
@@ -308,7 +305,7 @@ TEST_F(RunFunctionTest, RunShellScriptFull) {
   std::vector<char> stdout_buf;
   std::vector<char> stderr_buf;
   // cmd /c script.bat to run
-  int exit_code = run({"cmd", "/c", temp_file.path()}, std_out > stdout_buf,
+  int exit_code = run({"cmd.exe", "/c", temp_file.path()}, std_out > stdout_buf,
                       std_err > stderr_buf);
 
   ASSERT_EQ(exit_code, 5);

@@ -336,13 +336,13 @@ class Stdio {
                                        std::to_string(GetLastError())};
             }
 
-            // child process close
-            if (!SetHandleInformation(
-                    this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
-                    HANDLE_FLAG_INHERIT, 0)) {
-              throw std::runtime_error("SetHandleInformation Failed: " +
-                                       std::to_string(GetLastError()));
-            }
+        // child process close
+        // if (!SetHandleInformation(
+        //         this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
+        //         HANDLE_FLAG_INHERIT, 0)) {
+        //   throw std::runtime_error("SetHandleInformation Failed: " +
+        //                            std::to_string(GetLastError()));
+        // }
 
 #else
             if (-1 == pipe(this->pipe_fds_)) {
@@ -615,9 +615,9 @@ class subprocess {
 #if defined(_WIN32)
     PROCESS_INFORMATION pInfo;
     STARTUPINFOA sInfo;
-    ZeroMemory(&pInfo, sizeof(PROCESS_INFORMATION));
-    ZeroMemory(&sInfo, sizeof(STARTUPINFOA));
-    sInfo.cb = sizeof(STARTUPINFOA);
+    ZeroMemory(&pInfo, sizeof(pInfo));
+    ZeroMemory(&sInfo, sizeof(sInfo));
+    sInfo.cb = sizeof(sInfo);
     auto in = _stdin.get_child_process_stdio_handle();
     sInfo.hStdInput =
         in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
@@ -635,11 +635,8 @@ class subprocess {
       if (!command.empty()) {
         command.push_back(' ');
       }
-      auto need_quota = std::any_of(cmd.begin(), cmd.end(), [](char c) {
-        return !(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') &&
-               !(c >= '0' && c <= '9') && c != '_' && c != '-' && c != '\\' &&
-               c != ':' && c != '.';
-      });
+      auto need_quota = std::any_of(
+          cmd.begin(), cmd.end(), [](char c) { return c <= ' ' || c == '"'; });
       if (need_quota) {
         command.push_back('"');
       }
@@ -720,7 +717,8 @@ class subprocess {
     auto in = _stdin.get_parent_communication_pipe_handle();
     auto out = _stdout.get_parent_communication_pipe_handle();
     auto err = _stderr.get_parent_communication_pipe_handle();
-    NativeHandle fds[3]{nullptr, nullptr, nullptr};
+    NativeHandle fds[3]{INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE,
+                        INVALID_HANDLE_VALUE};
     if (in.has_value()) {
       fds[0] = in.value();
     }
@@ -751,11 +749,8 @@ class subprocess {
     auto readData = [](NativeHandle fd, std::vector<char> &value) {
       char buf[1024];
       DWORD readed{0};
-      while (ReadFile(fd, buf, sizeof(buf), &readed, 0)) {
+      while (ReadFile(fd, buf, sizeof(buf), &readed, 0) && readed > 0) {
         value.insert(value.end(), buf, buf + readed);
-        if (readed == 0) {
-          break;
-        }
       }
     };
 
@@ -770,7 +765,7 @@ class subprocess {
                                 .get());
     }
     for (auto const h : fds) {
-      if (h != nullptr) {
+      if (h != INVALID_HANDLE_VALUE) {
         CloseHandle(h);
       }
     }
