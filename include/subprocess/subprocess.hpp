@@ -254,6 +254,72 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
   return envMap;
 }
 }  // namespace
+class HandleGuard {
+ public:
+  HandleGuard(NativeHandle h =
+#if defined(_WIN32)
+                  INVALID_HANDLE_VALUE
+#else
+                  -1
+#endif
+              )
+      : handle_(h) {
+  }
+  ~HandleGuard() { Close(); }
+  HandleGuard(const HandleGuard &) = delete;
+  HandleGuard &operator=(const HandleGuard &) = delete;
+  HandleGuard(HandleGuard &&other) noexcept : handle_(other.handle_) {
+    other.handle_ =
+#if defined(_WIN32)
+        INVALID_HANDLE_VALUE
+#else
+        -1
+#endif
+        ;
+  }
+  HandleGuard &operator=(HandleGuard &&other) noexcept {
+    if (this != &other) {
+      Close();
+      handle_ = other.handle_;
+      other.handle_ =
+#if defined(_WIN32)
+          INVALID_HANDLE_VALUE
+#else
+          -1
+#endif
+          ;
+    }
+    return *this;
+  }
+
+  NativeHandle get() const { return handle_; }
+  NativeHandle *p_get() { return &handle_; }  // For functions that take HANDLE*
+
+  void Close() {
+#if defined(_WIN32)
+    if (handle_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(handle_);
+      handle_ = INVALID_HANDLE_VALUE;
+    }
+#else
+    if (handle_ != -1) {
+      close(handle_);
+      handle_ = -1;
+    }
+#endif
+  }
+
+  bool IsValid() const {
+#if defined(_WIN32)
+    return handle_ != INVALID_HANDLE_VALUE;
+#else
+    return handle_ != -1;
+#endif
+  }
+
+ private:
+  NativeHandle handle_;
+};
 
 class Stdio {
   friend class subprocess;
@@ -283,6 +349,7 @@ class Stdio {
         // Further checks like GetHandleInformation could be added for more
         // robustness
 #endif
+          } else if constexpr (std::is_same_v<T, HandleGuard>) {
           } else if constexpr (std::is_same_v<T, std::string>) {
 #if defined(_WIN32)
             SECURITY_ATTRIBUTES sa;
@@ -308,7 +375,7 @@ class Stdio {
               throw std::runtime_error{"open failed: " + value + ", error: " +
                                        std::to_string(GetLastError())};
             }
-            this->redirect_.value() = hFile;
+            this->redirect_.value() = HandleGuard(hFile);
 #else
             auto fd =
                 this->fileno() == 0
@@ -320,7 +387,7 @@ class Stdio {
             if (fd == -1) {
               throw std::runtime_error{"open failed: " + value};
             }
-            this->redirect_.value() = fd;
+            this->redirect_.value() = HandleGuard(fd);
 #endif
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
@@ -336,13 +403,13 @@ class Stdio {
                                        std::to_string(GetLastError())};
             }
 
-        // child process close
-        // if (!SetHandleInformation(
-        //         this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
-        //         HANDLE_FLAG_INHERIT, 0)) {
-        //   throw std::runtime_error("SetHandleInformation Failed: " +
-        //                            std::to_string(GetLastError()));
-        // }
+            child process
+                close if (!SetHandleInformation(
+                              this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
+                              HANDLE_FLAG_INHERIT, 0)) {
+              throw std::runtime_error("SetHandleInformation Failed: " +
+                                       std::to_string(GetLastError()));
+            }
 
 #else
             if (-1 == pipe(this->pipe_fds_)) {
@@ -361,7 +428,10 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, NativeHandle>) {
-          } else if constexpr (std::is_same_v<T, std::string>) {
+          } else if constexpr (std::is_same_v<T, HandleGuard>) {
+            if (value.IsValid()) {
+              value.Close();
+            }
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
 #if defined(_WIN32)
@@ -369,6 +439,7 @@ class Stdio {
 #else
             close(pipe_fds_[this->fileno() == 0 ? 0 : 1]);
 #endif
+          } else if constexpr (std::is_same_v<T, std::string>) {
           }
         },
         redirect_.value());
@@ -383,6 +454,8 @@ class Stdio {
             [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
           if constexpr (std::is_same_v<T, NativeHandle>) {
             return value;
+          } else if constexpr (std::is_same_v<T, HandleGuard>) {
+            return value.get();
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
             return pipe_fds_[this->fileno() == 0 ? 0 : 1];
@@ -420,6 +493,10 @@ class Stdio {
             if (value >= 0 && value != this->fileno()) {
               dup2(value, this->fileno());
             }
+          } else if constexpr (std::is_same_v<T, HandleGuard>) {
+            if (value.IsValid() && value.get() != this->fileno()) {
+              dup2(value.get(), this->fileno());
+            }
           } else if constexpr (std::is_same_v<T, std::string>) {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
@@ -450,8 +527,9 @@ class Stdio {
   virtual bool is_append() const = 0;
 
  protected:
-  std::optional<std::variant<
-      NativeHandle, std::reference_wrapper<std::vector<char>>, std::string>>
+  std::optional<
+      std::variant<NativeHandle, HandleGuard,
+                   std::reference_wrapper<std::vector<char>>, std::string>>
       redirect_{std::nullopt};
   NativeHandle pipe_fds_[2]{
 #if defined(_WIN32)
@@ -684,10 +762,9 @@ class subprocess {
       return 127;
     }
 
+    HandleGuard process_guard(pInfo.hProcess);
+    HandleGuard thread_guard(pInfo.hThread);
     auto ret = manage_pipe_io_and_wait_for_exit(pInfo.hProcess);
-
-    CloseHandle(pInfo.hProcess);
-    CloseHandle(pInfo.hThread);
     return ret;
 #else
     auto pid = fork();
@@ -999,8 +1076,9 @@ inline int run(std::vector<std::string> cmd, T &&...args) {
                              std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                          "Invalid argument type passed to run function.");
          }(std::forward<T>(args))));
-  return subprocess(std::move(cmd), stdin_, stdout_, stderr_,
-                    std::move(working_directory), std::move(environments))
+  return subprocess(std::move(cmd), std::move(stdin_), std::move(stdout_),
+                    std::move(stderr_), std::move(working_directory),
+                    std::move(environments))
       .run();
 }
 
