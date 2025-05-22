@@ -360,10 +360,9 @@ class Stdio {
             const HANDLE hFile = CreateFileA(
                 value.c_str(),
                 this->fileno() == 0
-                    ? GENERIC_READ  // Desired access
-                    : (GENERIC_WRITE |
-                       (this->is_append() ? FILE_APPEND_DATA : 0)),
-                this->fileno() == 0 ? FILE_SHARE_READ : 0,  // Share mode
+                    ? GENERIC_READ
+                    : (this->is_append() ? FILE_APPEND_DATA : GENERIC_WRITE),
+                FILE_SHARE_READ,
                 &sa,  // Security attributes
                 this->fileno() == 0
                     ? OPEN_EXISTING

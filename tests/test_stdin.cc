@@ -10,10 +10,7 @@ TEST(SubprocessTest, Stdin) {
 #if !defined(_WIN32)
   run({"/bin/cat", "-"}, std_in<in, std_out> out);
 #else
-  run({"powershell",
-       "-command"
-       "$input"},
-      std_in<in, std_out> out);
+  run({"powershell", "-command", "$input"}, std_in<in, std_out> out);
 
 #endif
 
