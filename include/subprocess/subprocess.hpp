@@ -403,10 +403,10 @@ class Stdio {
                                        std::to_string(GetLastError())};
             }
 
-            child process
-                close if (!SetHandleInformation(
-                              this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
-                              HANDLE_FLAG_INHERIT, 0)) {
+            // child process close
+            if (!SetHandleInformation(
+                    this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
+                    HANDLE_FLAG_INHERIT, 0)) {
               throw std::runtime_error("SetHandleInformation Failed: " +
                                        std::to_string(GetLastError()));
             }
