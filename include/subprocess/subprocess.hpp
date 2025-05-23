@@ -88,19 +88,6 @@ using NativeHandle = HANDLE;
 using NativeHandle = int;
 #endif  // !_WIN32
 namespace {
-#if !defined(_WIN32)
-inline bool fd_is_open(
-    int fd) {  // Made static as it's a utility in anonymous namespace
-  if (fd < 0) {
-    return false;
-  }
-  if (fcntl(fd, F_GETFL) == -1 && errno == EBADF) {
-    return false;  // fd 无效
-  }
-  return true;
-}
-#endif  // !_WIN32
-
 #if defined(_WIN32)
 std::string get_last_error_msg() {
   DWORD error = GetLastError();
@@ -356,7 +343,10 @@ class Stdio {
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, NativeHandle>) {
 #if !defined(_WIN32)
-            if (!fd_is_open(value)) {  // 'value' is the NativeHandle (int fd)
+            auto fd_is_open = [](int fd) {
+              return fd >= 0 && (fcntl(fd, F_GETFL) != -1 || errno != EBADF);
+            };
+            if (!fd_is_open(value)) {
               throw std::runtime_error{
                   "Provided file descriptor is not valid: " +
                   std::to_string(value)};
@@ -365,8 +355,6 @@ class Stdio {
             if (value == INVALID_HANDLE_VALUE || value == nullptr) {
               throw std::runtime_error{"Provided native handle is invalid."};
             }
-        // Further checks like GetHandleInformation could be added for more
-        // robustness
 #endif
           } else if constexpr (std::is_same_v<T, HandleGuard>) {
           } else if constexpr (std::is_same_v<T, std::string>) {
@@ -714,19 +702,19 @@ class subprocess {
 #if __cplusplus >= 202002L
     requires(is_run_args_type<T> && ...)
 #endif
-  subprocess(std::vector<std::string> cmd, T &&...args) : _cmd(std::move(cmd)) {
+  subprocess(std::vector<std::string> cmd, T &&...args) : cmd_(std::move(cmd)) {
     std::map<std::string, std::string> environments;
     std::vector<std::pair<std::string, std::string>> env_appends;
     (void)(..., ([&]<typename Arg>(Arg &&arg) {
              using ArgType = std::decay_t<Arg>;
              if constexpr (std::is_same_v<ArgType, Stdin>) {
-               _stdin = std::forward<Arg>(arg);
+               stdin_ = std::forward<Arg>(arg);
              }
              if constexpr (std::is_same_v<ArgType, Stdout>) {
-               _stdout = std::forward<Arg>(arg);
+               stdout_ = std::forward<Arg>(arg);
              }
              if constexpr (std::is_same_v<ArgType, Stderr>) {
-               _stderr = std::forward<Arg>(arg);
+               stderr_ = std::forward<Arg>(arg);
              }
              if constexpr (std::is_same_v<ArgType, Env>) {
                environments.insert(arg.env.begin(), arg.env.end());
@@ -735,7 +723,7 @@ class subprocess {
                env_appends.push_back(arg.kv);
              }
              if constexpr (std::is_same_v<ArgType, Cwd>) {
-               _cwd = arg.cwd.string();
+               cwd_ = arg.cwd.string();
              }
              static_assert(std::is_same_v<Env, std::decay_t<T>> ||
                                std::is_same_v<Stdin, std::decay_t<T>> ||
@@ -745,17 +733,8 @@ class subprocess {
                                std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                            "Invalid argument type passed to run function.");
            }(std::forward<T>(args))));
-    _env = environments;
+    env_ = environments;
   }
-  subprocess(std::vector<std::string> cmd, Stdin in, Stdout out, Stderr err,
-             std::string working_directory = {},
-             std::map<std::string, std::string> environments = {})
-      : _cmd{std::move(cmd)},
-        _cwd{std::move(working_directory)},
-        _env{std::move(environments)},
-        _stdin{std::move(in)},
-        _stdout{std::move(out)},
-        _stderr{std::move(err)} {}
   subprocess(subprocess &&) = default;
   subprocess &operator=(subprocess &&) = default;
   subprocess(const subprocess &) = delete;
@@ -769,20 +748,20 @@ class subprocess {
     ZeroMemory(&pInfo, sizeof(pInfo));
     ZeroMemory(&sInfo, sizeof(sInfo));
     sInfo.cb = sizeof(sInfo);
-    auto in = _stdin.get_child_process_stdio_handle();
+    auto in = stdin_.get_child_process_stdio_handle();
     sInfo.hStdInput =
         in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
-    auto out = _stdout.get_child_process_stdio_handle();
+    auto out = stdout_.get_child_process_stdio_handle();
     sInfo.hStdOutput =
         out.has_value() ? out.value() : GetStdHandle(STD_OUTPUT_HANDLE);
-    auto err = _stderr.get_child_process_stdio_handle();
+    auto err = stderr_.get_child_process_stdio_handle();
     sInfo.hStdError =
         err.has_value() ? err.value() : GetStdHandle(STD_ERROR_HANDLE);
 
     sInfo.dwFlags |= STARTF_USESTDHANDLES;
 
     std::vector<char> command;
-    for (auto const &cmd : _cmd) {
+    for (auto const &cmd : cmd_) {
       if (!command.empty()) {
         command.push_back(' ');
       }
@@ -808,7 +787,7 @@ class subprocess {
     command.push_back('\0');
 
     std::vector<char> env_block;
-    for (auto const &[key, value] : _env) {
+    for (auto const &[key, value] : env_) {
       env_block.insert(env_block.end(), key.begin(), key.end());
       env_block.push_back('=');
       env_block.insert(env_block.end(), value.begin(), value.end());
@@ -825,7 +804,7 @@ class subprocess {
         TRUE,  // !!! Set handle inheritance to TRUE
         0,
         env_block.empty() ? nullptr : env_block.data(),  // environment block
-        _cwd.empty() ? nullptr : _cwd.data(),            // working directory
+        cwd_.empty() ? nullptr : cwd_.data(),            // working directory
         &sInfo,  // Pointer to STARTUPINFO structure
         &pInfo   // Pointer to PROCESS_INFORMATION structure
     );
@@ -854,24 +833,24 @@ class subprocess {
 
  private:
   void prepare_all_stdio_redirections() {
-    _stdin.prepare_redirection();
-    _stdout.prepare_redirection();
-    _stderr.prepare_redirection();
+    stdin_.prepare_redirection();
+    stdout_.prepare_redirection();
+    stderr_.prepare_redirection();
   }
   int manage_pipe_io_and_wait_for_exit(NativeHandle pid) {
-    _stdin.close_unused_pipe_ends_in_parent();
-    _stdout.close_unused_pipe_ends_in_parent();
-    _stderr.close_unused_pipe_ends_in_parent();
+    stdin_.close_unused_pipe_ends_in_parent();
+    stdout_.close_unused_pipe_ends_in_parent();
+    stderr_.close_unused_pipe_ends_in_parent();
 
 #if defined(_WIN32)
-    auto in = _stdin.get_parent_communication_pipe_handle();
-    auto out = _stdout.get_parent_communication_pipe_handle();
-    auto err = _stderr.get_parent_communication_pipe_handle();
+    auto in = stdin_.get_parent_communication_pipe_handle();
+    auto out = stdout_.get_parent_communication_pipe_handle();
+    auto err = stderr_.get_parent_communication_pipe_handle();
 
     std::string_view stdin_str{};
     if (in.has_value()) {
       auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                      _stdin.redirect_.value())
+                      stdin_.redirect_.value())
                       .get();
       stdin_str = std::string_view{tmp.data(), tmp.size()};
       DWORD written{0};
@@ -896,13 +875,13 @@ class subprocess {
 
     if (out.has_value()) {
       readData(out.value(), std::get<std::reference_wrapper<std::vector<char>>>(
-                                _stdout.redirect_.value())
+                                stdout_.redirect_.value())
                                 .get());
       CloseHandle(out.value());
     }
     if (err.has_value()) {
       readData(err.value(), std::get<std::reference_wrapper<std::vector<char>>>(
-                                _stderr.redirect_.value())
+                                stderr_.redirect_.value())
                                 .get());
       CloseHandle(err.value());
     }
@@ -916,15 +895,15 @@ class subprocess {
                          {.fd = -1, .events = POLLIN, .revents = 0}};
 
     for (auto *stdio :
-         {(Stdio *)&_stdin, (Stdio *)&_stdout, (Stdio *)&_stderr}) {
+         {(Stdio *)&stdin_, (Stdio *)&stdout_, (Stdio *)&stderr_}) {
       if (auto fd = stdio->get_parent_pipe_fd_for_polling(); fd.has_value()) {
         fds[stdio->fileno()].fd = fd.value();
       }
     }
     std::string_view stdin_str{};
-    if (_stdin.get_parent_pipe_fd_for_polling().has_value()) {
+    if (stdin_.get_parent_pipe_fd_for_polling().has_value()) {
       auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                      _stdin.redirect_.value())
+                      stdin_.redirect_.value())
                       .get();
       stdin_str = std::string_view{tmp.data(), tmp.size()};
     }
@@ -957,7 +936,7 @@ class subprocess {
         auto len = read(fds[1].fd, buf, 1024);
         if (len > 0) {
           auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                          _stdout.redirect_.value())
+                          stdout_.redirect_.value())
                           .get();
           tmp.insert(tmp.end(), buf, buf + len);
         }
@@ -976,7 +955,7 @@ class subprocess {
         auto len = read(fds[2].fd, buf, 1024);
         if (len > 0) {
           auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                          _stderr.redirect_.value())
+                          stderr_.redirect_.value())
                           .get();
           tmp.insert(tmp.end(), buf, buf + len);
         }
@@ -1026,22 +1005,22 @@ class subprocess {
   }
 #if !defined(_WIN32)
   void execute_command_in_child() {
-    _stdin.setup_stdio_in_child_process();
-    _stdout.setup_stdio_in_child_process();
-    _stderr.setup_stdio_in_child_process();
+    stdin_.setup_stdio_in_child_process();
+    stdout_.setup_stdio_in_child_process();
+    stderr_.setup_stdio_in_child_process();
 
     std::vector<char *> cmd{};
-    std::transform(_cmd.begin(), _cmd.end(), std::back_inserter(cmd),
+    std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
                    [](std::string &s) { return s.data(); });
     cmd.push_back(nullptr);
-    if (!_cwd.empty() && (-1 == chdir(_cwd.data()))) {
+    if (!cwd_.empty() && (-1 == chdir(cwd_.data()))) {
       // strerror_r or equivalent for thread-safe errno string is better for
       // libraries
-      throw std::runtime_error("chdir failed for path: " + _cwd +
+      throw std::runtime_error("chdir failed for path: " + cwd_ +
                                " error: " + strerror(errno));
     }
 
-    std::string exe_to_exec = _cmd[0];
+    std::string exe_to_exec = cmd_[0];
     // If exe_to_exec does not contain a path separator, search for it in PATH
     if (exe_to_exec.find('/') == std::string::npos) {
       std::filesystem::path resolved_path =
@@ -1053,11 +1032,11 @@ class subprocess {
       // standard.
     }
 
-    if (!_env.empty()) {
+    if (!env_.empty()) {
       std::vector<std::string> env_tmp{};
 
       std::transform(
-          _env.begin(), _env.end(), std::back_inserter(env_tmp),
+          env_.begin(), env_.end(), std::back_inserter(env_tmp),
           [](auto &entry) { return entry.first + "=" + entry.second; });
 
       std::vector<char *> envs{};
@@ -1078,12 +1057,12 @@ class subprocess {
 #endif  // !_WIN32
 
  private:
-  std::vector<std::string> _cmd;
-  std::string _cwd{};
-  std::map<std::string, std::string> _env;
-  Stdin _stdin;
-  Stdout _stdout;
-  Stderr _stderr;
+  std::vector<std::string> cmd_;
+  std::string cwd_{};
+  std::map<std::string, std::string> env_;
+  Stdin stdin_;
+  Stdout stdout_;
+  Stderr stderr_;
 };
 
 template <typename... T>
