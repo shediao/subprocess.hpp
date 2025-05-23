@@ -6,7 +6,6 @@
 #error "This code requires C++17 or later."
 #endif
 
-#pragma once
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
@@ -207,7 +206,22 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
 #ifdef _WIN32
   // Windows implementation
 #if defined(UNICODE)
-  char *envBlock = GetEnvironmentStringsA();
+#if defined(GetEnvironmentStrings)
+#define GetEnvironmentStrings_IS_A_MACRO 1
+#define TEMP_GetEnvironmentStrings_VALUE GetEnvironmentStrings
+#undef GetEnvironmentStrings
+  char *envBlock = GetEnvironmentStrings();
+#else
+#define GetEnvironmentStrings_IS_A_MACRO 0
+  char *envBlock = GetEnvironmentStrings();
+#endif
+
+#if GetEnvironmentStrings_IS_A_MACRO
+#define GetEnvironmentStrings TEMP_GetEnvironmentStrings_VALUE
+#undef TEMP_GetEnvironmentStrings_VALUE
+#undef GetEnvironmentStrings_IS_A_MACRO
+#endif
+
 #else
   char *envBlock = GetEnvironmentStrings();
 #endif
@@ -329,6 +343,11 @@ class Stdio {
   Stdio(NativeHandle fd) : redirect_(fd) {}
   Stdio(std::string const &file) : redirect_(file) {}
   Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
+  Stdio(Stdio &&) = default;
+  Stdio &operator=(Stdio &&) = default;
+  Stdio(Stdio const &) = delete;
+  Stdio &operator=(Stdio const &) = delete;
+  virtual ~Stdio() {}
   void prepare_redirection() {
     if (!redirect_.has_value()) {
       return;
@@ -542,12 +561,20 @@ class Stdio {
 class Stdin : public Stdio {
  public:
   using Stdio::Stdio;
+  Stdin(Stdin &&) = default;
+  Stdin &operator=(Stdin &&) = default;
+  Stdin(Stdin const &) = delete;
+  Stdin &operator=(Stdin const &) = delete;
   int fileno() const override { return 0; }
   bool is_append() const override { return false; }
 };
 class Stdout : public Stdio {
  public:
   using Stdio::Stdio;
+  Stdout(Stdout &&) = default;
+  Stdout &operator=(Stdout &&) = default;
+  Stdout(Stdout const &) = delete;
+  Stdout &operator=(Stdout const &) = delete;
   Stdout(std::string const &file, bool append) : Stdio(file), append_(append) {}
   int fileno() const override { return 1; }
   bool is_append() const override { return append_; }
@@ -558,6 +585,10 @@ class Stdout : public Stdio {
 class Stderr : public Stdio {
  public:
   using Stdio::Stdio;
+  Stderr(Stderr &&) = default;
+  Stderr &operator=(Stderr &&) = default;
+  Stderr(Stderr const &) = delete;
+  Stderr &operator=(Stderr const &) = delete;
   Stderr(std::string const &file, bool append) : Stdio(file), append_(append) {}
   int fileno() const override { return 2; }
   bool is_append() const override { return append_; }
@@ -725,6 +756,10 @@ class subprocess {
         _stdin{std::move(in)},
         _stdout{std::move(out)},
         _stderr{std::move(err)} {}
+  subprocess(subprocess &&) = default;
+  subprocess &operator=(subprocess &&) = default;
+  subprocess(const subprocess &) = delete;
+  subprocess &operator=(const subprocess &) = delete;
 
   int run() {
     prepare_all_stdio_redirections();
@@ -842,8 +877,8 @@ class subprocess {
       DWORD written{0};
       do {
         DWORD len{0};
-        if (!WriteFile(in.value(), stdin_str.data(), stdin_str.size(), &len,
-                       0)) {
+        if (!WriteFile(in.value(), stdin_str.data(),
+                       static_cast<DWORD>(stdin_str.size()), &len, 0)) {
           break;
         }
         written += len;
@@ -874,7 +909,7 @@ class subprocess {
     WaitForSingleObject(pid, INFINITE);
     DWORD ret;
     GetExitCodeProcess(pid, &ret);
-    return ret;
+    return static_cast<int>(ret);
 #else
     struct pollfd fds[3]{{.fd = -1, .events = POLLOUT, .revents = 0},
                          {.fd = -1, .events = POLLIN, .revents = 0},

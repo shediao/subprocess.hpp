@@ -15,10 +15,12 @@ function(add_subprocess_test test_name)
   if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
      OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
      OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror)
+    if(NOT MSVC)
+      target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror)
+    endif()
   endif()
   if(MSVC)
-    target_compile_options(${test_name} PRIVATE /utf-8 /EHsc)
+    target_compile_options(${test_name} PRIVATE /W4 /WX /utf-8 /EHsc)
   endif()
   target_link_libraries(${test_name} PRIVATE subprocess::subprocess
                                              GTest::gtest GTest::gtest_main)

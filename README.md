@@ -85,4 +85,6 @@ copy `subprocess.hpp` to myproject/dir/include/subprocess/
 
 1. support cygwin, msys, cygwin, mingw, bsd, ...
 2. windows unicode
+3. pipe run subprocess
+4. parallel run subprocess
 
