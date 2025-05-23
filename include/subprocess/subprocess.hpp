@@ -1,5 +1,5 @@
-#ifndef __SUBPROCESS_HPP__
-#define __SUBPROCESS_HPP__
+#ifndef __SUBPROCESS_SUBPROCESS_HPP__
+#define __SUBPROCESS_SUBPROCESS_HPP__
 
 #if (defined(_MSVC_LANG) && _MSVC_LANG < 201703L) || \
     (!defined(_MSVC_LANG) && __cplusplus < 201703L)
@@ -667,16 +667,55 @@ namespace named_arguments {
 }  // namespace named_arguments
 
 using namespace named_arguments;
+#if __cplusplus >= 202002L
+template <typename T>
+concept is_run_args_type = std::is_same_v<Env, std::decay_t<T>> ||
+                           std::is_same_v<Stdin, std::decay_t<T>> ||
+                           std::is_same_v<Stdout, std::decay_t<T>> ||
+                           std::is_same_v<Stderr, std::decay_t<T>> ||
+                           std::is_same_v<Cwd, std::decay_t<T>> ||
+                           std::is_same_v<EnvItemAppend, std::decay_t<T>>;
+#endif
 
 class subprocess {
-  template <typename... Ts>
-  struct overloaded : Ts... {
-    using Ts::operator()...;
-  };
-  template <typename... Ts>
-  overloaded(Ts...) -> overloaded<Ts...>;
-
  public:
+  template <typename... T>
+#if __cplusplus >= 202002L
+    requires(is_run_args_type<T> && ...)
+#endif
+  subprocess(std::vector<std::string> cmd, T &&...args) : _cmd(std::move(cmd)) {
+    std::map<std::string, std::string> environments;
+    std::vector<std::pair<std::string, std::string>> env_appends;
+    (void)(..., ([&]<typename Arg>(Arg &&arg) {
+             using ArgType = std::decay_t<Arg>;
+             if constexpr (std::is_same_v<ArgType, Stdin>) {
+               _stdin = std::forward<Arg>(arg);
+             }
+             if constexpr (std::is_same_v<ArgType, Stdout>) {
+               _stdout = std::forward<Arg>(arg);
+             }
+             if constexpr (std::is_same_v<ArgType, Stderr>) {
+               _stderr = std::forward<Arg>(arg);
+             }
+             if constexpr (std::is_same_v<ArgType, Env>) {
+               environments.insert(arg.env.begin(), arg.env.end());
+             }
+             if constexpr (std::is_same_v<ArgType, EnvItemAppend>) {
+               env_appends.push_back(arg.kv);
+             }
+             if constexpr (std::is_same_v<ArgType, Cwd>) {
+               _cwd = arg.cwd.string();
+             }
+             static_assert(std::is_same_v<Env, std::decay_t<T>> ||
+                               std::is_same_v<Stdin, std::decay_t<T>> ||
+                               std::is_same_v<Stdout, std::decay_t<T>> ||
+                               std::is_same_v<Stderr, std::decay_t<T>> ||
+                               std::is_same_v<Cwd, std::decay_t<T>> ||
+                               std::is_same_v<EnvItemAppend, std::decay_t<T>>,
+                           "Invalid argument type passed to run function.");
+           }(std::forward<T>(args))));
+    _env = environments;
+  }
   subprocess(std::vector<std::string> cmd, Stdin in, Stdout out, Stderr err,
              std::string working_directory = {},
              std::map<std::string, std::string> environments = {})
@@ -1012,59 +1051,12 @@ class subprocess {
   Stderr _stderr;
 };
 
-#if __cplusplus >= 202002L
-template <typename T>
-concept is_run_args_type = std::is_same_v<Env, std::decay_t<T>> ||
-                           std::is_same_v<Stdin, std::decay_t<T>> ||
-                           std::is_same_v<Stdout, std::decay_t<T>> ||
-                           std::is_same_v<Stderr, std::decay_t<T>> ||
-                           std::is_same_v<Cwd, std::decay_t<T>> ||
-                           std::is_same_v<EnvItemAppend, std::decay_t<T>>;
-#endif
-
 template <typename... T>
 #if __cplusplus >= 202002L
   requires(is_run_args_type<T> && ...)
 #endif
 inline int run(std::vector<std::string> cmd, T &&...args) {
-  Stdin stdin_;
-  Stdout stdout_;
-  Stderr stderr_;
-  std::string working_directory;
-  std::map<std::string, std::string> environments;
-  std::vector<std::pair<std::string, std::string>> env_appends;
-  (void)(..., ([&]<typename Arg>(Arg &&arg) {
-           using ArgType = std::decay_t<Arg>;
-           if constexpr (std::is_same_v<ArgType, Stdin>) {
-             stdin_ = std::forward<Arg>(arg);
-           }
-           if constexpr (std::is_same_v<ArgType, Stdout>) {
-             stdout_ = std::forward<Arg>(arg);
-           }
-           if constexpr (std::is_same_v<ArgType, Stderr>) {
-             stderr_ = std::forward<Arg>(arg);
-           }
-           if constexpr (std::is_same_v<ArgType, Env>) {
-             environments.insert(arg.env.begin(), arg.env.end());
-           }
-           if constexpr (std::is_same_v<ArgType, EnvItemAppend>) {
-             env_appends.push_back(arg.kv);
-           }
-           if constexpr (std::is_same_v<ArgType, Cwd>) {
-             working_directory = arg.cwd.string();
-           }
-           static_assert(std::is_same_v<Env, std::decay_t<T>> ||
-                             std::is_same_v<Stdin, std::decay_t<T>> ||
-                             std::is_same_v<Stdout, std::decay_t<T>> ||
-                             std::is_same_v<Stderr, std::decay_t<T>> ||
-                             std::is_same_v<Cwd, std::decay_t<T>> ||
-                             std::is_same_v<EnvItemAppend, std::decay_t<T>>,
-                         "Invalid argument type passed to run function.");
-         }(std::forward<T>(args))));
-  return subprocess(std::move(cmd), std::move(stdin_), std::move(stdout_),
-                    std::move(stderr_), std::move(working_directory),
-                    std::move(environments))
-      .run();
+  return subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 template <typename... T>
@@ -1072,7 +1064,7 @@ template <typename... T>
   requires(is_run_args_type<T> && ...)
 #endif
 inline int $(std::vector<std::string> cmd, T &&...args) {
-  return run(std::move(cmd), std::forward<T>(args)...);
+  return subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 inline std::string const &home() {
@@ -1120,4 +1112,4 @@ using process::named_arguments::$env;
 using process::named_arguments::$stderr;
 using process::named_arguments::$stdin;
 using process::named_arguments::$stdout;
-#endif  // __SUBPROCESS_HPP__
+#endif  // __SUBPROCESS_SUBPROCESS_HPP__
