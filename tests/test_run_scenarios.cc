@@ -12,6 +12,7 @@ static std::string vecCharToString(const std::vector<char>& vec) {
   return std::string(vec.begin(), vec.end());
 }
 
+#if !defined(_WIN32)
 // Helper function to write file contents (for setting up append tests)
 static bool writeFileContents(const std::string& path,
                               const std::string& content) {
@@ -26,6 +27,7 @@ static bool writeFileContents(const std::string& path,
 
 // Helper function to remove a file
 static void removeFile(const std::string& path) { std::remove(path.c_str()); }
+#endif
 
 namespace {
 

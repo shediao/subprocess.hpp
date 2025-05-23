@@ -793,17 +793,6 @@ class subprocess {
     auto in = _stdin.get_parent_communication_pipe_handle();
     auto out = _stdout.get_parent_communication_pipe_handle();
     auto err = _stderr.get_parent_communication_pipe_handle();
-    NativeHandle fds[3]{INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE,
-                        INVALID_HANDLE_VALUE};
-    if (in.has_value()) {
-      fds[0] = in.value();
-    }
-    if (out.has_value()) {
-      fds[1] = out.value();
-    }
-    if (err.has_value()) {
-      fds[2] = err.value();
-    }
 
     std::string_view stdin_str{};
     if (in.has_value()) {
@@ -820,6 +809,7 @@ class subprocess {
         }
         written += len;
       } while (written < stdin_str.size());
+      CloseHandle(in.value());
     }
 
     auto readData = [](NativeHandle fd, std::vector<char> &value) {
@@ -834,18 +824,14 @@ class subprocess {
       readData(out.value(), std::get<std::reference_wrapper<std::vector<char>>>(
                                 _stdout.redirect_.value())
                                 .get());
+      CloseHandle(out.value());
     }
     if (err.has_value()) {
       readData(err.value(), std::get<std::reference_wrapper<std::vector<char>>>(
                                 _stderr.redirect_.value())
                                 .get());
+      CloseHandle(err.value());
     }
-    for (auto const h : fds) {
-      if (h != INVALID_HANDLE_VALUE) {
-        CloseHandle(h);
-      }
-    }
-
     WaitForSingleObject(pid, INFINITE);
     DWORD ret;
     GetExitCodeProcess(pid, &ret);

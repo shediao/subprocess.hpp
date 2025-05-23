@@ -10,8 +10,11 @@ TEST(SubprocessTest, Stdin) {
 #if !defined(_WIN32)
   run({"/bin/cat", "-"}, std_in<in, std_out> out);
 #else
-  run({"powershell", "-command", "$input"}, std_in<in, std_out> out);
-
+  run({"more.com"}, std_in<in, std_out> out);
+  out.erase(std::find_if(out.rbegin(), out.rend(),
+                         [](char c) { return c != '\r' && c != '\n'; })
+                .base(),
+            out.end());
 #endif
 
   ASSERT_EQ(in, out);
