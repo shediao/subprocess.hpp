@@ -146,7 +146,7 @@ TEST_F(RunFunctionTest, CaptureEmptyStdoutFromTrue) {
 // 8. Test capture empty stderr (e.g., from "true" command)
 TEST_F(RunFunctionTest, CaptureEmptyStderrFromTrue) {
   std::vector<char> stderr_buf;
-  int exit_code = run({"true"}, std_err > stderr_buf);
+  int exit_code = run("true", std_err > stderr_buf);
   ASSERT_EQ(exit_code, 0);
   ASSERT_TRUE(stderr_buf.empty());
 }
@@ -222,10 +222,10 @@ TEST_F(RunFunctionTest, EnvOverrideCheckValue) {
   std::vector<char> stdout_buf;
   // Assuming OverrideEnv is the way to specify overriding environment map
 #if defined(_WIN32)
-  int exit_code = run({"cmd.exe", "/c", "<nul set /p=%MY_TEST_VAR%&exit /b 0"},
+  int exit_code = run("cmd.exe", "/c", "<nul set /p=%MY_TEST_VAR%&exit /b 0",
                       env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
 #else
-  int exit_code = run({"/bin/bash", "-c", "echo -n $MY_TEST_VAR"},
+  int exit_code = run("/bin/bash", "-c", "echo -n $MY_TEST_VAR",
                       env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
@@ -291,7 +291,7 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
   // let\'s use a command that outputs CWD in a platform-agnostic way if
   // possible, or skip/adapt for Windows. `cmd /c cd` on windows prints current
   // directory.
-  int exit_code = run({"cmd.exe", "/c", "cd"}, cwd = "C:\\Windows",
+  int exit_code = run("cmd.exe", "/c", "cd", cwd = "C:\\Windows",
                       std_out > stdout_buf);  // Example for Windows
   ASSERT_EQ(exit_code, 0);
   // Output format of `cmd /c cd` is "C:\Windows", no trailing newline typically
@@ -305,7 +305,7 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
   }
   ASSERT_EQ(output, "C:\\Windows");
 #else
-  int exit_code = run({"/bin/pwd"}, cwd = "/tmp", std_out > stdout_buf);
+  int exit_code = run("/bin/pwd", cwd = "/tmp", std_out > stdout_buf);
   ASSERT_EQ(exit_code, 0);
 #if defined(__APPLE__)
   ASSERT_EQ(vecCharToString(stdout_buf), "/private/tmp\n");
@@ -374,10 +374,10 @@ TEST_F(RunFunctionTest, CommandNameFromSystemPathMkdirHelp) {
 // On Windows `mkdir /?`
 #ifdef _WIN32
   int exit_code =
-      run({"cmd.exe", "/c", "echo true&exit /b 0"}, std_out > stdout_buf,
+      run("cmd.exe", "/c", "echo true&exit /b 0", std_out > stdout_buf,
           std_err > stdout_buf);  // some help output to stderr
 #else
-  int exit_code = run({"echo", "true"}, std_out > stdout_buf);
+  int exit_code = run("echo", "true", std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
   ASSERT_FALSE(stdout_buf.empty());  // Check that it produced some output

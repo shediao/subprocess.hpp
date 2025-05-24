@@ -10,11 +10,11 @@ TEST(SubprocessTest, CaptureOutputs) {
   std::vector<char> err;
 
 #if !defined(_WIN32)
-  run({"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"}, std_out > out,
+  run("/bin/bash", "-c", "echo -n 123; echo -n '345' >&2", std_out > out,
       std_err > err);
 #else
-  run({"cmd.exe", "/c", "<nul set /p=123& <nul set /p=345>&2\r\n"},
-      std_out > out, std_err > err);
+  run("cmd.exe", "/c", "<nul set /p=123& <nul set /p=345>&2\r\n", std_out > out,
+      std_err > err);
 #endif
   ASSERT_EQ("123", std::string_view(out.data(), out.size()));
   ASSERT_EQ("345", std::string_view(err.data(), err.size()));
@@ -22,9 +22,9 @@ TEST(SubprocessTest, CaptureOutputs) {
   out.clear();
   err.clear();
 #if !defined(_WIN32)
-  run({"/bin/bash", "-c", "echo -n 123"}, std_out > out, std_err > err);
+  run("/bin/bash", "-c", "echo -n 123", std_out > out, std_err > err);
 #else
-  run({"cmd.exe", "/c", "<nul set /p=123"}, std_out > out, std_err > err);
+  run("cmd.exe", "/c", "<nul set /p=123", std_out > out, std_err > err);
 #endif
   ASSERT_EQ("123", std::string_view(out.data(), out.size()));
   ASSERT_TRUE(err.empty());
@@ -32,9 +32,9 @@ TEST(SubprocessTest, CaptureOutputs) {
   out.clear();
   err.clear();
 #if !defined(_WIN32)
-  run({"/bin/bash", "-c", "echo -n '123' >&2"}, std_out > out, std_err > err);
+  run("/bin/bash", "-c", "echo -n '123' >&2", std_out > out, std_err > err);
 #else
-  run({"cmd.exe", "/c", "<nul set /p=123>&2"}, std_out > out, std_err > err);
+  run("cmd.exe", "/c", "<nul set /p=123>&2", std_out > out, std_err > err);
 #endif
   ASSERT_TRUE(out.empty());
   ASSERT_FALSE(err.empty());

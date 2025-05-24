@@ -8,10 +8,10 @@ using process::run;
 TEST(SubprocessTest, Environment) {
   std::vector<char> out;
 #if !defined(_WIN32)
-  auto ret = run({"/usr/bin/printenv", "env1"}, env = {{"env1", "value1"}},
+  auto ret = run("/usr/bin/printenv", "env1", env = {{"env1", "value1"}},
                  std_out > out);
 #else
-  auto ret = run({"cmd.exe", "/c", "<nul set /p=%env1%&exit /b 0"},
+  auto ret = run("cmd.exe", "/c", "<nul set /p=%env1%&exit /b 0",
                  env = {{"env1", "value1"}}, std_out > out);
 #endif
 
@@ -26,10 +26,10 @@ TEST(SubprocessTest, Environment) {
 TEST(SubprocessTest, Environment2) {
   std::vector<char> out;
 #if !defined(_WIN32)
-  auto ret = run({"/bin/bash", "-c", "echo -n $env1"},
+  auto ret = run("/bin/bash", "-c", "echo -n $env1",
                  $env = {{"env1", "value1"}}, $stdout > out);
 #else
-  auto ret = run({"cmd.exe", "/c", "<nul set /p=%env1%&exit /b 0"},
+  auto ret = run("cmd.exe", "/c", "<nul set /p=%env1%&exit /b 0",
                  $env = {{"env1", "value1"}}, $stdout > out);
 #endif
 
