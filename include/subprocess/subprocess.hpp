@@ -498,13 +498,6 @@ void create_pipe(NativeHandle (&fds)[2]) {
   if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 0)) {
     throw std::runtime_error{get_last_error_msg()};
   }
-
-  if (!SetHandleInformation(this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
-                            HANDLE_FLAG_INHERIT, 0)) {
-    throw std::runtime_error("SetHandleInformation Failed: " +
-                             std::to_string(GetLastError()));
-  }
-
 #else
   if (-1 == pipe(fds)) {
     throw std::runtime_error{"pipe failed"};
@@ -737,6 +730,14 @@ class Stdio {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
             create_pipe(this->pipe_fds_);
+#if defined(_WIN32)
+            if (!SetHandleInformation(
+                    this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
+                    HANDLE_FLAG_INHERIT, 0)) {
+              throw std::runtime_error("SetHandleInformation Failed: " +
+                                       std::to_string(GetLastError()));
+            }
+#endif
           } else {
           }
         },
