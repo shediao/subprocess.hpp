@@ -670,14 +670,77 @@ struct Pipe {
   NativeHandle fds_[2];
 };
 
+struct File {
+  enum class OpenType {
+    ReadOnly,
+    WriteTruncate,
+    WriteAppend,
+  };
+  using OpenType::ReadOnly;
+  using OpenType::WriteAppend;
+  using OpenType::WriteTruncate;
+
+  explicit File(std::string const &p, bool append = false)
+      : path_{p}, append_{append} {}
+  ~File() { close_native_handle(fd_); }
+
+  void open_for_read() { open_impl(ReadOnly); }
+  void open_for_write() {
+    if (append_) {
+      open_impl(WriteAppend);
+    } else {
+      open_impl(WriteTruncate);
+    }
+  }
+  void close() { close_native_handle(fd_); }
+  NativeHandle fd() { return fd_; }
+
+ private:
+  void open_impl(OpenType type) {
+#if defined(_WIN32)
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.lpSecurityDescriptor = nullptr;
+    sa.bInheritHandle = TRUE;  // Make the handle inheritable
+
+    fd_ = CreateFileA(
+        path_.c_str(),
+        type == ReadOnly
+            ? GENERIC_READ
+            : (type == WriteAppend ? FILE_APPEND_DATA : GENERIC_WRITE),
+        FILE_SHARE_READ,
+        &sa,  // Security attributes
+        type == ReadOnly ? OPEN_EXISTING
+                         : (type == WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (fd_ == INVALID_HANDLE_VALUE) {
+      throw std::runtime_error{"open failed: " + path_ +
+                               ", error: " + std::to_string(GetLastError())};
+    }
+#else
+    fd_ = (type == ReadOnly)
+              ? open(path_.c_str(), O_RDONLY)
+              : open(path_.c_str(),
+                     (type == WriteAppend) ? (O_WRONLY | O_CREAT | O_APPEND)
+                                           : (O_WRONLY | O_CREAT | O_TRUNC),
+                     0644);
+    if (fd_ == -1) {
+      throw std::runtime_error{"open failed: " + path_};
+    }
+#endif
+  }
+  std::string path_;
+  bool append_{false};
+  NativeHandle fd_{INVALID_NATIVE_HANDLE_VALUE};
+};
+
 class Stdio {
   friend class subprocess;
 
  public:
   Stdio() : redirect_(std::nullopt) {}
-  Stdio(NativeHandle fd) : redirect_(fd) {}
-  Stdio(Pipe p) : redirect_(p) {}
-  Stdio(std::string const &file) : redirect_(file) {}
+  Stdio(Pipe p) : redirect_(std::move(p)) {}
+  Stdio(File f) : redirect_(std::move(f)) {}
   Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
   Stdio(Stdio &&) = default;
   Stdio &operator=(Stdio &&) = default;
@@ -690,22 +753,7 @@ class Stdio {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
-          if constexpr (std::is_same_v<T, NativeHandle>) {
-#if !defined(_WIN32)
-            auto fd_is_open = [](int fd) {
-              return fd >= 0 && (fcntl(fd, F_GETFL) != -1 || errno != EBADF);
-            };
-            if (!fd_is_open(value)) {
-              throw std::runtime_error{
-                  "Provided file descriptor is not valid: " +
-                  std::to_string(value)};
-            }
-#else
-            if (value == INVALID_HANDLE_VALUE || value == nullptr) {
-              throw std::runtime_error{"Provided native handle is invalid."};
-            }
-#endif
-          } else if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
             NativeHandle non_inherit_handle = value.fds_[fileno() == 0 ? 1 : 0];
             if (non_inherit_handle != INVALID_NATIVE_HANDLE_VALUE &&
@@ -715,41 +763,12 @@ class Stdio {
                                        std::to_string(GetLastError()));
             }
 #endif
-          } else if constexpr (std::is_same_v<T, HandleGuard>) {
-          } else if constexpr (std::is_same_v<T, std::string>) {
-#if defined(_WIN32)
-            SECURITY_ATTRIBUTES sa;
-            sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-            sa.lpSecurityDescriptor = nullptr;
-            sa.bInheritHandle = TRUE;  // Make the handle inheritable
-
-            const HANDLE hFile = CreateFileA(
-                value.c_str(),
-                fileno() == 0
-                    ? GENERIC_READ
-                    : (is_append() ? FILE_APPEND_DATA : GENERIC_WRITE),
-                FILE_SHARE_READ,
-                &sa,  // Security attributes
-                fileno() == 0 ? OPEN_EXISTING
-                              : (is_append() ? OPEN_ALWAYS : CREATE_ALWAYS),
-                FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (hFile == INVALID_HANDLE_VALUE) {
-              throw std::runtime_error{"open failed: " + value + ", error: " +
-                                       std::to_string(GetLastError())};
+          } else if constexpr (std::is_same_v<T, File>) {
+            if (fileno() == 0) {
+              value.open_for_read();
+            } else {
+              value.open_for_write();
             }
-            redirect_.value() = HandleGuard(hFile);
-#else
-            auto fd = fileno() == 0
-                          ? open(value.c_str(), O_RDONLY)
-                          : open(value.c_str(),
-                                 is_append() ? (O_WRONLY | O_CREAT | O_APPEND)
-                                             : (O_WRONLY | O_CREAT | O_TRUNC),
-                                 0644);
-            if (fd == -1) {
-              throw std::runtime_error{"open failed: " + value};
-            }
-            redirect_.value() = HandleGuard(fd);
-#endif
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
             create_pipe(pipe_fds_);
@@ -773,17 +792,13 @@ class Stdio {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
-          if constexpr (std::is_same_v<T, NativeHandle>) {
-          } else if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<T, Pipe>) {
             close_native_handle(value.fds_[fileno() == 0 ? 0 : 1]);
-          } else if constexpr (std::is_same_v<T, HandleGuard>) {
-            if (value.IsValid()) {
-              value.Close();
-            }
+          } else if constexpr (std::is_same_v<T, File>) {
+            value.close();
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
             close_native_handle(pipe_fds_[fileno() == 0 ? 0 : 1]);
-          } else if constexpr (std::is_same_v<T, std::string>) {
           }
         },
         redirect_.value());
@@ -796,12 +811,10 @@ class Stdio {
     return std::visit(
         [this]<typename T>(
             [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
-          if constexpr (std::is_same_v<T, NativeHandle>) {
-            return value;
-          } else if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<T, Pipe>) {
             return value.fds_[fileno() == 0 ? 0 : 1];
-          } else if constexpr (std::is_same_v<T, HandleGuard>) {
-            return value.get();
+          } else if constexpr (std::is_same_v<T, File>) {
+            return value.fd();
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
             return pipe_fds_[fileno() == 0 ? 0 : 1];
@@ -835,20 +848,13 @@ class Stdio {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
-          if constexpr (std::is_same_v<T, NativeHandle>) {
-            if (value >= 0 && value != fileno()) {
-              dup2(value, fileno());
-              close_native_handle(value);
-            }
-          } else if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<T, Pipe>) {
             dup2(value.fds_[fileno() == 0 ? 0 : 1], fileno());
             close_native_handle(value.fds_[0]);
             close_native_handle(value.fds_[1]);
-          } else if constexpr (std::is_same_v<T, HandleGuard>) {
-            if (value.IsValid() && value.get() != fileno()) {
-              dup2(value.get(), fileno());
-              value.Close();
-            }
+          } else if constexpr (std::is_same_v<T, File>) {
+            dup2(value.fd(), fileno());
+            value.close();
           } else if constexpr (std::is_same_v<T, std::string>) {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
@@ -877,12 +883,10 @@ class Stdio {
   }
 #endif  // !_WIN32
   virtual int fileno() const = 0;
-  virtual bool is_append() const = 0;
 
  protected:
   std::optional<
-      std::variant<NativeHandle, Pipe, HandleGuard,
-                   std::reference_wrapper<std::vector<char>>, std::string>>
+      std::variant<Pipe, File, std::reference_wrapper<std::vector<char>>>>
       redirect_{std::nullopt};
   NativeHandle pipe_fds_[2]{
 #if defined(_WIN32)
@@ -901,7 +905,6 @@ class Stdin : public Stdio {
   Stdin(Stdin const &) = delete;
   Stdin &operator=(Stdin const &) = delete;
   int fileno() const override { return 0; }
-  bool is_append() const override { return false; }
 };
 class Stdout : public Stdio {
  public:
@@ -910,12 +913,7 @@ class Stdout : public Stdio {
   Stdout &operator=(Stdout &&) = default;
   Stdout(Stdout const &) = delete;
   Stdout &operator=(Stdout const &) = delete;
-  Stdout(std::string const &file, bool append) : Stdio(file), append_(append) {}
   int fileno() const override { return 1; }
-  bool is_append() const override { return append_; }
-
- private:
-  bool append_{false};
 };
 class Stderr : public Stdio {
  public:
@@ -924,62 +922,30 @@ class Stderr : public Stdio {
   Stderr &operator=(Stderr &&) = default;
   Stderr(Stderr const &) = delete;
   Stderr &operator=(Stderr const &) = delete;
-  Stderr(std::string const &file, bool append) : Stdio(file), append_(append) {}
   int fileno() const override { return 2; }
-  bool is_append() const override { return append_; }
-
- private:
-  bool append_{false};
 };
 
 struct stdin_redirector {
-  Stdin operator<(NativeHandle fd) const { return Stdin{fd}; }
   Stdin operator<(Pipe p) const { return Stdin{p}; }
-  Stdin operator<(std::string const &file) const { return Stdin{file}; }
+  Stdin operator<(std::string const &file) const { return Stdin{File{file}}; }
   Stdin operator<(std::vector<char> &buf) const { return Stdin{buf}; }
 };
 
 struct stdout_redirector {
-#if defined(_WIN32)
-  Stdout operator>(int fd) const {
-    if (fd == 0) {
-      return Stdout{GetStdHandle(STD_INPUT_HANDLE)};
-    } else if (fd == 1) {
-      return Stdout{GetStdHandle(STD_OUTPUT_HANDLE)};
-    } else if (fd == 2) {
-      return Stdout{GetStdHandle(STD_ERROR_HANDLE)};
-    }
-    throw std::runtime_error("should redirect to 0,1,2");
-  }
-#endif  // _WIN32
-  Stdout operator>(NativeHandle fd) const { return Stdout{fd}; }
   Stdout operator>(Pipe p) const { return Stdout{p}; }
-  Stdout operator>(std::string const &file) const { return Stdout{file}; }
+  Stdout operator>(std::string const &file) const { return Stdout{File{file}}; }
   Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
 
   Stdout operator>>(std::string const &file) const {
-    return Stdout{file, true};
+    return Stdout{File{file, true}};
   }
 };
 
 struct stderr_redirector {
-#if defined(_WIN32)
-  Stderr operator>(int fd) const {
-    if (fd == 0) {
-      return Stderr{GetStdHandle(STD_INPUT_HANDLE)};
-    } else if (fd == 1) {
-      return Stderr{GetStdHandle(STD_OUTPUT_HANDLE)};
-    } else if (fd == 2) {
-      return Stderr{GetStdHandle(STD_ERROR_HANDLE)};
-    }
-    throw std::runtime_error("should redirect to 0,1,2");
-  }
-#endif
-  Stderr operator>(NativeHandle fd) const { return Stderr{fd}; }
-  Stderr operator>(std::string const &file) const { return Stderr{file}; }
+  Stderr operator>(std::string const &file) const { return Stderr{File{file}}; }
   Stderr operator>(std::vector<char> &buf) const { return Stderr{buf}; }
   Stderr operator>>(std::string const &file) const {
-    return Stderr{file, true};
+    return Stderr{File{file, true}};
   }
 };
 
@@ -1145,17 +1111,6 @@ class subprocess {
     return wait_for_exit();
   }
 
-  void reset_pipe_handle(NativeHandle const fd, int const fileno) {
-    if (fileno == 0) {
-      stdin_.redirect_ = fd;
-    }
-    if (fileno == 1) {
-      stdout_.redirect_ = fd;
-    }
-    if (fileno == 2) {
-      stderr_.redirect_ = fd;
-    }
-  }
 #if defined(_WIN32)
   int wait_for_exit() {
     if (process_information_.hProcess == INVALID_NATIVE_HANDLE_VALUE) {
