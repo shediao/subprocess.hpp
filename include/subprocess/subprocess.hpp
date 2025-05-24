@@ -488,6 +488,30 @@ inline void read_write_per_thread(NativeHandle &in, std::vector<char> &in_buf,
   }
 }
 
+void create_pipe(NativeHandle (&fds)[2]) {
+#if defined(_WIN32)
+  SECURITY_ATTRIBUTES at;
+  at.bInheritHandle = true;
+  at.nLength = sizeof(SECURITY_ATTRIBUTES);
+  at.lpSecurityDescriptor = nullptr;
+
+  if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 0)) {
+    throw std::runtime_error{get_last_error_msg()};
+  }
+
+  if (!SetHandleInformation(this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
+                            HANDLE_FLAG_INHERIT, 0)) {
+    throw std::runtime_error("SetHandleInformation Failed: " +
+                             std::to_string(GetLastError()));
+  }
+
+#else
+  if (-1 == pipe(fds)) {
+    throw std::runtime_error{"pipe failed"};
+  }
+#endif
+}
+
 inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
                              NativeHandle &out, std::vector<char> &out_buf,
                              NativeHandle &err, std::vector<char> &err_buf) {
@@ -712,30 +736,7 @@ class Stdio {
 #endif
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
-#if defined(_WIN32)
-            SECURITY_ATTRIBUTES at;
-            at.bInheritHandle = true;
-            at.nLength = sizeof(SECURITY_ATTRIBUTES);
-            at.lpSecurityDescriptor = nullptr;
-
-            if (!CreatePipe(&(this->pipe_fds_[0]), &(this->pipe_fds_[1]), &at,
-                            0)) {
-              throw std::runtime_error{"pipe failed: " +
-                                       std::to_string(GetLastError())};
-            }
-
-            if (!SetHandleInformation(
-                    this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
-                    HANDLE_FLAG_INHERIT, 0)) {
-              throw std::runtime_error("SetHandleInformation Failed: " +
-                                       std::to_string(GetLastError()));
-            }
-
-#else
-            if (-1 == pipe(this->pipe_fds_)) {
-              throw std::runtime_error{"pipe failed"};
-            }
-#endif
+            create_pipe(this->pipe_fds_);
           } else {
           }
         },
