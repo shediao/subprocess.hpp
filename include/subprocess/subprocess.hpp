@@ -1,6 +1,7 @@
 #ifndef __SUBPROCESS_SUBPROCESS_HPP__
 #define __SUBPROCESS_SUBPROCESS_HPP__
 
+#include <utility>
 #if (defined(_MSVC_LANG) && _MSVC_LANG < 201703L) || \
     (!defined(_MSVC_LANG) && __cplusplus < 201703L)
 #error "This code requires C++17 or later."
@@ -162,8 +163,8 @@ class HandleGuard {
 
 namespace {
 
-#if defined(_WIN32)
 inline std::string get_last_error_msg() {
+#if defined(_WIN32)
   DWORD error = GetLastError();
   LPVOID errorMsg;
   std::stringstream out;
@@ -174,8 +175,17 @@ inline std::string get_last_error_msg() {
   out << "Error " << error << ": " << (char *)errorMsg;
   LocalFree(errorMsg);
   return out.str();
+#else   // _WIN32
+  int error = errno;
+  std::vector<char> buffer(512);
+  if (strerror_r(error, buffer.data(), buffer.size())) {
+    return std::string(buffer.data());
+  } else {
+    return "Unknow error or strerror_r failed, error code: " +
+           std::to_string(errno);
+  }
+#endif  // !_WIN32
 }
-#endif  // _WIN32
 
 inline void write_to_native_handle(NativeHandle &fd,
                                    std::vector<char> &write_data) {
@@ -221,7 +231,7 @@ inline void read_from_native_handle(NativeHandle &fd,
       out_buf.insert(out_buf.end(), buf, buf + read_count);
     }
     if (read_count == -1) {
-      throw std::runtime_error(std::string("read error: ") + strerror(errno));
+      throw std::runtime_error(get_last_error_msg());
     }
   } while (read_count > 0);
 #endif
@@ -273,7 +283,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
       if (read_count == -1) {
-        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+        throw std::runtime_error(get_last_error_msg());
       }
     }
     if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
@@ -286,7 +296,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
       if (read_count == -1) {
-        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+        throw std::runtime_error(get_last_error_msg());
       }
     }
     for (auto &pfd : fds) {
@@ -337,7 +347,7 @@ inline void read_from_native_handle(NativeHandle &fd,
       continue;
     }
     if (ready == -1) {
-      throw std::runtime_error(std::string("select error: ") + strerror(errno));
+      throw std::runtime_error(get_last_error_msg());
     }
     if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
       auto write_count = write(in, stdin_str.data(), stdin_str.size());
@@ -362,7 +372,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         out = INVALID_NATIVE_HANDLE_VALUE;
       }
       if (read_count == -1) {
-        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+        throw std::runtime_error(get_last_error_msg());
       }
     }
     if (err != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(err, &read_fds)) {
@@ -375,7 +385,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         err = INVALID_NATIVE_HANDLE_VALUE;
       }
       if (read_count == -1) {
-        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+        throw std::runtime_error(get_last_error_msg());
       }
     }
     if (in == INVALID_NATIVE_HANDLE_VALUE &&
@@ -1184,22 +1194,16 @@ class subprocess {
                    [](std::string &s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() && (-1 == chdir(cwd_.data()))) {
-      // strerror_r or equivalent for thread-safe errno string is better for
-      // libraries
-      throw std::runtime_error("chdir failed for path: " + cwd_ +
-                               " error: " + strerror(errno));
+      throw std::runtime_error(get_last_error_msg());
     }
 
     std::string exe_to_exec = cmd_[0];
-    // If exe_to_exec does not contain a path separator, search for it in PATH
     if (exe_to_exec.find('/') == std::string::npos) {
       std::filesystem::path resolved_path =
           find_executable_in_path(exe_to_exec);
       if (!resolved_path.empty()) {
         exe_to_exec = resolved_path.string();
       }
-      // If not found in PATH, execv/execve will search CWD or fail, which is
-      // standard.
     }
 
     if (!env_.empty()) {
@@ -1221,7 +1225,7 @@ class subprocess {
     // Consider throwing an exception or having a configurable error handler.
     // For now, keeping original behavior.
     std::cerr << "exec failed for: " << exe_to_exec
-              << ", error: " << strerror(errno) << '\n';
+              << ", error: " << get_last_error_msg() << '\n';
     _Exit(127);  // _Exit is correct here to not call atexit handlers etc.
   }
 #endif  // !_WIN32
