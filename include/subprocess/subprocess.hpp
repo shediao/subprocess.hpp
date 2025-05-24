@@ -964,7 +964,8 @@ namespace named_arguments {
 }  // namespace named_arguments
 
 using namespace named_arguments;
-#if __cplusplus >= 202002L
+#if (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || \
+    (!defined(_MSVC_LANG) && __cplusplus >= 202002L)
 template <typename T>
 concept is_run_args_type = std::is_same_v<Env, std::decay_t<T>> ||
                            std::is_same_v<Stdin, std::decay_t<T>> ||
@@ -977,7 +978,8 @@ concept is_run_args_type = std::is_same_v<Env, std::decay_t<T>> ||
 class subprocess {
  public:
   template <typename... T>
-#if __cplusplus >= 202002L
+#if (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || \
+    (!defined(_MSVC_LANG) && __cplusplus >= 202002L)
     requires(is_run_args_type<T> && ...)
 #endif
   subprocess(std::vector<std::string> cmd, T &&...args) : cmd_(std::move(cmd)) {
