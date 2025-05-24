@@ -92,22 +92,7 @@ const static inline NativeHandle INVALID_NATIVE_HANDLE_VALUE =
 using NativeHandle = int;
 constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
-namespace {
 
-#if defined(_WIN32)
-inline std::string get_last_error_msg() {
-  DWORD error = GetLastError();
-  LPVOID errorMsg;
-  std::stringstream out;
-  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-                NULL, error,
-                0,  // Default language
-                (LPTSTR)&errorMsg, 0, NULL);
-  out << "Error " << error << ": " << (char *)errorMsg;
-  LocalFree(errorMsg);
-  return out.str();
-}
-#endif  // _WIN32
 class HandleGuard {
  public:
   HandleGuard(NativeHandle h =
@@ -174,6 +159,23 @@ class HandleGuard {
  private:
   NativeHandle handle_;
 };
+
+namespace {
+
+#if defined(_WIN32)
+inline std::string get_last_error_msg() {
+  DWORD error = GetLastError();
+  LPVOID errorMsg;
+  std::stringstream out;
+  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+                NULL, error,
+                0,  // Default language
+                (LPTSTR)&errorMsg, 0, NULL);
+  out << "Error " << error << ": " << (char *)errorMsg;
+  LocalFree(errorMsg);
+  return out.str();
+}
+#endif  // _WIN32
 
 inline void write_to_native_handle(NativeHandle &fd,
                                    std::vector<char> &write_data) {
