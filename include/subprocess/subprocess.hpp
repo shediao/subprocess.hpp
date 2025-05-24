@@ -656,12 +656,45 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
   return envMap;
 }
 }  // namespace
+struct Pipe {
+  Pipe() { create_pipe(fds_); }
+  void close_read() {
+    if (fds_[0] == INVALID_NATIVE_HANDLE_VALUE) {
+      return;
+    }
+#if defined(_WIN32)
+    CloseHandle(fds_[0]);
+#else
+    close(fds_[0]);
+#endif
+    fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
+  }
+  void close_write() {
+    if (fds_[1] == INVALID_NATIVE_HANDLE_VALUE) {
+      return;
+    }
+#if defined(_WIN32)
+    CloseHandle(fds_[1]);
+#else
+    close(fds_[1]);
+#endif
+    fds_[1] = INVALID_NATIVE_HANDLE_VALUE;
+  }
+  void close_all() {
+    close_read();
+    close_write();
+  }
+  NativeHandle &read_fd() { return fds_[0]; }
+  NativeHandle &write_fd() { return fds_[1]; }
+  NativeHandle fds_[2];
+};
 class Stdio {
   friend class subprocess;
 
  public:
   Stdio() : redirect_(std::nullopt) {}
   Stdio(NativeHandle fd) : redirect_(fd) {}
+  Stdio(Pipe p) : redirect_(p) {}
   Stdio(std::string const &file) : redirect_(file) {}
   Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
   Stdio(Stdio &&) = default;
@@ -690,6 +723,7 @@ class Stdio {
               throw std::runtime_error{"Provided native handle is invalid."};
             }
 #endif
+          } else if constexpr (std::is_same_v<T, Pipe>) {
           } else if constexpr (std::is_same_v<T, HandleGuard>) {
           } else if constexpr (std::is_same_v<T, std::string>) {
 #if defined(_WIN32)
@@ -750,6 +784,20 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, NativeHandle>) {
+          } else if constexpr (std::is_same_v<T, Pipe>) {
+            if (fileno() == 0) {
+#if defined(_WIN32)
+              CloseHandle(value.fds_[0]);
+#else
+              close(value.fds_[0]);
+#endif
+            } else {
+#if defined(_WIN32)
+              CloseHandle(value.fds_[1]);
+#else
+              close(value.fds_[1]);
+#endif
+            }
           } else if constexpr (std::is_same_v<T, HandleGuard>) {
             if (value.IsValid()) {
               value.Close();
@@ -776,6 +824,8 @@ class Stdio {
             [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
           if constexpr (std::is_same_v<T, NativeHandle>) {
             return value;
+          } else if constexpr (std::is_same_v<T, Pipe>) {
+            return value.fds_[this->fileno() == 0 ? 0 : 1];
           } else if constexpr (std::is_same_v<T, HandleGuard>) {
             return value.get();
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
@@ -814,16 +864,28 @@ class Stdio {
           if constexpr (std::is_same_v<T, NativeHandle>) {
             if (value >= 0 && value != this->fileno()) {
               dup2(value, this->fileno());
+              close(value);
+              value = INVALID_NATIVE_HANDLE_VALUE;
             }
+          } else if constexpr (std::is_same_v<T, Pipe>) {
+            dup2(value.fds_[this->fileno() == 0 ? 0 : 1], this->fileno());
+            close(value.fds_[0]);
+            close(value.fds_[1]);
+            value.fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
+            value.fds_[1] = INVALID_NATIVE_HANDLE_VALUE;
           } else if constexpr (std::is_same_v<T, HandleGuard>) {
             if (value.IsValid() && value.get() != this->fileno()) {
               dup2(value.get(), this->fileno());
+              value.Close();
             }
           } else if constexpr (std::is_same_v<T, std::string>) {
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
                                                      std::vector<char>>>) {
             dup2(pipe_fds_[this->fileno() == 0 ? 0 : 1], this->fileno());
-            close(pipe_fds_[this->fileno() == 0 ? 1 : 0]);
+            close(pipe_fds_[0]);
+            close(pipe_fds_[1]);
+            pipe_fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
+            pipe_fds_[1] = INVALID_NATIVE_HANDLE_VALUE;
           }
         },
         redirect_.value());
@@ -850,7 +912,7 @@ class Stdio {
 
  protected:
   std::optional<
-      std::variant<NativeHandle, HandleGuard,
+      std::variant<NativeHandle, Pipe, HandleGuard,
                    std::reference_wrapper<std::vector<char>>, std::string>>
       redirect_{std::nullopt};
   NativeHandle pipe_fds_[2]{
@@ -903,6 +965,7 @@ class Stderr : public Stdio {
 
 struct stdin_redirector {
   Stdin operator<(NativeHandle fd) const { return Stdin{fd}; }
+  Stdin operator<(Pipe p) const { return Stdin{p}; }
   Stdin operator<(std::string const &file) const { return Stdin{file}; }
   Stdin operator<(std::vector<char> &buf) const { return Stdin{buf}; }
 };
@@ -921,6 +984,7 @@ struct stdout_redirector {
   }
 #endif  // _WIN32
   Stdout operator>(NativeHandle fd) const { return Stdout{fd}; }
+  Stdout operator>(Pipe p) const { return Stdout{p}; }
   Stdout operator>(std::string const &file) const { return Stdout{file}; }
   Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
 
@@ -1020,7 +1084,8 @@ class subprocess {
     (!defined(_MSVC_LANG) && __cplusplus >= 202002L)
     requires(is_run_args_type<T> && ...)
 #endif
-  subprocess(std::vector<std::string> cmd, T &&...args) : cmd_(std::move(cmd)) {
+  explicit subprocess(std::vector<std::string> cmd, T &&...args)
+      : cmd_(std::move(cmd)) {
     std::map<std::string, std::string> environments;
     std::vector<std::pair<std::string, std::string>> env_appends;
     (void)(..., ([&]<typename Arg>(Arg &&arg) {
@@ -1052,31 +1117,31 @@ class subprocess {
                            "Invalid argument type passed to run function.");
            }(std::forward<T>(args))));
     env_ = environments;
+#if defined(_WIN32)
+    ZeroMemory(&process_information_, sizeof(process_information_));
+    ZeroMemory(&startupinfo_, sizeof(startupinfo_));
+    startupinfo_.cb = sizeof(startupinfo_);
+#endif
   }
   subprocess(subprocess &&) = default;
   subprocess &operator=(subprocess &&) = default;
   subprocess(const subprocess &) = delete;
   subprocess &operator=(const subprocess &) = delete;
 
-  int run() {
+  void run_no_wait() {
     prepare_all_stdio_redirections();
 #if defined(_WIN32)
-    PROCESS_INFORMATION pInfo;
-    STARTUPINFOA sInfo;
-    ZeroMemory(&pInfo, sizeof(pInfo));
-    ZeroMemory(&sInfo, sizeof(sInfo));
-    sInfo.cb = sizeof(sInfo);
     auto in = stdin_.get_child_process_stdio_handle();
-    sInfo.hStdInput =
+    startupinfo_.hStdInput =
         in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
     auto out = stdout_.get_child_process_stdio_handle();
-    sInfo.hStdOutput =
+    startupinfo_.hStdOutput =
         out.has_value() ? out.value() : GetStdHandle(STD_OUTPUT_HANDLE);
     auto err = stderr_.get_child_process_stdio_handle();
-    sInfo.hStdError =
+    startupinfo_.hStdError =
         err.has_value() ? err.value() : GetStdHandle(STD_ERROR_HANDLE);
 
-    sInfo.dwFlags |= STARTF_USESTDHANDLES;
+    startupinfo_.dwFlags |= STARTF_USESTDHANDLES;
 
     auto command = create_command_string_data(cmd_);
 
@@ -1085,28 +1150,69 @@ class subprocess {
     auto success =
         CreateProcessA(nullptr, command.data(), NULL, NULL, TRUE, 0,
                        env_block.empty() ? nullptr : env_block.data(),
-                       cwd_.empty() ? nullptr : cwd_.data(), &sInfo, &pInfo);
+                       cwd_.empty() ? nullptr : cwd_.data(), &startupinfo_,
+                       &process_information_);
 
     if (!success) {
       std::cerr << get_last_error_msg() << '\n';
-      return 127;
+      process_information_.hProcess = INVALID_NATIVE_HANDLE_VALUE;
     }
-
-    HandleGuard process_guard(pInfo.hProcess);
-    HandleGuard thread_guard(pInfo.hThread);
-    return manage_pipe_io_and_wait_for_exit(pInfo.hProcess);
+    manage_pipe_io();
 #else
     auto pid = fork();
     if (pid < 0) {
       throw std::runtime_error("fork failed");
     } else if (pid == 0) {
       execute_command_in_child();
-      return 127;
     } else {
-      return manage_pipe_io_and_wait_for_exit(pid);
+      pid_ = pid;
+      manage_pipe_io();
     }
 #endif
   }
+
+  int run() {
+    run_no_wait();
+    return wait_for_exit();
+  }
+
+  void reset_pipe_handle(NativeHandle const fd, int const fileno) {
+    if (fileno == 0) {
+      stdin_.redirect_ = fd;
+    }
+    if (fileno == 1) {
+      stdout_.redirect_ = fd;
+    }
+    if (fileno == 2) {
+      stderr_.redirect_ = fd;
+    }
+  }
+#if defined(_WIN32)
+  int wait_for_exit() {
+    if (process_information_.hProcess == INVALID_NATIVE_HANDLE_VALUE) {
+      return 127;
+    }
+    DWORD ret{127};
+    HandleGuard process_guard(process_information_.hProcess);
+    HandleGuard thread_guard(process_information_.hThread);
+
+    WaitForSingleObject(process_information_.hProcess, INFINITE);
+    GetExitCodeProcess(process_information_.hProcess, &ret);
+    return static_cast<int>(ret);
+  }
+#else
+  int wait_for_exit() {
+    int status;
+    waitpid(pid_, &status, 0);
+    auto return_code = -1;
+    if (WIFEXITED(status)) {
+      return_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+      return_code = 128 + (WTERMSIG(status));
+    }
+    return return_code;
+  }
+#endif
 
  private:
   void prepare_all_stdio_redirections() {
@@ -1114,7 +1220,7 @@ class subprocess {
     stdout_.prepare_redirection();
     stderr_.prepare_redirection();
   }
-  int manage_pipe_io_and_wait_for_exit(NativeHandle pid) {
+  void manage_pipe_io() {
     stdin_.close_unused_pipe_ends_in_parent();
     stdout_.close_unused_pipe_ends_in_parent();
     stderr_.close_unused_pipe_ends_in_parent();
@@ -1142,11 +1248,6 @@ class subprocess {
                               stderr_.redirect_.value())
                               .get()
                         : tmp_buf);
-
-    WaitForSingleObject(pid, INFINITE);
-    DWORD ret;
-    GetExitCodeProcess(pid, &ret);
-    return static_cast<int>(ret);
 #else
     auto in = stdin_.get_parent_pipe_fd_for_polling();
     auto out = stdout_.get_parent_pipe_fd_for_polling();
@@ -1170,16 +1271,6 @@ class subprocess {
                               stderr_.redirect_.value())
                               .get()
                         : tmp_buf);
-
-    int status;
-    waitpid(pid, &status, 0);
-    auto return_code = -1;
-    if (WIFEXITED(status)) {
-      return_code = WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-      return_code = 128 + (WTERMSIG(status));
-    }
-    return return_code;
 #endif
   }
 #if !defined(_WIN32)
@@ -1233,6 +1324,12 @@ class subprocess {
   Stdin stdin_;
   Stdout stdout_;
   Stderr stderr_;
+#if defined(_WIN32)
+  PROCESS_INFORMATION process_information_;
+  STARTUPINFOA startupinfo_;
+#else
+  NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
+#endif
 };
 
 template <typename... T>
