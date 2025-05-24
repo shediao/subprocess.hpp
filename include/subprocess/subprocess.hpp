@@ -12,6 +12,7 @@
 #else
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -25,6 +26,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -84,12 +86,16 @@ constexpr bool is_posix =
 
 #if defined(_WIN32)
 using NativeHandle = HANDLE;
+const static inline NativeHandle INVALID_NATIVE_HANDLE_VALUE =
+    INVALID_HANDLE_VALUE;
 #else   // _WIN32
 using NativeHandle = int;
+constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 namespace {
+
 #if defined(_WIN32)
-std::string get_last_error_msg() {
+inline std::string get_last_error_msg() {
   DWORD error = GetLastError();
   LPVOID errorMsg;
   std::stringstream out;
@@ -102,6 +108,333 @@ std::string get_last_error_msg() {
   return out.str();
 }
 #endif  // _WIN32
+class HandleGuard {
+ public:
+  HandleGuard(NativeHandle h =
+#if defined(_WIN32)
+                  INVALID_HANDLE_VALUE
+#else
+                  -1
+#endif
+              )
+      : handle_(h) {
+  }
+  ~HandleGuard() { Close(); }
+  HandleGuard(const HandleGuard &) = delete;
+  HandleGuard &operator=(const HandleGuard &) = delete;
+  HandleGuard(HandleGuard &&other) noexcept : handle_(other.handle_) {
+    other.handle_ =
+#if defined(_WIN32)
+        INVALID_HANDLE_VALUE
+#else
+        -1
+#endif
+        ;
+  }
+  HandleGuard &operator=(HandleGuard &&other) noexcept {
+    if (this != &other) {
+      Close();
+      handle_ = other.handle_;
+      other.handle_ =
+#if defined(_WIN32)
+          INVALID_HANDLE_VALUE
+#else
+          -1
+#endif
+          ;
+    }
+    return *this;
+  }
+
+  NativeHandle get() const { return handle_; }
+  NativeHandle *p_get() { return &handle_; }  // For functions that take HANDLE*
+
+  void Close() {
+#if defined(_WIN32)
+    if (handle_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(handle_);
+      handle_ = INVALID_HANDLE_VALUE;
+    }
+#else
+    if (handle_ != -1) {
+      close(handle_);
+      handle_ = -1;
+    }
+#endif
+  }
+
+  bool IsValid() const {
+#if defined(_WIN32)
+    return handle_ != INVALID_HANDLE_VALUE;
+#else
+    return handle_ != -1;
+#endif
+  }
+
+ private:
+  NativeHandle handle_;
+};
+
+inline void write_to_native_handle(NativeHandle &fd,
+                                   std::vector<char> &write_data) {
+  HandleGuard auto_closed(fd);
+  std::string_view write_view{write_data.begin(), write_data.end()};
+  while (!write_view.empty()) {
+#if defined(_WIN32)
+    DWORD write_count{0};
+    if (!WriteFile(fd, write_view.data(), static_cast<DWORD>(write_view.size()),
+                   &write_count, 0)) {
+      throw std::runtime_error("WriteFile error: " + get_last_error_msg());
+    }
+    if (write_count > 0) {
+      write_view.remove_prefix(static_cast<size_t>(write_count));
+    }
+#else
+    auto write_count = write(fd, write_view.data(), write_view.size());
+    if (write_count > 0) {
+      write_view.remove_prefix(static_cast<size_t>(write_count));
+    }
+    if (write_count == -1) {
+      throw std::runtime_error("write error: " + std::to_string(errno));
+    }
+#endif
+  }
+  fd = INVALID_NATIVE_HANDLE_VALUE;
+}
+
+inline void read_from_native_handle(NativeHandle &fd,
+                                    std::vector<char> &out_buf) {
+  HandleGuard auto_closed(fd);
+  char buf[1024];
+#if defined(_WIN32)
+  DWORD read_count{0};
+  while (ReadFile(fd, buf, sizeof(buf), &read_count, 0) && read_count > 0) {
+    out_buf.insert(out_buf.end(), buf, buf + read_count);
+  }
+#else
+  auto read_count = 0;
+  do {
+    read_count = read(fd, buf, std::size(buf));
+    if (read_count > 0) {
+      out_buf.insert(out_buf.end(), buf, buf + read_count);
+    }
+    if (read_count == -1) {
+      throw std::runtime_error(std::string("read error: ") + strerror(errno));
+    }
+  } while (read_count > 0);
+#endif
+  fd = INVALID_NATIVE_HANDLE_VALUE;
+}
+
+#if !defined(_WIN32)
+[[maybe_unused]] inline void multiplexing_use_poll(
+    NativeHandle &in, std::vector<char> &in_buf, NativeHandle &out,
+    std::vector<char> &out_buf, NativeHandle &err, std::vector<char> &err_buf) {
+  struct pollfd fds[3]{{.fd = in, .events = POLLOUT, .revents = 0},
+                       {.fd = out, .events = POLLIN, .revents = 0},
+                       {.fd = err, .events = POLLIN, .revents = 0}};
+
+  std::string_view stdin_str{in_buf.begin(), in_buf.end()};
+
+  char buf[1024];
+  while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
+         fds[1].fd != INVALID_NATIVE_HANDLE_VALUE ||
+         fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
+    int poll_count = poll(fds, 3, -1);
+    if (poll_count == -1) {
+      throw std::runtime_error("poll failed!");
+    }
+    if (poll_count == 0) {
+      break;
+    }
+    if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
+        (fds[0].revents & POLLOUT)) {
+      auto write_count = write(fds[0].fd, stdin_str.data(), stdin_str.size());
+      if (write_count > 0) {
+        stdin_str.remove_prefix(static_cast<size_t>(write_count));
+      }
+      if (write_count == -1) {
+        throw std::runtime_error("write error: " + std::to_string(errno));
+      }
+      if (stdin_str.empty()) {
+        close(fds[0].fd);
+        fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+    }
+    if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
+      auto read_count = read(fds[1].fd, buf, std::size(buf));
+      if (read_count > 0) {
+        out_buf.insert(out_buf.end(), buf, buf + read_count);
+      }
+      if (read_count == 0) {
+        close(fds[1].fd);
+        fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+      }
+    }
+    if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
+      auto read_count = read(fds[2].fd, buf, std::size(buf));
+      if (read_count > 0) {
+        err_buf.insert(err_buf.end(), buf, buf + read_count);
+      }
+      if (read_count == 0) {
+        close(fds[2].fd);
+        fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+      }
+    }
+    for (auto &pfd : fds) {
+      if (pfd.fd != INVALID_NATIVE_HANDLE_VALUE &&
+          (pfd.revents & (POLLNVAL | POLLHUP | POLLERR))) {
+        close(pfd.fd);
+        pfd.fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+    }
+    if (fds[0].fd == INVALID_NATIVE_HANDLE_VALUE &&
+        fds[1].fd == INVALID_NATIVE_HANDLE_VALUE &&
+        fds[2].fd == INVALID_NATIVE_HANDLE_VALUE) {
+      break;
+    }
+  }
+  in = INVALID_NATIVE_HANDLE_VALUE;
+  out = INVALID_NATIVE_HANDLE_VALUE;
+  err = INVALID_NATIVE_HANDLE_VALUE;
+}
+[[maybe_unused]] inline void multiplexing_use_select(
+    NativeHandle &in, std::vector<char> &in_buf, NativeHandle &out,
+    std::vector<char> &out_buf, NativeHandle &err, std::vector<char> &err_buf) {
+  std::string_view stdin_str{in_buf.begin(), in_buf.end()};
+  char buf[1024];
+
+  fd_set read_fds;
+  fd_set write_fds;
+  int max_fd = std::max(std::max(in, out), err);
+
+  struct timeval timeout;
+  timeout.tv_sec = 10;
+  timeout.tv_usec = 0;
+  while (true) {
+    FD_ZERO(&write_fds);
+    if (in != INVALID_NATIVE_HANDLE_VALUE) {
+      FD_SET(in, &write_fds);
+    }
+    if (out != INVALID_NATIVE_HANDLE_VALUE) {
+      FD_SET(in, &read_fds);
+    }
+    if (err != INVALID_NATIVE_HANDLE_VALUE) {
+      FD_SET(err, &read_fds);
+    }
+    max_fd = std::max(std::max(in, out), err);
+    auto const ready =
+        select(max_fd + 1, &read_fds, &write_fds, nullptr, &timeout);
+    if (ready == 0) {
+      continue;
+    }
+    if (ready == -1) {
+      throw std::runtime_error(std::string("select error: ") + strerror(errno));
+    }
+    if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
+      auto write_count = write(in, stdin_str.data(), stdin_str.size());
+      if (write_count > 0) {
+        stdin_str.remove_prefix(static_cast<size_t>(write_count));
+      }
+      if (write_count == -1) {
+        throw std::runtime_error("write error: " + std::to_string(errno));
+      }
+      if (stdin_str.empty()) {
+        close(in);
+        in = INVALID_NATIVE_HANDLE_VALUE;
+      }
+    }
+    if (out != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(out, &read_fds)) {
+      auto read_count = read(out, buf, std::size(buf));
+      if (read_count > 0) {
+        out_buf.insert(out_buf.end(), buf, buf + read_count);
+      }
+      if (read_count == 0) {
+        close(out);
+        out = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+      }
+    }
+    if (err != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(err, &read_fds)) {
+      auto read_count = read(err, buf, std::size(buf));
+      if (read_count > 0) {
+        err_buf.insert(err_buf.end(), buf, buf + read_count);
+      }
+      if (read_count == 0) {
+        close(err);
+        err = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        throw std::runtime_error(std::string("read error: ") + strerror(errno));
+      }
+    }
+    if (in == INVALID_NATIVE_HANDLE_VALUE &&
+        out == INVALID_NATIVE_HANDLE_VALUE &&
+        err == INVALID_NATIVE_HANDLE_VALUE) {
+      break;
+    }
+  }
+}
+#endif
+#if defined(__linux__)
+[[maybe_unused]] inline void multiplexing_use_epoll(
+    NativeHandle &, std::vector<char> &, NativeHandle &, std::vector<char> &,
+    NativeHandle &, std::vector<char> &) {
+  // TODO
+}
+#endif
+
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
+    defined(__OpenBSD__)
+[[maybe_unused]] inline void multiplexing_use_kqueue(
+    NativeHandle &, std::vector<char> &, NativeHandle &, std::vector<char> &,
+    NativeHandle &, std::vector<char> &) {
+  // TODO
+}
+#endif
+
+[[maybe_unused]]
+inline void read_write_per_thread(NativeHandle &in, std::vector<char> &in_buf,
+                                  NativeHandle &out, std::vector<char> &out_buf,
+                                  NativeHandle &err,
+                                  std::vector<char> &err_buf) {
+  std::vector<std::thread> threads;
+
+  if (in != INVALID_NATIVE_HANDLE_VALUE) {
+    threads.emplace_back(write_to_native_handle, std::ref(in),
+                         std::ref(in_buf));
+  }
+  if (out != INVALID_NATIVE_HANDLE_VALUE) {
+    threads.emplace_back(read_from_native_handle, std::ref(out),
+                         std::ref(out_buf));
+  }
+  if (err != INVALID_NATIVE_HANDLE_VALUE) {
+    threads.emplace_back(read_from_native_handle, std::ref(err),
+                         std::ref(err_buf));
+  }
+
+  for (auto &thread : threads) {
+    thread.join();
+  }
+}
+
+inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
+                             NativeHandle &out, std::vector<char> &out_buf,
+                             NativeHandle &err, std::vector<char> &err_buf) {
+#if defined(_WIN32)
+  return read_write_per_thread(in, in_buf, out, out_buf, err, err_buf);
+#else
+  return multiplexing_use_poll(in, in_buf, out, out_buf, err, err_buf);
+#endif
+}
 
 inline std::filesystem::path find_executable_in_path(
     std::string const &exe_file) {
@@ -255,73 +588,6 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
   return envMap;
 }
 }  // namespace
-class HandleGuard {
- public:
-  HandleGuard(NativeHandle h =
-#if defined(_WIN32)
-                  INVALID_HANDLE_VALUE
-#else
-                  -1
-#endif
-              )
-      : handle_(h) {
-  }
-  ~HandleGuard() { Close(); }
-  HandleGuard(const HandleGuard &) = delete;
-  HandleGuard &operator=(const HandleGuard &) = delete;
-  HandleGuard(HandleGuard &&other) noexcept : handle_(other.handle_) {
-    other.handle_ =
-#if defined(_WIN32)
-        INVALID_HANDLE_VALUE
-#else
-        -1
-#endif
-        ;
-  }
-  HandleGuard &operator=(HandleGuard &&other) noexcept {
-    if (this != &other) {
-      Close();
-      handle_ = other.handle_;
-      other.handle_ =
-#if defined(_WIN32)
-          INVALID_HANDLE_VALUE
-#else
-          -1
-#endif
-          ;
-    }
-    return *this;
-  }
-
-  NativeHandle get() const { return handle_; }
-  NativeHandle *p_get() { return &handle_; }  // For functions that take HANDLE*
-
-  void Close() {
-#if defined(_WIN32)
-    if (handle_ != INVALID_HANDLE_VALUE) {
-      CloseHandle(handle_);
-      handle_ = INVALID_HANDLE_VALUE;
-    }
-#else
-    if (handle_ != -1) {
-      close(handle_);
-      handle_ = -1;
-    }
-#endif
-  }
-
-  bool IsValid() const {
-#if defined(_WIN32)
-    return handle_ != INVALID_HANDLE_VALUE;
-#else
-    return handle_ != -1;
-#endif
-  }
-
- private:
-  NativeHandle handle_;
-};
-
 class Stdio {
   friend class subprocess;
 
@@ -847,150 +1113,52 @@ class subprocess {
     auto out = stdout_.get_parent_communication_pipe_handle();
     auto err = stderr_.get_parent_communication_pipe_handle();
 
-    std::string_view stdin_str{};
-    if (in.has_value()) {
-      auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                      stdin_.redirect_.value())
-                      .get();
-      stdin_str = std::string_view{tmp.data(), tmp.size()};
-      DWORD written{0};
-      do {
-        DWORD len{0};
-        if (!WriteFile(in.value(), stdin_str.data(),
-                       static_cast<DWORD>(stdin_str.size()), &len, 0)) {
-          break;
-        }
-        written += len;
-      } while (written < stdin_str.size());
-      CloseHandle(in.value());
-    }
+    NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
+    std::vector<char> tmp_buf;
+    read_write_pipes(
+        in.has_value() ? in.value() : tmp_handle,
+        in.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
+                             stdin_.redirect_.value())
+                             .get()
+                       : tmp_buf,
+        out.has_value() ? out.value() : tmp_handle,
+        out.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
+                              stdout_.redirect_.value())
+                              .get()
+                        : tmp_buf,
+        err.has_value() ? err.value() : tmp_handle,
+        err.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
+                              stderr_.redirect_.value())
+                              .get()
+                        : tmp_buf);
 
-    auto readData = [](NativeHandle fd, std::vector<char> &value) {
-      char buf[1024];
-      DWORD readed{0};
-      while (ReadFile(fd, buf, sizeof(buf), &readed, 0) && readed > 0) {
-        value.insert(value.end(), buf, buf + readed);
-      }
-    };
-
-    if (out.has_value()) {
-      readData(out.value(), std::get<std::reference_wrapper<std::vector<char>>>(
-                                stdout_.redirect_.value())
-                                .get());
-      CloseHandle(out.value());
-    }
-    if (err.has_value()) {
-      readData(err.value(), std::get<std::reference_wrapper<std::vector<char>>>(
-                                stderr_.redirect_.value())
-                                .get());
-      CloseHandle(err.value());
-    }
     WaitForSingleObject(pid, INFINITE);
     DWORD ret;
     GetExitCodeProcess(pid, &ret);
     return static_cast<int>(ret);
 #else
-    struct pollfd fds[3]{{.fd = -1, .events = POLLOUT, .revents = 0},
-                         {.fd = -1, .events = POLLIN, .revents = 0},
-                         {.fd = -1, .events = POLLIN, .revents = 0}};
+    auto in = stdin_.get_parent_pipe_fd_for_polling();
+    auto out = stdout_.get_parent_pipe_fd_for_polling();
+    auto err = stderr_.get_parent_pipe_fd_for_polling();
 
-    for (auto *stdio :
-         {(Stdio *)&stdin_, (Stdio *)&stdout_, (Stdio *)&stderr_}) {
-      if (auto fd = stdio->get_parent_pipe_fd_for_polling(); fd.has_value()) {
-        fds[stdio->fileno()].fd = fd.value();
-      }
-    }
-    std::string_view stdin_str{};
-    if (stdin_.get_parent_pipe_fd_for_polling().has_value()) {
-      auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                      stdin_.redirect_.value())
-                      .get();
-      stdin_str = std::string_view{tmp.data(), tmp.size()};
-    }
-
-    while (fds[0].fd != -1 || fds[1].fd != -1 || fds[2].fd != -1) {
-      int ret = poll(fds, 3, -1);
-      if (ret == -1) {
-        throw std::runtime_error("poll failed!");
-      }
-      if (ret == 0) {
-        break;
-      }
-      if (fds[0].fd != -1 && (fds[0].revents & POLLOUT)) {
-        if (stdin_str.empty()) {
-          close(fds[0].fd);
-          fds[0].fd = -1;
-        } else {
-          auto len = write(fds[0].fd, stdin_str.data(), stdin_str.size());
-          if (len > 0) {
-            stdin_str.remove_prefix(static_cast<size_t>(len));
-          }
-          if (len < 0) {
-            close(fds[0].fd);
-            fds[0].fd = -1;
-          }
-        }
-      }
-      if (fds[1].fd != -1 && (fds[1].revents & POLLIN)) {
-        char buf[1024];
-        auto len = read(fds[1].fd, buf, 1024);
-        if (len > 0) {
-          auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                          stdout_.redirect_.value())
-                          .get();
-          tmp.insert(tmp.end(), buf, buf + len);
-        }
-        if (len == 0) {
-          close(fds[1].fd);
-          fds[1].fd = -1;
-        }
-        if (len < 0) {
-          std::string err{"read failed: "};
-          err += strerror(errno);
-          throw std::runtime_error(err);
-        }
-      }
-      if (fds[2].fd != -1 && (fds[2].revents & POLLIN)) {
-        char buf[1024];
-        auto len = read(fds[2].fd, buf, 1024);
-        if (len > 0) {
-          auto &tmp = std::get<std::reference_wrapper<std::vector<char>>>(
-                          stderr_.redirect_.value())
-                          .get();
-          tmp.insert(tmp.end(), buf, buf + len);
-        }
-        if (len == 0) {
-          close(fds[2].fd);
-          fds[2].fd = -1;
-        }
-        if (len < 0) {
-          std::string err{"read failed: "};
-          err += strerror(errno);
-          throw std::runtime_error(err);
-        }
-      }
-      if (fds[0].fd != -1 &&
-          (fds[0].revents & POLLNVAL || fds[0].revents & POLLHUP ||
-           fds[0].revents & POLLERR)) {
-        close(fds[0].fd);
-        fds[0].fd = -1;
-      }
-      if (fds[1].fd != -1 &&
-          (fds[1].revents & POLLNVAL || fds[1].revents & POLLHUP ||
-           fds[1].revents & POLLERR)) {
-        close(fds[1].fd);
-        fds[1].fd = -1;
-      }
-      if (fds[2].fd != -1 &&
-          (fds[2].revents & POLLNVAL || fds[2].revents & POLLHUP ||
-           fds[2].revents & POLLERR)) {
-        close(fds[2].fd);
-        fds[2].fd = -1;
-      }
-      if (fds[0].fd == -1 && fds[1].fd == -1 && fds[2].fd == -1) {
-        break;
-      }
-    }
+    NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
+    std::vector<char> tmp_buf;
+    read_write_pipes(
+        in.has_value() ? in.value() : tmp_handle,
+        in.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
+                             stdin_.redirect_.value())
+                             .get()
+                       : tmp_buf,
+        out.has_value() ? out.value() : tmp_handle,
+        out.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
+                              stdout_.redirect_.value())
+                              .get()
+                        : tmp_buf,
+        err.has_value() ? err.value() : tmp_handle,
+        err.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
+                              stderr_.redirect_.value())
+                              .get()
+                        : tmp_buf);
 
     int status;
     waitpid(pid, &status, 0);
