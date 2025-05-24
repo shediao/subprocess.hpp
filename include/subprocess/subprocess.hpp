@@ -31,7 +31,6 @@
 #include <variant>
 #include <vector>
 
-// POSIX (Linux, macOS, etc.) implementation
 #if !defined(_WIN32)
 extern char **environ;
 #endif  // !_WIN32
@@ -133,7 +132,7 @@ class HandleGuard {
   }
 
   NativeHandle get() const { return handle_; }
-  NativeHandle *p_get() { return &handle_; }  // For functions that take HANDLE*
+  NativeHandle *p_get() { return &handle_; }
 
   void Close() {
 #if defined(_WIN32)
@@ -222,9 +221,7 @@ inline std::string get_last_error_msg() {
   LPVOID errorMsg;
   std::stringstream out;
   FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-                NULL, error,
-                0,  // Default language
-                (LPTSTR)&errorMsg, 0, NULL);
+                NULL, error, 0, (LPTSTR)&errorMsg, 0, NULL);
   out << "Error " << error << ": " << (char *)errorMsg;
   LocalFree(errorMsg);
   return out.str();
@@ -540,8 +537,6 @@ inline std::filesystem::path find_executable_in_path(
 #endif
     for (auto &p : paths) {
 #ifdef _WIN32
-      // Windows: Prefer PATHEXT, then the name itself if it's a file.
-      // If exe_file already has an extension, check it directly.
       std::filesystem::path current_exe_path =
           std::filesystem::path(p) / exe_file;
       if (std::filesystem::path(exe_file).has_extension()) {
@@ -550,14 +545,9 @@ inline std::filesystem::path find_executable_in_path(
           return current_exe_path;
         }
       } else {
-        // No extension in exe_file, try with PATHEXT first
         for (auto &ext : path_exts) {
-          // Ensure ext starts with a dot or handle cases where it might not.
-          // PATHEXT entries are usually like ".EXE", ".COM".
           std::string exe_with_ext = exe_file;
           if (!ext.empty() && ext[0] != '.') {
-            // This case should ideally not happen if PATHEXT is parsed
-            // correctly. but as a safeguard if ext is "EXE" instead of ".EXE"
             exe_with_ext += ".";
           }
           exe_with_ext += ext;
@@ -566,16 +556,13 @@ inline std::filesystem::path find_executable_in_path(
             return f;
           }
         }
-        // If not found with any PATHEXT, check the original name (e.g.,
-        // "myprog" itself might be executable)
         if (exists(current_exe_path) &&
             std::filesystem::is_regular_file(current_exe_path)) {
           return current_exe_path;
         }
       }
-#else  // POSIX
+#else
       auto f = std::filesystem::path(p) / exe_file;
-      // On POSIX, check for executable permission and if it's a regular file.
       if (std::filesystem::is_regular_file(f) && 0 == access(f.c_str(), X_OK)) {
         return f;
       }
@@ -589,7 +576,6 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
   std::map<std::string, std::string> envMap;
 
 #ifdef _WIN32
-  // Windows implementation
 #if defined(UNICODE)
 #if defined(GetEnvironmentStrings)
 #define GetEnvironmentStrings_IS_A_MACRO 1
@@ -612,7 +598,7 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
 #endif
   if (envBlock == nullptr) {
     std::cerr << "Error getting environment strings." << std::endl;
-    return envMap;  // Return an empty map in case of error
+    return envMap;
   }
 
   char *currentEnv = envBlock;
@@ -637,7 +623,7 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
 #else
 
   if (environ == nullptr) {
-    return envMap;  // Return an empty map in case of error
+    return envMap;
   }
 
   for (char **env = environ; *env != nullptr; ++env) {
@@ -704,9 +690,7 @@ class Stdio {
                 &sa,  // Security attributes
                 this->fileno() == 0
                     ? OPEN_EXISTING
-                    : (this->is_append()
-                           ? OPEN_ALWAYS
-                           : CREATE_ALWAYS),  // Creation disposition
+                    : (this->is_append() ? OPEN_ALWAYS : CREATE_ALWAYS),
                 FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hFile == INVALID_HANDLE_VALUE) {
               throw std::runtime_error{"open failed: " + value + ", error: " +
@@ -740,7 +724,6 @@ class Stdio {
                                        std::to_string(GetLastError())};
             }
 
-            // child process close
             if (!SetHandleInformation(
                     this->pipe_fds_[this->fileno() == 0 ? 1 : 0],
                     HANDLE_FLAG_INHERIT, 0)) {
@@ -1097,17 +1080,10 @@ class subprocess {
 
     auto env_block = create_environment_string_data(env_);
 
-    auto success = CreateProcessA(
-        nullptr, command.data(),
-        NULL,  // Process handle not inheritable
-        NULL,  // Thread handle not inheritable
-        TRUE,  // !!! Set handle inheritance to TRUE
-        0,
-        env_block.empty() ? nullptr : env_block.data(),  // environment block
-        cwd_.empty() ? nullptr : cwd_.data(),            // working directory
-        &sInfo,  // Pointer to STARTUPINFO structure
-        &pInfo   // Pointer to PROCESS_INFORMATION structure
-    );
+    auto success =
+        CreateProcessA(nullptr, command.data(), NULL, NULL, TRUE, 0,
+                       env_block.empty() ? nullptr : env_block.data(),
+                       cwd_.empty() ? nullptr : cwd_.data(), &sInfo, &pInfo);
 
     if (!success) {
       std::cerr << get_last_error_msg() << '\n';
@@ -1116,8 +1092,7 @@ class subprocess {
 
     HandleGuard process_guard(pInfo.hProcess);
     HandleGuard thread_guard(pInfo.hThread);
-    auto ret = manage_pipe_io_and_wait_for_exit(pInfo.hProcess);
-    return ret;
+    return manage_pipe_io_and_wait_for_exit(pInfo.hProcess);
 #else
     auto pid = fork();
     if (pid < 0) {
@@ -1243,12 +1218,9 @@ class subprocess {
     } else {
       execv(exe_to_exec.c_str(), cmd.data());
     }
-    // This output to std::cerr in a library might be undesirable.
-    // Consider throwing an exception or having a configurable error handler.
-    // For now, keeping original behavior.
     std::cerr << "exec failed for: " << exe_to_exec
               << ", error: " << get_last_error_msg() << '\n';
-    _Exit(127);  // _Exit is correct here to not call atexit handlers etc.
+    _Exit(127);
   }
 #endif  // !_WIN32
 
