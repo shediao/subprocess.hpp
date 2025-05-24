@@ -163,6 +163,59 @@ class HandleGuard {
 
 namespace {
 
+#if defined(_WIN32)
+inline std::vector<char> create_command_string_data(
+    std::vector<std::string> const &cmds) {
+  std::vector<char> command;
+  for (auto const &cmd : cmds) {
+    if (!command.empty()) {
+      command.push_back(' ');
+    }
+    if (cmd.empty()) {
+      command.push_back('"');
+      command.push_back('"');
+      continue;
+    }
+    auto need_quota = std::any_of(cmd.begin(), cmd.end(),
+                                  [](char c) { return c <= ' ' || c == '"'; });
+    if (need_quota) {
+      command.push_back('"');
+    }
+    if (need_quota) {
+      for (auto c : cmd) {
+        if (c == '"') {
+          command.push_back('\\');
+        }
+        command.push_back(c);
+      }
+    } else {
+      command.insert(command.end(), cmd.begin(), cmd.end());
+    }
+    if (need_quota) {
+      command.push_back('"');
+    }
+  }
+  command.push_back('\0');
+  return command;
+}
+
+inline std::vector<char> create_environment_string_data(
+    std::map<std::string, std::string> const &envs) {
+  std::vector<char> env_block;
+  for (auto const &[key, value] : envs) {
+    env_block.insert(env_block.end(), key.begin(), key.end());
+    env_block.push_back('=');
+    env_block.insert(env_block.end(), value.begin(), value.end());
+    env_block.push_back('\0');
+  }
+  if (!env_block.empty()) {
+    env_block.push_back('\0');
+  }
+  return env_block;
+}
+
+#endif
+
 inline std::string get_last_error_msg() {
 #if defined(_WIN32)
   DWORD error = GetLastError();
@@ -1040,47 +1093,9 @@ class subprocess {
 
     sInfo.dwFlags |= STARTF_USESTDHANDLES;
 
-    std::vector<char> command;
-    for (auto const &cmd : cmd_) {
-      if (!command.empty()) {
-        command.push_back(' ');
-      }
-      if (cmd.empty()) {
-        command.push_back('"');
-        command.push_back('"');
-        continue;
-      }
-      auto need_quota = std::any_of(
-          cmd.begin(), cmd.end(), [](char c) { return c <= ' ' || c == '"'; });
-      if (need_quota) {
-        command.push_back('"');
-      }
-      if (need_quota) {
-        for (auto c : cmd) {
-          if (c == '"') {
-            command.push_back('\\');
-          }
-          command.push_back(c);
-        }
-      } else {
-        command.insert(command.end(), cmd.begin(), cmd.end());
-      }
-      if (need_quota) {
-        command.push_back('"');
-      }
-    }
-    command.push_back('\0');
+    auto command = create_command_string_data(cmd_);
 
-    std::vector<char> env_block;
-    for (auto const &[key, value] : env_) {
-      env_block.insert(env_block.end(), key.begin(), key.end());
-      env_block.push_back('=');
-      env_block.insert(env_block.end(), value.begin(), value.end());
-      env_block.push_back('\0');
-    }
-    if (!env_block.empty()) {
-      env_block.push_back('\0');
-    }
+    auto env_block = create_environment_string_data(env_);
 
     auto success = CreateProcessA(
         nullptr, command.data(),
