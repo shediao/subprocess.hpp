@@ -488,7 +488,7 @@ inline void read_write_per_thread(NativeHandle &in, std::vector<char> &in_buf,
   }
 }
 
-void create_pipe(NativeHandle (&fds)[2]) {
+inline void create_pipe(NativeHandle (&fds)[2]) {
 #if defined(_WIN32)
   SECURITY_ATTRIBUTES at;
   at.bInheritHandle = true;
@@ -688,6 +688,8 @@ struct Pipe {
   NativeHandle &write_fd() { return fds_[1]; }
   NativeHandle fds_[2];
 };
+
+namespace detail {
 class Stdio {
   friend class subprocess;
 
@@ -1047,7 +1049,7 @@ struct env_operator {
   EnvItemAppend operator[](std::string key) { return EnvItemAppend{{key, ""}}; }
 };
 
-namespace named_arguments {
+namespace named_args {
 [[maybe_unused]] inline static auto devnull =
     std::filesystem::path("/dev/null");
 [[maybe_unused]] inline static stdin_redirector std_in;
@@ -1063,9 +1065,7 @@ namespace named_arguments {
 [[maybe_unused]] inline static stderr_redirector $stderr;
 [[maybe_unused]] inline static cwd_operator $cwd;
 [[maybe_unused]] inline static env_operator $env;
-}  // namespace named_arguments
-
-using namespace named_arguments;
+}  // namespace named_args
 #if (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || \
     (!defined(_MSVC_LANG) && __cplusplus >= 202002L)
 template <typename T>
@@ -1331,21 +1331,39 @@ class subprocess {
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
 #endif
 };
+}  // namespace detail
+
+namespace named_arguments {
+using detail::named_args::$cwd;
+using detail::named_args::$devnull;
+using detail::named_args::$env;
+using detail::named_args::$stderr;
+using detail::named_args::$stdin;
+using detail::named_args::$stdout;
+using detail::named_args::cwd;
+using detail::named_args::devnull;
+using detail::named_args::env;
+using detail::named_args::std_err;
+using detail::named_args::std_in;
+using detail::named_args::std_out;
+}  // namespace named_arguments
+
+using namespace named_arguments;
 
 template <typename... T>
 #if __cplusplus >= 202002L
-  requires(is_run_args_type<T> && ...)
+  requires(detail::is_run_args_type<T> && ...)
 #endif
 inline int run(std::vector<std::string> cmd, T &&...args) {
-  return subprocess(std::move(cmd), std::forward<T>(args)...).run();
+  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 template <typename... T>
 #if __cplusplus >= 202002L
-  requires(is_run_args_type<T> && ...)
+  requires(detail::is_run_args_type<T> && ...)
 #endif
 inline int $(std::vector<std::string> cmd, T &&...args) {
-  return subprocess(std::move(cmd), std::forward<T>(args)...).run();
+  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 inline std::string const &home() {
