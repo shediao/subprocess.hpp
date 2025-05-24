@@ -1045,6 +1045,11 @@ class subprocess {
       if (!command.empty()) {
         command.push_back(' ');
       }
+      if (cmd.empty()) {
+        command.push_back('"');
+        command.push_back('"');
+        continue;
+      }
       auto need_quota = std::any_of(
           cmd.begin(), cmd.end(), [](char c) { return c <= ' ' || c == '"'; });
       if (need_quota) {
