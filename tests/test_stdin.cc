@@ -2,9 +2,9 @@
 
 #include "subprocess/subprocess.hpp"
 
+using namespace process::named_arguments;
+using process::run;
 TEST(SubprocessTest, Stdin) {
-  using namespace process::named_arguments;
-  using process::run;
   std::vector<char> in{'1', '2', '3'};
   std::vector<char> out;
 #if !defined(_WIN32)

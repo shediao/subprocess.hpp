@@ -6,6 +6,8 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace std::string_literals;
+using namespace process;
+using namespace process::named_arguments;
 
 // Helper function to convert vector<char> to string
 static std::string vecCharToString(const std::vector<char>& vec) {
@@ -30,8 +32,6 @@ static void removeFile(const std::string& path) { std::remove(path.c_str()); }
 #endif
 
 namespace {
-
-using namespace process;
 
 class RunFunctionTest : public ::testing::Test {
  protected:

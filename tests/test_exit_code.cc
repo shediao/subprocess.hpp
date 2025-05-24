@@ -2,9 +2,10 @@
 
 #include "subprocess/subprocess.hpp"
 
+using namespace process::named_arguments;
+using process::run;
+
 TEST(SubprocessTest, ExitCode) {
-  using namespace process::named_arguments;
-  using process::run;
 #if !defined(_WIN32)
   ASSERT_EQ(0, run({"true"}));
   ASSERT_EQ(1, run({"false"}));

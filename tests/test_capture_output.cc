@@ -2,9 +2,10 @@
 
 #include "subprocess/subprocess.hpp"
 
+using namespace process::named_arguments;
+using process::run;
+
 TEST(SubprocessTest, CaptureOutputs) {
-  using namespace process::named_arguments;
-  using process::run;
   std::vector<char> out;
   std::vector<char> err;
 

@@ -3,7 +3,9 @@
 ```cpp
 #include <subprocess/subprocess.hpp>
 
-using namespace subprocess;
+using process::run;
+using namespace process::named_arguments;  // for named arguments: std_in,
+                                           // std_out, std_err, cwd, env
 
 // 1. simple usage
 int exit_code = run({"/bin/echo", "-n", "123"});

@@ -84,6 +84,10 @@ constexpr bool is_bsd = is_freebsd || is_openbsd || is_netbsd;
 constexpr bool is_posix =
     is_macos || is_linux || is_android || is_cygwin || is_bsd;
 
+#ifndef USE_DOLLAR_NAMED_VARIABLES
+#define USE_DOLLAR_NAMED_VARIABLES 1
+#endif
+
 #if defined(_WIN32)
 using NativeHandle = HANDLE;
 const static inline NativeHandle INVALID_NATIVE_HANDLE_VALUE =
@@ -652,6 +656,7 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
   return envMap;
 }
 }  // namespace
+namespace detail {
 struct Pipe {
   Pipe() { create_pipe(fds_); }
   void close_read() { close_native_handle(fds_[0]); }
@@ -665,7 +670,6 @@ struct Pipe {
   NativeHandle fds_[2];
 };
 
-namespace detail {
 class Stdio {
   friend class subprocess;
 
@@ -1017,6 +1021,7 @@ namespace named_args {
 [[maybe_unused]] inline static cwd_operator cwd;
 [[maybe_unused]] inline static env_operator env;
 
+#if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 [[maybe_unused]] inline static auto $devnull =
     std::filesystem::path("/dev/null");
 [[maybe_unused]] inline static stdin_redirector $stdin;
@@ -1024,6 +1029,7 @@ namespace named_args {
 [[maybe_unused]] inline static stderr_redirector $stderr;
 [[maybe_unused]] inline static cwd_operator $cwd;
 [[maybe_unused]] inline static env_operator $env;
+#endif
 }  // namespace named_args
 #if (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || \
     (!defined(_MSVC_LANG) && __cplusplus >= 202002L)
@@ -1293,12 +1299,14 @@ class subprocess {
 }  // namespace detail
 
 namespace named_arguments {
+#if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 using detail::named_args::$cwd;
 using detail::named_args::$devnull;
 using detail::named_args::$env;
 using detail::named_args::$stderr;
 using detail::named_args::$stdin;
 using detail::named_args::$stdout;
+#endif
 using detail::named_args::cwd;
 using detail::named_args::devnull;
 using detail::named_args::env;
@@ -1306,8 +1314,6 @@ using detail::named_args::std_err;
 using detail::named_args::std_in;
 using detail::named_args::std_out;
 }  // namespace named_arguments
-
-using namespace named_arguments;
 
 template <typename... T>
 #if __cplusplus >= 202002L
@@ -1321,9 +1327,11 @@ template <typename... T>
 #if __cplusplus >= 202002L
   requires(detail::is_run_args_type<T> && ...)
 #endif
+#if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 inline int $(std::vector<std::string> cmd, T &&...args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
+#endif
 
 inline std::string const &home() {
   static std::string home_dir = []() {
@@ -1363,6 +1371,7 @@ inline pid_type pid() {
 
 }  // namespace process
 
+#if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 using process::$;
 using process::named_arguments::$cwd;
 using process::named_arguments::$devnull;
@@ -1370,4 +1379,5 @@ using process::named_arguments::$env;
 using process::named_arguments::$stderr;
 using process::named_arguments::$stdin;
 using process::named_arguments::$stdout;
+#endif
 #endif  // __SUBPROCESS_SUBPROCESS_HPP__

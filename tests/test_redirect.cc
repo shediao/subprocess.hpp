@@ -3,9 +3,9 @@
 #include "./utils.h"
 #include "subprocess/subprocess.hpp"
 
+using namespace process::named_arguments;
+using process::run;
 TEST(SubprocessTest, RedirectOut) {
-  using namespace process::named_arguments;
-  using process::run;
   TempFile tmp_file;
   std::vector<char> content{'1', '2', '3'};
 #if !defined(_WIN32)
@@ -19,8 +19,6 @@ TEST(SubprocessTest, RedirectOut) {
   ASSERT_EQ(content, tmp_file.content());
 }
 TEST(SubprocessTest, RedirectOutAppend) {
-  using namespace process::named_arguments;
-  using process::run;
   TempFile tmp_file;
   tmp_file.write(std::string{"000"});
   std::vector<char> content{'1', '2', '3'};
@@ -36,8 +34,6 @@ TEST(SubprocessTest, RedirectOutAppend) {
 }
 
 TEST(SubprocessTest, RedirectErr) {
-  using namespace process::named_arguments;
-  using process::run;
   TempFile tmp_file;
   std::vector<char> content{'1', '2', '3'};
 #if !defined(_WIN32)
@@ -53,8 +49,6 @@ TEST(SubprocessTest, RedirectErr) {
 }
 
 TEST(SubprocessTest, RedirectErrAppend) {
-  using namespace process::named_arguments;
-  using process::run;
   TempFile tmp_file;
   tmp_file.write(std::string("999"));
   std::vector<char> content{'1', '2', '3'};

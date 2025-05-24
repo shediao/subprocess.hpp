@@ -2,9 +2,10 @@
 
 #include "subprocess/subprocess.hpp"
 
+using namespace process::named_arguments;
+using process::run;
+
 TEST(SubprocessTest, Environment) {
-  using namespace process::named_arguments;
-  using process::run;
   std::vector<char> out;
 #if !defined(_WIN32)
   auto ret = run({"/usr/bin/printenv", "env1"}, env = {{"env1", "value1"}},
@@ -23,8 +24,6 @@ TEST(SubprocessTest, Environment) {
 }
 
 TEST(SubprocessTest, Environment2) {
-  using namespace process::named_arguments;
-  using process::run;
   std::vector<char> out;
 #if !defined(_WIN32)
   auto ret = run({"/bin/bash", "-c", "echo -n $env1"},

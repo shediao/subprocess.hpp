@@ -5,9 +5,10 @@
 
 #include "subprocess/subprocess.hpp"
 
+using namespace process::named_arguments;
+using process::run;
+
 TEST(SubprocessTest, CWD) {
-  using namespace process::named_arguments;
-  using process::run;
   std::vector<char> out;
 
   auto home_dir = process::home();
