@@ -113,13 +113,13 @@ void close_native_handle(NativeHandle &handle) {
 namespace detail {
 class HandleGuard {
  public:
-  HandleGuard(NativeHandle h =
+  explicit HandleGuard(NativeHandle h =
 #if defined(_WIN32)
-                  INVALID_HANDLE_VALUE
+                           INVALID_HANDLE_VALUE
 #else
-                  -1
+                           -1
 #endif
-              )
+                       )
       : handle_(h) {
   }
   ~HandleGuard() { Close(); }
@@ -738,10 +738,10 @@ class Stdio {
   friend class subprocess;
 
  public:
-  Stdio() : redirect_(std::nullopt) {}
-  Stdio(Pipe p) : redirect_(std::move(p)) {}
-  Stdio(File f) : redirect_(std::move(f)) {}
-  Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
+  explicit Stdio() : redirect_(std::nullopt) {}
+  explicit Stdio(Pipe p) : redirect_(std::move(p)) {}
+  explicit Stdio(File f) : redirect_(std::move(f)) {}
+  explicit Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
   Stdio(Stdio &&) = default;
   Stdio &operator=(Stdio &&) = default;
   Stdio(Stdio const &) = delete;
