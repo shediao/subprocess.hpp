@@ -20,12 +20,14 @@ TEST(SubprocessTest, CommandNotExists) {
 
 TEST(SubprocessTest, NoPermission) {
   TempFile temp;
-#if defined(_WIN32) && 0
+#if defined(_WIN32)
+#if 0
   std::string content = R"(@echo off
 echo 123
 )";
   temp.write(content);
   ASSERT_EQ(127, run(temp.path()));
+#endif
 #else
   std::string content = R"(#!/bin/bash
 echo 123
