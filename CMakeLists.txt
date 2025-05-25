@@ -25,13 +25,6 @@ add_library(subprocess::subprocess ALIAS subprocess)
 if(SUBPROCESS_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
-else()
-  add_executable(simple_test tests/simple_test.cpp)
-  if(MSVC)
-    target_compile_options(simple_test PRIVATE /utf-8 /EHsc)
-  endif()
-  target_link_libraries(simple_test PRIVATE subprocess::subprocess)
-  add_test(NAME simple_test COMMAND simple_test)
 endif()
 
 install(
