@@ -1,6 +1,7 @@
 #ifndef __SUBPROCESS_SUBPROCESS_HPP__
 #define __SUBPROCESS_SUBPROCESS_HPP__
 
+#include <functional>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -665,17 +666,21 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
 }
 }  // namespace
 namespace detail {
-struct Pipe {
-  Pipe() { create_pipe(fds_); }
+class Pipe {
+ public:
+  static Pipe create() { return Pipe{}; }
   void close_read() { close_native_handle(fds_[0]); }
   void close_write() { close_native_handle(fds_[1]); }
   void close_all() {
     close_read();
     close_write();
   }
-  NativeHandle &read_fd() { return fds_[0]; }
-  NativeHandle &write_fd() { return fds_[1]; }
-  NativeHandle fds_[2];
+  NativeHandle &operator[](int i) { return fds_[i]; }
+
+ private:
+  explicit Pipe() { create_pipe(fds_); }
+  NativeHandle fds_[2]{INVALID_NATIVE_HANDLE_VALUE,
+                       INVALID_NATIVE_HANDLE_VALUE};
 };
 
 struct File {
@@ -690,6 +695,22 @@ struct File {
 
   explicit File(std::string const &p, bool append = false)
       : path_{p}, append_{append} {}
+
+  File(File &&o) : path_{std::move(o.path_)}, append_{o.append_}, fd_{o.fd_} {
+    o.path_ = "";
+    o.append_ = false;
+    o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
+  }
+  File &operator=(File &&o) {
+    close();
+    path_ = std::move(o.path_);
+    append_ = o.append_;
+    fd_ = o.fd_;
+    o.path_ = "";
+    o.append_ = false;
+    o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
+    return *this;
+  }
   ~File() { close_native_handle(fd_); }
 
   void open_for_read() { open_impl(ReadOnly); }
@@ -742,14 +763,26 @@ struct File {
   NativeHandle fd_{INVALID_NATIVE_HANDLE_VALUE};
 };
 
+class Buffer {
+ public:
+  Buffer(std::vector<char> &buf) : buf_{std::ref(buf)}, pipe_{Pipe::create()} {}
+
+  std::vector<char> &buf() { return buf_.get(); }
+  Pipe &pipe() { return pipe_; }
+
+ private:
+  std::reference_wrapper<std::vector<char>> buf_;
+  Pipe pipe_;
+};
+
 class Stdio {
   friend class subprocess;
 
  public:
   explicit Stdio() : redirect_(std::nullopt) {}
-  explicit Stdio(Pipe p) : redirect_(std::move(p)) {}
+  explicit Stdio(Pipe const &p) : redirect_(p) {}
   explicit Stdio(File f) : redirect_(std::move(f)) {}
-  explicit Stdio(std::vector<char> &buf) : redirect_(std::ref(buf)) {}
+  explicit Stdio(std::vector<char> &buf) : redirect_(Buffer(buf)) {}
   Stdio(Stdio &&) = default;
   Stdio &operator=(Stdio &&) = default;
   Stdio(Stdio const &) = delete;
@@ -763,7 +796,7 @@ class Stdio {
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
-            NativeHandle non_inherit_handle = value.fds_[fileno() == 0 ? 1 : 0];
+            NativeHandle non_inherit_handle = value[fileno() == 0 ? 1 : 0];
             if (non_inherit_handle != INVALID_NATIVE_HANDLE_VALUE &&
                 !SetHandleInformation(non_inherit_handle, HANDLE_FLAG_INHERIT,
                                       0)) {
@@ -777,11 +810,10 @@ class Stdio {
             } else {
               value.open_for_write();
             }
-          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
-                                                     std::vector<char>>>) {
-            create_pipe(pipe_fds_);
+          } else if constexpr (std::is_same_v<T, Buffer>) {
 #if defined(_WIN32)
-            NativeHandle non_inherit_handle = pipe_fds_[fileno() == 0 ? 1 : 0];
+            NativeHandle non_inherit_handle =
+                value.pipe()[fileno() == 0 ? 1 : 0];
             if (non_inherit_handle != INVALID_NATIVE_HANDLE_VALUE &&
                 !SetHandleInformation(non_inherit_handle, HANDLE_FLAG_INHERIT,
                                       0)) {
@@ -789,7 +821,6 @@ class Stdio {
                                        std::to_string(GetLastError()));
             }
 #endif
-          } else {
           }
         },
         redirect_.value());
@@ -801,12 +832,11 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            close_native_handle(value.fds_[fileno() == 0 ? 0 : 1]);
+            close_native_handle(value[fileno() == 0 ? 0 : 1]);
           } else if constexpr (std::is_same_v<T, File>) {
             value.close();
-          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
-                                                     std::vector<char>>>) {
-            close_native_handle(pipe_fds_[fileno() == 0 ? 0 : 1]);
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+            close_native_handle(value.pipe()[fileno() == 0 ? 0 : 1]);
           }
         },
         redirect_.value());
@@ -820,12 +850,11 @@ class Stdio {
         [this]<typename T>(
             [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
           if constexpr (std::is_same_v<T, Pipe>) {
-            return value.fds_[fileno() == 0 ? 0 : 1];
+            return value[fileno() == 0 ? 0 : 1];
           } else if constexpr (std::is_same_v<T, File>) {
             return value.fd();
-          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
-                                                     std::vector<char>>>) {
-            return pipe_fds_[fileno() == 0 ? 0 : 1];
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+            return value.pipe()[fileno() == 0 ? 0 : 1];
           } else {
             return std::nullopt;
           }
@@ -839,9 +868,8 @@ class Stdio {
     return std::visit(
         [this]<typename T>(
             [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
-          if constexpr (std::is_same_v<
-                            T, std::reference_wrapper<std::vector<char>>>) {
-            return pipe_fds_[fileno() == 0 ? 1 : 0];
+          if constexpr (std::is_same_v<T, Buffer>) {
+            return value.pipe()[fileno() == 0 ? 1 : 0];
           } else {
             return std::nullopt;
           }
@@ -857,18 +885,15 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            dup2(value.fds_[fileno() == 0 ? 0 : 1], fileno());
-            close_native_handle(value.fds_[0]);
-            close_native_handle(value.fds_[1]);
+            dup2(value[fileno() == 0 ? 0 : 1], fileno());
+            close_native_handle(value[0]);
+            close_native_handle(value[1]);
           } else if constexpr (std::is_same_v<T, File>) {
             dup2(value.fd(), fileno());
             value.close();
-          } else if constexpr (std::is_same_v<T, std::string>) {
-          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
-                                                     std::vector<char>>>) {
-            dup2(pipe_fds_[fileno() == 0 ? 0 : 1], fileno());
-            close_native_handle(pipe_fds_[0]);
-            close_native_handle(pipe_fds_[1]);
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+            dup2(value.pipe()[fileno() == 0 ? 0 : 1], fileno());
+            value.pipe().close_all();
           }
         },
         redirect_.value());
@@ -880,9 +905,8 @@ class Stdio {
     return std::visit(
         [this]<typename T>(
             [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
-          if constexpr (std::is_same_v<
-                            T, std::reference_wrapper<std::vector<char>>>) {
-            return pipe_fds_[fileno() == 0 ? 1 : 0];
+          if constexpr (std::is_same_v<T, Buffer>) {
+            return value.pipe()[fileno() == 0 ? 1 : 0];
           } else {
             return std::nullopt;
           }
@@ -893,16 +917,7 @@ class Stdio {
   virtual int fileno() const = 0;
 
  protected:
-  std::optional<
-      std::variant<Pipe, File, std::reference_wrapper<std::vector<char>>>>
-      redirect_{std::nullopt};
-  NativeHandle pipe_fds_[2]{
-#if defined(_WIN32)
-      nullptr, nullptr
-#else
-      -1, -1
-#endif
-  };
+  std::optional<std::variant<Pipe, File, Buffer>> redirect_{std::nullopt};
 };
 
 class Stdin : public Stdio {
@@ -934,13 +949,13 @@ class Stderr : public Stdio {
 };
 
 struct stdin_redirector {
-  Stdin operator<(Pipe p) const { return Stdin{p}; }
+  Stdin operator<(Pipe p) const { return Stdin{std::move(p)}; }
   Stdin operator<(std::string const &file) const { return Stdin{File{file}}; }
   Stdin operator<(std::vector<char> &buf) const { return Stdin{buf}; }
 };
 
 struct stdout_redirector {
-  Stdout operator>(Pipe p) const { return Stdout{p}; }
+  Stdout operator>(Pipe const &p) const { return Stdout{p}; }
   Stdout operator>(std::string const &file) const { return Stdout{File{file}}; }
   Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
 
@@ -950,6 +965,7 @@ struct stdout_redirector {
 };
 
 struct stderr_redirector {
+  Stderr operator>(Pipe p) const { return Stderr{std::move(p)}; }
   Stderr operator>(std::string const &file) const { return Stderr{File{file}}; }
   Stderr operator>(std::vector<char> &buf) const { return Stderr{buf}; }
   Stderr operator>>(std::string const &file) const {
@@ -1198,19 +1214,13 @@ class subprocess {
     std::vector<char> tmp_buf;
     read_write_pipes(
         in.has_value() ? in.value() : tmp_handle,
-        in.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
-                             stdin_.redirect_.value())
-                             .get()
+        in.has_value() ? std::get<Buffer>(stdin_.redirect_.value()).buf()
                        : tmp_buf,
         out.has_value() ? out.value() : tmp_handle,
-        out.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
-                              stdout_.redirect_.value())
-                              .get()
+        out.has_value() ? std::get<Buffer>(stdout_.redirect_.value()).buf()
                         : tmp_buf,
         err.has_value() ? err.value() : tmp_handle,
-        err.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
-                              stderr_.redirect_.value())
-                              .get()
+        err.has_value() ? std::get<Buffer>(stderr_.redirect_.value()).buf()
                         : tmp_buf);
 #else
     auto in = stdin_.get_parent_pipe_fd_for_polling();
@@ -1221,19 +1231,13 @@ class subprocess {
     std::vector<char> tmp_buf;
     read_write_pipes(
         in.has_value() ? in.value() : tmp_handle,
-        in.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
-                             stdin_.redirect_.value())
-                             .get()
+        in.has_value() ? std::get<Buffer>(stdin_.redirect_.value()).buf()
                        : tmp_buf,
         out.has_value() ? out.value() : tmp_handle,
-        out.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
-                              stdout_.redirect_.value())
-                              .get()
+        out.has_value() ? std::get<Buffer>(stdout_.redirect_.value()).buf()
                         : tmp_buf,
         err.has_value() ? err.value() : tmp_handle,
-        err.has_value() ? std::get<std::reference_wrapper<std::vector<char>>>(
-                              stderr_.redirect_.value())
-                              .get()
+        err.has_value() ? std::get<Buffer>(stderr_.redirect_.value()).buf()
                         : tmp_buf);
 #endif
   }
