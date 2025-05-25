@@ -26,6 +26,7 @@ inline std::string getTempFilePath(std::string const& prefix,
   if (GetTempFileNameA(temp_dir, prefix.c_str(), 0, temp_file) == 0) {
     throw std::runtime_error("Failed to create temporary file.");
   }
+  DeleteFileA(temp_file);
   temp_file_path = temp_file;
   if (!postfix.empty()) {
     temp_file_path += postfix;
@@ -59,6 +60,8 @@ inline std::string getTempFilePath(std::string const& prefix,
     throw std::runtime_error("Failed to create temporary file.");
   }
   close(fd);
+  ::remove(template_str.c_str());
+
   temp_file_path = template_str;
 #endif
   return temp_file_path;
