@@ -247,7 +247,7 @@ inline std::string get_last_error_msg() {
   if (err_msg) {
     return std::string(err_msg);
   } else {
-    return "Unknow error or strerror failed, error code: " +
+    return "Unknown error or strerror failed, error code: " +
            std::to_string(errno);
   }
 #endif  // !_WIN32
@@ -841,6 +841,22 @@ class Stdio {
         },
         redirect_.value());
   }
+  void close_all() {
+    if (!redirect_.has_value()) {
+      return;
+    }
+    std::visit(
+        []<typename T>([[maybe_unused]] T &value) {
+          if constexpr (std::is_same_v<T, Pipe>) {
+            value.close_all();
+          } else if constexpr (std::is_same_v<T, File>) {
+            value.close();
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+            value.pipe().close_all();
+          }
+        },
+        redirect_.value());
+  }
 #if defined(_WIN32)
   std::optional<NativeHandle> get_child_process_stdio_handle() {
     if (!redirect_.has_value()) {
@@ -855,8 +871,6 @@ class Stdio {
             return value.fd();
           } else if constexpr (std::is_same_v<T, Buffer>) {
             return value.pipe()[fileno() == 0 ? 0 : 1];
-          } else {
-            return std::nullopt;
           }
         },
         redirect_.value());
@@ -1144,11 +1158,15 @@ class subprocess {
                        cwd_.empty() ? nullptr : cwd_.data(), &startupinfo_,
                        &process_information_);
 
-    if (!success) {
+    if (success) {
+      manage_pipe_io();
+    } else {
       std::cerr << get_last_error_msg() << '\n';
       process_information_.hProcess = INVALID_NATIVE_HANDLE_VALUE;
+      stdin_.close_all();
+      stdout_.close_all();
+      stderr_.close_all();
     }
-    manage_pipe_io();
 #else
     auto pid = fork();
     if (pid < 0) {
