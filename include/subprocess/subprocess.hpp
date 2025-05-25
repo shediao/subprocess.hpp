@@ -1052,8 +1052,11 @@ struct env_operator {
 };
 
 namespace named_args {
-[[maybe_unused]] inline static auto devnull =
-    std::filesystem::path("/dev/null");
+#if defined(_WIN32)
+[[maybe_unused]] inline static auto devnull = std::string{"NUL"};
+#else
+[[maybe_unused]] inline static auto devnull = std::string{"/dev/null"};
+#endif
 [[maybe_unused]] inline static stdin_redirector std_in;
 [[maybe_unused]] inline static stdout_redirector std_out;
 [[maybe_unused]] inline static stderr_redirector std_err;
@@ -1061,8 +1064,11 @@ namespace named_args {
 [[maybe_unused]] inline static env_operator env;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-[[maybe_unused]] inline static auto $devnull =
-    std::filesystem::path("/dev/null");
+#if defined(_WIN32)
+[[maybe_unused]] inline static auto $devnull = std::string{"NUL"};
+#else
+[[maybe_unused]] inline static auto $devnull = std::string{"/dev/null"};
+#endif
 [[maybe_unused]] inline static stdin_redirector $stdin;
 [[maybe_unused]] inline static stdout_redirector $stdout;
 [[maybe_unused]] inline static stderr_redirector $stderr;
