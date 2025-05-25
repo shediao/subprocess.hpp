@@ -2,6 +2,7 @@
 #define __SUBPROCESS_SUBPROCESS_HPP__
 
 #include <functional>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -497,7 +498,7 @@ inline void read_write_per_thread(NativeHandle &in, std::vector<char> &in_buf,
   }
 }
 
-inline void create_pipe(NativeHandle (&fds)[2]) {
+inline void create_pipe(NativeHandle *fds) {
 #if defined(_WIN32)
   SECURITY_ATTRIBUTES at;
   at.bInheritHandle = true;
@@ -678,9 +679,10 @@ class Pipe {
   NativeHandle &operator[](int i) { return fds_[i]; }
 
  private:
-  explicit Pipe() { create_pipe(fds_); }
-  NativeHandle fds_[2]{INVALID_NATIVE_HANDLE_VALUE,
-                       INVALID_NATIVE_HANDLE_VALUE};
+  explicit Pipe() : fds_{std::make_shared<NativeHandle[]>(2)} {
+    create_pipe(fds_.get());
+  }
+  std::shared_ptr<NativeHandle[]> fds_;
 };
 
 struct File {
@@ -777,19 +779,46 @@ class Buffer {
 
 class Stdio {
   friend class subprocess;
+  using value_type = std::variant<Pipe, File, Buffer>;
 
  public:
-  explicit Stdio() : redirect_(std::nullopt) {}
-  explicit Stdio(Pipe const &p) : redirect_(p) {}
-  explicit Stdio(File f) : redirect_(std::move(f)) {}
-  explicit Stdio(std::vector<char> &buf) : redirect_(Buffer(buf)) {}
+  explicit Stdio() : redirect_(nullptr) {}
+  explicit Stdio(Pipe const &p) : redirect_(std::make_unique<value_type>(p)) {}
+  explicit Stdio(File f)
+      : redirect_(std::make_unique<value_type>(std::move(f))) {}
+  explicit Stdio(std::vector<char> &buf)
+      : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
   Stdio(Stdio &&) = default;
   Stdio &operator=(Stdio &&) = default;
   Stdio(Stdio const &) = delete;
   Stdio &operator=(Stdio const &) = delete;
-  virtual ~Stdio() {}
+  virtual ~Stdio() {
+    if (!redirect_) {
+      return;
+    }
+    std::visit(
+        []<typename T>([[maybe_unused]] T &value) {
+          if constexpr (std::is_same_v<T, Pipe>) {
+            if (value[0] != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> pipe[0] not closed!" << '\n';
+            }
+            if (value[1] != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> pipe[1] not closed!" << '\n';
+            }
+
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+            if (value.pipe()[0] != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> buffer.pipe[0] not closed!" << '\n';
+            }
+            if (value.pipe()[1] != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> buffer.pipe[1] not closed!" << '\n';
+            }
+          }
+        },
+        *redirect_);
+  }
   void prepare_redirection() {
-    if (!redirect_.has_value()) {
+    if (!redirect_) {
       return;
     }
     std::visit(
@@ -823,10 +852,10 @@ class Stdio {
 #endif
           }
         },
-        redirect_.value());
+        *redirect_);
   }
   void close_unused_pipe_ends_in_parent() {
-    if (!redirect_.has_value()) {
+    if (!redirect_) {
       return;
     }
     std::visit(
@@ -839,10 +868,10 @@ class Stdio {
             close_native_handle(value.pipe()[fileno() == 0 ? 0 : 1]);
           }
         },
-        redirect_.value());
+        *redirect_);
   }
   void close_all() {
-    if (!redirect_.has_value()) {
+    if (!redirect_) {
       return;
     }
     std::visit(
@@ -855,11 +884,11 @@ class Stdio {
             value.pipe().close_all();
           }
         },
-        redirect_.value());
+        *redirect_);
   }
 #if defined(_WIN32)
   std::optional<NativeHandle> get_child_process_stdio_handle() {
-    if (!redirect_.has_value()) {
+    if (!redirect_) {
       return std::nullopt;
     }
     return std::visit(
@@ -873,27 +902,28 @@ class Stdio {
             return value.pipe()[fileno() == 0 ? 0 : 1];
           }
         },
-        redirect_.value());
+        *redirect_);
   }
-  std::optional<NativeHandle> get_parent_communication_pipe_handle() {
-    if (!redirect_.has_value()) {
+  std::optional<std::reference_wrapper<NativeHandle>>
+  get_parent_communication_pipe_handle() {
+    if (!redirect_) {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>(
-            [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
+        [this]<typename T>([[maybe_unused]] T &value)
+            -> std::optional<std::reference_wrapper<NativeHandle>> {
           if constexpr (std::is_same_v<T, Buffer>) {
-            return value.pipe()[fileno() == 0 ? 1 : 0];
+            return std::ref(value.pipe()[fileno() == 0 ? 1 : 0]);
           } else {
             return std::nullopt;
           }
         },
-        redirect_.value());
+        *redirect_);
   }
 #endif
 #if !defined(_WIN32)
   void setup_stdio_in_child_process() {
-    if (!redirect_.has_value()) {
+    if (!redirect_) {
       return;
     }
     std::visit(
@@ -910,28 +940,29 @@ class Stdio {
             value.pipe().close_all();
           }
         },
-        redirect_.value());
+        *redirect_);
   }
-  std::optional<NativeHandle> get_parent_pipe_fd_for_polling() {
-    if (!redirect_.has_value()) {
+  std::optional<std::reference_wrapper<NativeHandle>>
+  get_parent_pipe_fd_for_polling() {
+    if (!redirect_) {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>(
-            [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
+        [this]<typename T>([[maybe_unused]] T &value)
+            -> std::optional<std::reference_wrapper<NativeHandle>> {
           if constexpr (std::is_same_v<T, Buffer>) {
-            return value.pipe()[fileno() == 0 ? 1 : 0];
+            return std::ref(value.pipe()[fileno() == 0 ? 1 : 0]);
           } else {
             return std::nullopt;
           }
         },
-        redirect_.value());
+        *redirect_);
   }
 #endif  // !_WIN32
   virtual int fileno() const = 0;
 
  protected:
-  std::optional<std::variant<Pipe, File, Buffer>> redirect_{std::nullopt};
+  std::unique_ptr<value_type> redirect_{nullptr};
 };
 
 class Stdin : public Stdio {
@@ -1231,15 +1262,12 @@ class subprocess {
     NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
     std::vector<char> tmp_buf;
     read_write_pipes(
-        in.has_value() ? in.value() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(stdin_.redirect_.value()).buf()
-                       : tmp_buf,
-        out.has_value() ? out.value() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(stdout_.redirect_.value()).buf()
-                        : tmp_buf,
-        err.has_value() ? err.value() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(stderr_.redirect_.value()).buf()
-                        : tmp_buf);
+        in.has_value() ? in.value().get() : tmp_handle,
+        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
+        out.has_value() ? out.value().get() : tmp_handle,
+        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
+        err.has_value() ? err.value().get() : tmp_handle,
+        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
 #else
     auto in = stdin_.get_parent_pipe_fd_for_polling();
     auto out = stdout_.get_parent_pipe_fd_for_polling();
@@ -1248,15 +1276,12 @@ class subprocess {
     NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
     std::vector<char> tmp_buf;
     read_write_pipes(
-        in.has_value() ? in.value() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(stdin_.redirect_.value()).buf()
-                       : tmp_buf,
-        out.has_value() ? out.value() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(stdout_.redirect_.value()).buf()
-                        : tmp_buf,
-        err.has_value() ? err.value() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(stderr_.redirect_.value()).buf()
-                        : tmp_buf);
+        in.has_value() ? in.value().get() : tmp_handle,
+        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
+        out.has_value() ? out.value().get() : tmp_handle,
+        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
+        err.has_value() ? err.value().get() : tmp_handle,
+        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
 #endif
   }
 #if !defined(_WIN32)
