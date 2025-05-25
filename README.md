@@ -8,12 +8,13 @@ using namespace process::named_arguments;  // for named arguments: std_in,
                                            // std_out, std_err, cwd, env
 
 // 1. simple usage
-int exit_code = run({"/bin/echo", "-n", "123"});
+int exit_code = run("/bin/echo", "-n", "123");
+int exit_code = run({"/bin/echo", "-n", "123"});  // command is a vector
 
 // 2. capture stdout&stderr
 std::vector<char> stdout_buf, stderr_buf;
 run(
-    {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
+    "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out > stdout_buf,   // > is redirect
     std_err > stderr_buf    // > is redirect
 );
@@ -21,14 +22,14 @@ run(
 // 3. redirect to file
 std::vector<char> stdout_buf, stderr_buf;
 run(
-    {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
+    "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out > "/tmp/out.txt",
     std_err > "/tmp/err.txt"
 );
 
 std::vector<char> stdout_buf, stderr_buf;
 run(
-    {"/bin/bash", "-c", "echo -n 123; echo -n '345' >&2"},
+    "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out >> "/tmp/out.txt",  // >> is append to file
     std_err >> "/tmp/err.txt"   // >> is append to file
 );
@@ -36,22 +37,33 @@ run(
 // 4. set environments && append environments
 
 // env= is override environments
-run({"/usr/bin/printenv"}, env={
-//                            ^ ~~~this is override environment
+run("/usr/bin/printenv", env={
+//                          ^ ~~~override environments
   {"e1", "v1"},
   {"e2", "e2"}
 });
 
 // env+= is append to environments
-run({"/usr/bin/printenv"}, env+={
-//                            ^ ~~~this is append environment
+run("/usr/bin/printenv", env+={
+//                          ^ ~~~ append environments
   {"e1", "v1"},
   {"e2", "e2"}
 });
 
 
 // 5. set cwd
-run({"/bin/pwd"}, cwd="/home/my");
+run("/bin/pwd", cwd="/home/my");
+
+
+
+// 6. command is a vector
+std::vector<std::string> cmd;
+cmd.push_back("echo");
+cmd.push_back("-n");
+cmd.push_back("hello");
+cmd.push_back("subprocess");
+
+run(cmd);
 
 ```
 

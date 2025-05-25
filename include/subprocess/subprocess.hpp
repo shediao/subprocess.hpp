@@ -9,6 +9,12 @@
 #error "This code requires C++17 or later."
 #endif
 
+#if defined(_MSVC_LANG)
+#define CPLUSPLUS_VERSION _MSVC_LANG
+#else
+#define CPLUSPLUS_VERSION __cplusplus
+#endif
+
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
@@ -1003,8 +1009,7 @@ namespace named_args {
 [[maybe_unused]] inline static env_operator $env;
 #endif
 }  // namespace named_args
-#if (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || \
-    (!defined(_MSVC_LANG) && __cplusplus >= 202002L)
+#if CPLUSPLUS_VERSION >= 202002L
 template <typename T>
 concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
                             std::is_same_v<Stdin, std::decay_t<T>> ||
@@ -1033,30 +1038,25 @@ constexpr bool is_string_type = std::integral_constant<
 #endif
 
 template <typename...>
-struct NamedArgTypeList;
+struct named_arg_typelist;
 
 template <>
-struct NamedArgTypeList<> {
+struct named_arg_typelist<> {
   using type = std::tuple<>;
 };
 template <typename Head, typename... Tails>
-struct NamedArgTypeList<Head, Tails...> {
+struct named_arg_typelist<Head, Tails...> {
   using type =
-      std::conditional_t<std::is_same_v<Env, std::decay_t<Head>> ||
-                             std::is_same_v<Stdin, std::decay_t<Head>> ||
-                             std::is_same_v<Stdout, std::decay_t<Head>> ||
-                             std::is_same_v<Stderr, std::decay_t<Head>> ||
-                             std::is_same_v<Cwd, std::decay_t<Head>> ||
-                             std::is_same_v<EnvItemAppend, std::decay_t<Head>>,
-                         std::tuple<Head, Tails...>,
-                         typename NamedArgTypeList<Tails...>::type>;
+      std::conditional_t<is_named_argument<Head>, std::tuple<Head, Tails...>,
+                         typename named_arg_typelist<Tails...>::type>;
 };
+template <typename... T>
+using named_arg_typelist_t = typename named_arg_typelist<T...>::type;
 
 class subprocess {
  public:
   template <typename... T>
-#if (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || \
-    (!defined(_MSVC_LANG) && __cplusplus >= 202002L)
+#if CPLUSPLUS_VERSION >= 202002L
     requires(is_named_argument<T> && ...)
 #endif
   explicit subprocess(std::vector<std::string> cmd, T &&...args)
@@ -1315,52 +1315,67 @@ using detail::named_args::std_out;
 }  // namespace named_arguments
 
 template <typename... T>
-#if __cplusplus >= 202002L
+#if CPLUSPLUS_VERSION >= 202002L
   requires(detail::is_named_argument<T> && ...)
 #endif
 inline int run(std::vector<std::string> cmd, T &&...args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert((detail::is_named_argument<T>) && ...);
+#endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 template <typename... Args>
-#if __cplusplus >= 202002L
+#if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
            ...)
 #endif
 inline int run(Args... args) {
-  std::tuple<Args...> args_tuple{std::forward<Args>(args)...};
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert(
+      (detail::is_named_argument<Args> || detail::is_string_type<Args>) && ...);
+#endif
+  std::tuple<Args...> args_tuple{std::move(args)...};
   using ArgsTuple = std::tuple<Args...>;
-  using NamedArgTypeList =
-      typename detail::NamedArgTypeList<std::decay_t<Args>...>::type;
+  using NamedArgTypelist =
+      typename detail::named_arg_typelist_t<std::decay_t<Args>...>;
   return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
                                                  std::index_sequence<N...>) {
-    (void)((detail::is_string_type<std::tuple_element<I, ArgsTuple>>) && ...);
-    (void)((detail::is_named_argument<
-               std::tuple_element<N, NamedArgTypeList>>) &&
-           ...);
+    static_assert(
+        ((detail::is_string_type<std::tuple_element_t<I, ArgsTuple>>) && ...));
+    static_assert(((detail::is_named_argument<
+                       std::tuple_element_t<N, NamedArgTypelist>>) &&
+                   ...));
     return run({std::move(std::get<I>(args_tuple))...},
                std::move(std::get<std::tuple_size_v<std::tuple<Args...>> -
-                                  std::tuple_size_v<NamedArgTypeList> + N>(
+                                  std::tuple_size_v<NamedArgTypelist> + N>(
                    args_tuple))...);
   }(std::make_index_sequence<std::tuple_size_v<std::tuple<Args...>> -
-                             std::tuple_size_v<NamedArgTypeList>>{},
-         std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
+                             std::tuple_size_v<NamedArgTypelist>>{},
+         std::make_index_sequence<std::tuple_size_v<NamedArgTypelist>>{});
 }
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 template <typename... T>
-#if __cplusplus >= 202002L
+#if CPLUSPLUS_VERSION >= 202002L
   requires(detail::is_named_argument<T> && ...)
 #endif
 inline int $(std::vector<std::string> cmd, T &&...args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert((detail::is_named_argument<T>) && ...);
+#endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 template <typename... Args>
-#if __cplusplus >= 202002L
+#if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
            ...)
 #endif
 inline int $(Args... args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert(
+      (detail::is_named_argument<Args> || detail::is_string_type<Args>) && ...);
+#endif
   return run(std::forward<Args>(args)...);
 }
 #endif
