@@ -766,14 +766,31 @@ struct File {
 };
 
 class Buffer {
- public:
-  Buffer(std::vector<char> &buf) : buf_{std::ref(buf)}, pipe_{Pipe::create()} {}
+  using buffer_container_type = std::vector<char>;
 
-  std::vector<char> &buf() { return buf_.get(); }
+ public:
+  Buffer(buffer_container_type &buf)
+      : buf_{std::ref(buf)}, pipe_{Pipe::create()} {}
+  Buffer() : buf_{buffer_container_type{}}, pipe_{Pipe::create()} {}
+
+  std::vector<char> &buf() {
+    return std::visit(
+        []<typename T>(T &value) -> buffer_container_type & {
+          if constexpr (std::is_same_v<T, buffer_container_type>) {
+            return value;
+          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
+                                                     buffer_container_type>>) {
+            return value.get();
+          }
+        },
+        buf_);
+  }
   Pipe &pipe() { return pipe_; }
 
  private:
-  std::reference_wrapper<std::vector<char>> buf_;
+  std::variant<std::reference_wrapper<buffer_container_type>,
+               buffer_container_type>
+      buf_;
   Pipe pipe_;
 };
 

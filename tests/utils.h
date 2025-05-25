@@ -12,8 +12,8 @@
 #include <fstream>
 #include <string>
 
-std::string getTempFilePath(std::string const& prefix,
-                            std::string const& postfix) {
+inline std::string getTempFilePath(std::string const& prefix,
+                                   std::string const& postfix) {
   std::string temp_file_path;
 
 #ifdef _WIN32
@@ -32,15 +32,29 @@ std::string getTempFilePath(std::string const& prefix,
   }
 
 #else
-  std::string template_str = "/tmp/";
+  std::string temp_dir = []() -> std::string {
+    char* tmpdir = getenv("TMPDIR");
+    if (tmpdir != nullptr) {
+      return std::string(tmpdir);
+    } else {
+      return "/tmp";
+    }
+  }();
+  std::string template_str = temp_dir;
+  if (!template_str.ends_with('/')) {
+    template_str.push_back('/');
+  }
   if (!prefix.empty()) {
     template_str += prefix;
   }
   template_str += "XXXXXX";
+  [[maybe_unused]] int suffix_len = 0;
   if (!postfix.empty()) {
     template_str += postfix;
+    suffix_len = postfix.length();
   }
-  int fd = mkstemp(template_str.data());
+  // int fd = mkstemp(template_str.data());
+  int fd = mkstemps(template_str.data(), suffix_len);
   if (fd == -1) {
     throw std::runtime_error("Failed to create temporary file.");
   }
