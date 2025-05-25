@@ -20,7 +20,7 @@ TEST(SubprocessTest, CommandNotExists) {
 
 TEST(SubprocessTest, NoPermission) {
   TempFile temp;
-#if defined(_WIN32)
+#if defined(_WIN32) && 0
   std::string content = R"(@echo off
 echo 123
 )";
