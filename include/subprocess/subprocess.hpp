@@ -242,11 +242,11 @@ inline std::string get_last_error_msg() {
   return out.str();
 #else   // _WIN32
   int error = errno;
-  std::vector<char> buffer(512);
-  if (strerror_r(error, buffer.data(), buffer.size())) {
-    return std::string(buffer.data());
+  auto *err_msg = strerror(error);
+  if (err_msg) {
+    return std::string(err_msg);
   } else {
-    return "Unknow error or strerror_r failed, error code: " +
+    return "Unknow error or strerror failed, error code: " +
            std::to_string(errno);
   }
 #endif  // !_WIN32
@@ -1272,11 +1272,13 @@ class subprocess {
                      [](auto &s) { return s.data(); });
       envs.push_back(nullptr);
       execve(exe_to_exec.c_str(), cmd.data(), envs.data());
+      std::cerr << "execve(" << exe_to_exec
+                << ") failed: " << get_last_error_msg() << '\n';
     } else {
       execv(exe_to_exec.c_str(), cmd.data());
+      std::cerr << "execv(" << exe_to_exec
+                << ") failed: " << get_last_error_msg() << '\n';
     }
-    std::cerr << "exec failed for: " << exe_to_exec
-              << ", error: " << get_last_error_msg() << '\n';
     _Exit(127);
   }
 #endif  // !_WIN32
