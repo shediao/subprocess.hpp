@@ -31,7 +31,7 @@ jobs:
         with:
           msystem: ${{matrix.msystem}}
           update: true
-          install: git gcc clang cmake ninja mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+          install: git gcc clang cmake ninja mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-x86_64-gcc mingw-w64-x86_64-clang mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
       - name: Set reusable strings
         id: strings
         run: |
@@ -48,7 +48,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DSUBPROCESS_BUILD_TESTS=ON
           -G Ninja
-          -S ${{ steps.strings.source-dir }}
+          -S ${{ steps.strings.outputs.source-dir }}
 
       - name: Build
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
