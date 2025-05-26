@@ -22,15 +22,19 @@ TEST(SubprocessTest, NoPermission) {
   TempFile temp;
 #if defined(_WIN32)
   std::string content = R"(@echo off
-echo 123
+exit /b 0
 )";
   temp.write(content);
   ASSERT_EQ(127, run(temp.path()));
 #else
   std::string content = R"(#!/bin/bash
-echo 123
+exit 0
 )";
   temp.write(content);
+#if defined(__CYGWIN__) || defined(__MSYS__)
+  ASSERT_EQ(0, run(temp.path()));
+#else
   ASSERT_EQ(127, run(temp.path()));
+#endif
 #endif
 }
