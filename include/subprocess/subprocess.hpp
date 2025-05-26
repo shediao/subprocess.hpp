@@ -235,12 +235,17 @@ inline std::vector<char> create_environment_string_data(
 inline std::string get_last_error_msg() {
 #if defined(_WIN32)
   DWORD error = GetLastError();
-  LPVOID errorMsg;
+  LPVOID errorMsg{NULL};
   std::stringstream out;
-  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-                NULL, error, 0, (LPTSTR)&errorMsg, 0, NULL);
-  out << "Error " << error << ": " << (char *)errorMsg;
-  LocalFree(errorMsg);
+  out << "Error: " << error;
+  FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                     FORMAT_MESSAGE_IGNORE_INSERTS,
+                 NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                 (LPSTR)&errorMsg, 0, NULL);
+  if (errorMsg) {
+    out << ": " << (char *)errorMsg;
+    LocalFree(errorMsg);
+  }
   return out.str();
 #else   // _WIN32
   int error = errno;
