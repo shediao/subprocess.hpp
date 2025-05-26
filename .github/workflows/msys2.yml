@@ -34,10 +34,11 @@ jobs:
           install: git gcc clang cmake ninja mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
       - name: Set reusable strings
         id: strings
-        shell: bash
         run: |
-          echo "build-output-dir=$(cygpath -m '${{ github.workspace }}')/build" >> "$GITHUB_OUTPUT"
+          echo "build-output-dir=$(cygpath -u '${{ github.workspace }}')/build" >> "$GITHUB_OUTPUT"
+          echo "source-dir=$(cygpath -u '${{ github.workspace }}')" >> "$GITHUB_OUTPUT"
           which bash cmake ninja gcc g++ clang clang++
+          cat "$GITHUB_OUTPUT"
 
       - name: Configure CMake
         run: >
@@ -47,7 +48,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DSUBPROCESS_BUILD_TESTS=ON
           -G Ninja
-          -S '${{ github.workspace }}'
+          -S ${{ steps.strings.source-dir }}
 
       - name: Build
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
