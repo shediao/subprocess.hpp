@@ -300,7 +300,7 @@ inline void read_from_native_handle(NativeHandle &fd,
     out_buf.insert(out_buf.end(), buf, buf + read_count);
   }
 #else
-  auto read_count = 0;
+  ssize_t read_count = 0;
   do {
     read_count = read(fd, buf, std::size(buf));
     if (read_count > 0) {
@@ -396,27 +396,28 @@ inline void read_from_native_handle(NativeHandle &fd,
 
   fd_set read_fds;
   fd_set write_fds;
-  int max_fd = std::max(std::max(in, out), err);
-
-  struct timeval timeout;
-  timeout.tv_sec = 10;
-  timeout.tv_usec = 0;
-  while (true) {
+  while (in != INVALID_NATIVE_HANDLE_VALUE ||
+         out != INVALID_NATIVE_HANDLE_VALUE ||
+         err != INVALID_NATIVE_HANDLE_VALUE) {
     FD_ZERO(&write_fds);
+    FD_ZERO(&read_fds);
     if (in != INVALID_NATIVE_HANDLE_VALUE) {
       FD_SET(in, &write_fds);
     }
     if (out != INVALID_NATIVE_HANDLE_VALUE) {
-      FD_SET(in, &read_fds);
+      FD_SET(out, &read_fds);
     }
     if (err != INVALID_NATIVE_HANDLE_VALUE) {
       FD_SET(err, &read_fds);
     }
-    max_fd = std::max(std::max(in, out), err);
+    auto max_fd = std::max(std::max(in, out), err);
     auto const ready =
-        select(max_fd + 1, &read_fds, &write_fds, nullptr, &timeout);
+        select(max_fd + 1, &read_fds, &write_fds, nullptr, nullptr);
     if (ready == 0) {
-      continue;
+      close_native_handle(in);
+      close_native_handle(out);
+      close_native_handle(err);
+      break;
     }
     if (ready == -1) {
       throw std::runtime_error(get_last_error_msg());
@@ -456,11 +457,6 @@ inline void read_from_native_handle(NativeHandle &fd,
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
       }
-    }
-    if (in == INVALID_NATIVE_HANDLE_VALUE &&
-        out == INVALID_NATIVE_HANDLE_VALUE &&
-        err == INVALID_NATIVE_HANDLE_VALUE) {
-      break;
     }
   }
 }
