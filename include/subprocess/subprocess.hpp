@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -23,6 +24,9 @@
 #else
 #include <fcntl.h>
 #include <poll.h>
+#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
+#include <spawn.h>
+#endif
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -964,6 +968,32 @@ class Stdio {
         },
         *redirect_);
   }
+
+#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
+  void setup_stdio_for_posix_spawn(posix_spawn_file_actions_t &action) {
+    if (!redirect_) {
+      return;
+    }
+    std::visit(
+        [this, &action]<typename T>([[maybe_unused]] T &value) {
+          if constexpr (std::is_same_v<T, Pipe>) {
+            posix_spawn_file_actions_adddup2(
+                &action, value[fileno() == 0 ? 0 : 1], fileno());
+            posix_spawn_file_actions_addclose(&action, value[0]);
+            posix_spawn_file_actions_addclose(&action, value[1]);
+          } else if constexpr (std::is_same_v<T, File>) {
+            posix_spawn_file_actions_adddup2(&action, value.fd(), fileno());
+            posix_spawn_file_actions_addclose(&action, value.fd());
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+            posix_spawn_file_actions_adddup2(
+                &action, value.pipe()[fileno() == 0 ? 0 : 1], fileno());
+            posix_spawn_file_actions_addclose(&action, value.pipe()[0]);
+            posix_spawn_file_actions_addclose(&action, value.pipe()[1]);
+          }
+        },
+        *redirect_);
+  }
+#endif  // SUBPROCESS_USE_POSIX_SPAWN
   std::optional<std::reference_wrapper<NativeHandle>>
   get_parent_pipe_fd_for_polling() {
     if (!redirect_) {
@@ -1227,6 +1257,16 @@ class subprocess {
       stderr_.close_all();
     }
 #else
+#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
+    posix_spawn_file_actions_t action;
+    if (0 != posix_spawn_file_actions_init(&action)) {
+      std::runtime_error("posix_spawn_file_actions_init failed: " +
+                         get_last_error_msg());
+    }
+    add_posix_spawn_file_actions(action);
+    posix_spawn_file_actions_destroy(&action);
+    manage_pipe_io();
+#else   // SUBPROCESS_USE_POSIX_SPAWN
     auto pid = fork();
     if (pid < 0) {
       throw std::runtime_error("fork failed");
@@ -1236,7 +1276,8 @@ class subprocess {
       pid_ = pid;
       manage_pipe_io();
     }
-#endif
+#endif  // !SUBPROCESS_USE_POSIX_SPAWN
+#endif  // !_WIN32
   }
 
   int run() {
@@ -1259,6 +1300,9 @@ class subprocess {
   }
 #else
   int wait_for_exit() {
+    if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
+      return 127;
+    }
     int status;
     waitpid(pid_, &status, 0);
     auto return_code = -1;
@@ -1356,6 +1400,59 @@ class subprocess {
     }
     _Exit(127);
   }
+#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
+  void add_posix_spawn_file_actions(posix_spawn_file_actions_t &action) {
+    stdin_.setup_stdio_for_posix_spawn(action);
+    stdout_.setup_stdio_for_posix_spawn(action);
+    stderr_.setup_stdio_for_posix_spawn(action);
+
+    std::vector<char *> cmd{};
+    std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
+                   [](std::string &s) { return s.data(); });
+    cmd.push_back(nullptr);
+    if (!cwd_.empty() &&
+#if defined(__APPLE__) && defined(__MACH__)
+        (-1 == posix_spawn_file_actions_addchdir_np(&action, cwd_.data()))) {
+      throw std::runtime_error(get_last_error_msg());
+#else  // other POSIX systems, try the standard version
+        (-1 == posix_spawn_file_actions_addchdir(&action, cwd_.data()))) {
+      throw std::runtime_error(get_last_error_msg());
+#endif
+    }
+
+    std::string exe_to_exec = cmd_[0];
+    if (exe_to_exec.find('/') == std::string::npos) {
+      std::filesystem::path resolved_path =
+          find_executable_in_path(exe_to_exec);
+      if (!resolved_path.empty()) {
+        exe_to_exec = resolved_path.string();
+      }
+    }
+
+    std::vector<char *> envs{};
+    if (!env_.empty()) {
+      std::vector<std::string> env_tmp{};
+
+      std::transform(
+          env_.begin(), env_.end(), std::back_inserter(env_tmp),
+          [](auto &entry) { return entry.first + "=" + entry.second; });
+
+      std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
+                     [](auto &s) { return s.data(); });
+      envs.push_back(nullptr);
+      auto ret = posix_spawn(&pid_, exe_to_exec.c_str(), &action, nullptr,
+                             cmd.data(), envs.data());
+      if (ret != 0) {
+        pid_ = INVALID_NATIVE_HANDLE_VALUE;
+      }
+    }
+    auto ret = posix_spawn(&pid_, exe_to_exec.c_str(), &action, nullptr,
+                           cmd.data(), envs.empty() ? nullptr : envs.data());
+    if (ret != 0) {
+      pid_ = INVALID_NATIVE_HANDLE_VALUE;
+    }
+  }
+#endif  // SUBPROCESS_USE_POSIX_SPAWN
 #endif  // !_WIN32
 
  private:

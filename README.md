@@ -97,7 +97,7 @@ copy `subprocess.hpp` to myproject/dir/include/subprocess/
 
 ## TODO
 
-1. support msys, cygwin, bsd, ...
+1. set process priority
 2. windows unicode
 3. pipe run subprocess
 4. parallel run subprocess
