@@ -503,23 +503,6 @@ inline void read_write_per_thread(NativeHandle &in, std::vector<char> &in_buf,
   }
 }
 
-inline void create_pipe(NativeHandle *fds) {
-#if defined(_WIN32)
-  SECURITY_ATTRIBUTES at;
-  at.bInheritHandle = true;
-  at.nLength = sizeof(SECURITY_ATTRIBUTES);
-  at.lpSecurityDescriptor = nullptr;
-
-  if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 0)) {
-    throw std::runtime_error{get_last_error_msg()};
-  }
-#else
-  if (-1 == pipe(fds)) {
-    throw std::runtime_error{"pipe failed"};
-  }
-#endif
-}
-
 inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
                              NativeHandle &out, std::vector<char> &out_buf,
                              NativeHandle &err, std::vector<char> &err_buf) {
@@ -681,11 +664,29 @@ class Pipe {
     close_read();
     close_write();
   }
-  NativeHandle &operator[](int i) { return fds_[i]; }
+  NativeHandle &read() { return fds_[0]; }
+  NativeHandle &write() { return fds_[1]; }
+
+  static inline void create_native_pipe(NativeHandle *fds) {
+#if defined(_WIN32)
+    SECURITY_ATTRIBUTES at;
+    at.bInheritHandle = true;
+    at.nLength = sizeof(SECURITY_ATTRIBUTES);
+    at.lpSecurityDescriptor = nullptr;
+
+    if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 0)) {
+      throw std::runtime_error{get_last_error_msg()};
+    }
+#else
+    if (-1 == pipe(fds)) {
+      throw std::runtime_error{"pipe failed"};
+    }
+#endif
+  }
 
  private:
   explicit Pipe() : fds_{std::make_shared<NativeHandle[]>(2)} {
-    create_pipe(fds_.get());
+    create_native_pipe(fds_.get());
   }
   std::shared_ptr<NativeHandle[]> fds_;
 };
@@ -821,19 +822,19 @@ class Stdio {
     std::visit(
         []<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            if (value[0] != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> pipe[0] not closed!" << '\n';
+            if (value.read() != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> pipe.read() not closed!" << '\n';
             }
-            if (value[1] != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> pipe[1] not closed!" << '\n';
+            if (value.write() != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> pipe.write() not closed!" << '\n';
             }
 
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            if (value.pipe()[0] != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> buffer.pipe[0] not closed!" << '\n';
+            if (value.pipe().read() != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> buffer.pipe.read() not closed!" << '\n';
             }
-            if (value.pipe()[1] != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> buffer.pipe[1] not closed!" << '\n';
+            if (value.pipe().write() != INVALID_NATIVE_HANDLE_VALUE) {
+              std::cerr << ">> buffer.pipe.write() not closed!" << '\n';
             }
           }
         },
@@ -883,11 +884,12 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            close_native_handle(value[fileno() == 0 ? 0 : 1]);
+            close_native_handle(fileno() == 0 ? value.read() : value.write());
           } else if constexpr (std::is_same_v<T, File>) {
             value.close();
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            close_native_handle(value.pipe()[fileno() == 0 ? 0 : 1]);
+            close_native_handle(fileno() == 0 ? value.pipe().read()
+                                              : value.pipe().write());
           }
         },
         *redirect_);
@@ -951,14 +953,15 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            dup2(value[fileno() == 0 ? 0 : 1], fileno());
-            close_native_handle(value[0]);
-            close_native_handle(value[1]);
+            dup2(fileno() == 0 ? value.read() : value.write(), fileno());
+            close_native_handle(value.read());
+            close_native_handle(value.write());
           } else if constexpr (std::is_same_v<T, File>) {
             dup2(value.fd(), fileno());
             value.close();
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            dup2(value.pipe()[fileno() == 0 ? 0 : 1], fileno());
+            dup2(fileno() == 0 ? value.pipe().read() : value.pipe().write(),
+                 fileno());
             value.pipe().close_all();
           }
         },
@@ -974,17 +977,20 @@ class Stdio {
         [this, &action]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             posix_spawn_file_actions_adddup2(
-                &action, value[fileno() == 0 ? 0 : 1], fileno());
-            posix_spawn_file_actions_addclose(&action, value[0]);
-            posix_spawn_file_actions_addclose(&action, value[1]);
+                &action, fileno() == 0 ? value.read() : value.write(),
+                fileno());
+            posix_spawn_file_actions_addclose(&action, value.read());
+            posix_spawn_file_actions_addclose(&action, value.write());
           } else if constexpr (std::is_same_v<T, File>) {
             posix_spawn_file_actions_adddup2(&action, value.fd(), fileno());
             posix_spawn_file_actions_addclose(&action, value.fd());
           } else if constexpr (std::is_same_v<T, Buffer>) {
             posix_spawn_file_actions_adddup2(
-                &action, value.pipe()[fileno() == 0 ? 0 : 1], fileno());
-            posix_spawn_file_actions_addclose(&action, value.pipe()[0]);
-            posix_spawn_file_actions_addclose(&action, value.pipe()[1]);
+                &action,
+                fileno() == 0 ? value.pipe().read() : value.pipe().write(),
+                fileno());
+            posix_spawn_file_actions_addclose(&action, value.pipe().read());
+            posix_spawn_file_actions_addclose(&action, value.pipe().write());
           }
         },
         *redirect_);
@@ -999,7 +1005,8 @@ class Stdio {
         [this]<typename T>([[maybe_unused]] T &value)
             -> std::optional<std::reference_wrapper<NativeHandle>> {
           if constexpr (std::is_same_v<T, Buffer>) {
-            return std::ref(value.pipe()[fileno() == 0 ? 1 : 0]);
+            return std::ref(fileno() == 0 ? value.pipe().write()
+                                          : value.pipe().read());
           } else {
             return std::nullopt;
           }
