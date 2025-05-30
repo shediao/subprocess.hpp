@@ -667,6 +667,7 @@ class Pipe {
   NativeHandle &read() { return fds_[0]; }
   NativeHandle &write() { return fds_[1]; }
 
+ private:
   static inline void create_native_pipe(NativeHandle *fds) {
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES at;
@@ -683,8 +684,6 @@ class Pipe {
     }
 #endif
   }
-
- private:
   explicit Pipe() : fds_{std::make_shared<NativeHandle[]>(2)} {
     create_native_pipe(fds_.get());
   }
@@ -848,7 +847,8 @@ class Stdio {
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
-            NativeHandle non_inherit_handle = value[fileno() == 0 ? 1 : 0];
+            NativeHandle non_inherit_handle =
+                fileno() == 0 ? value.write() : value.read();
             if (non_inherit_handle != INVALID_NATIVE_HANDLE_VALUE &&
                 !SetHandleInformation(non_inherit_handle, HANDLE_FLAG_INHERIT,
                                       0)) {
@@ -865,7 +865,7 @@ class Stdio {
           } else if constexpr (std::is_same_v<T, Buffer>) {
 #if defined(_WIN32)
             NativeHandle non_inherit_handle =
-                value.pipe()[fileno() == 0 ? 1 : 0];
+                fileno() == 0 ? value.pipe().write() : value.pipe().read();
             if (non_inherit_handle != INVALID_NATIVE_HANDLE_VALUE &&
                 !SetHandleInformation(non_inherit_handle, HANDLE_FLAG_INHERIT,
                                       0)) {
@@ -919,11 +919,11 @@ class Stdio {
         [this]<typename T>(
             [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
           if constexpr (std::is_same_v<T, Pipe>) {
-            return value[fileno() == 0 ? 0 : 1];
+            return fileno() == 0 ? value.read() : value.write();
           } else if constexpr (std::is_same_v<T, File>) {
             return value.fd();
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            return value.pipe()[fileno() == 0 ? 0 : 1];
+            return fileno() == 0 ? value.pipe().read() : value.pipe().write();
           }
         },
         *redirect_);
@@ -937,7 +937,8 @@ class Stdio {
         [this]<typename T>([[maybe_unused]] T &value)
             -> std::optional<std::reference_wrapper<NativeHandle>> {
           if constexpr (std::is_same_v<T, Buffer>) {
-            return std::ref(value.pipe()[fileno() == 0 ? 1 : 0]);
+            return std::ref(fileno() == 0 ? value.pipe().write()
+                                          : value.pipe().read());
           } else {
             return std::nullopt;
           }
