@@ -1075,7 +1075,7 @@ struct stderr_redirector {
 };
 
 struct Cwd {
-  std::filesystem::path cwd;
+  std::string cwd;
 };
 
 struct Env {
@@ -1115,11 +1115,11 @@ namespace named_args {
 #else
 [[maybe_unused]] inline const static auto devnull = std::string{"/dev/null"};
 #endif
-[[maybe_unused]] inline const static stdin_redirector std_in;
-[[maybe_unused]] inline const static stdout_redirector std_out;
-[[maybe_unused]] inline const static stderr_redirector std_err;
-[[maybe_unused]] inline const static cwd_operator cwd;
-[[maybe_unused]] inline const static env_operator env;
+[[maybe_unused]] inline constexpr static stdin_redirector std_in;
+[[maybe_unused]] inline constexpr static stdout_redirector std_out;
+[[maybe_unused]] inline constexpr static stderr_redirector std_err;
+[[maybe_unused]] inline constexpr static cwd_operator cwd;
+[[maybe_unused]] inline constexpr static env_operator env;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
@@ -1127,11 +1127,11 @@ namespace named_args {
 #else
 [[maybe_unused]] inline const static auto $devnull = std::string{"/dev/null"};
 #endif
-[[maybe_unused]] inline const static stdin_redirector $stdin;
-[[maybe_unused]] inline const static stdout_redirector $stdout;
-[[maybe_unused]] inline const static stderr_redirector $stderr;
-[[maybe_unused]] inline const static cwd_operator $cwd;
-[[maybe_unused]] inline const static env_operator $env;
+[[maybe_unused]] inline constexpr static stdin_redirector $stdin;
+[[maybe_unused]] inline constexpr static stdout_redirector $stdout;
+[[maybe_unused]] inline constexpr static stderr_redirector $stderr;
+[[maybe_unused]] inline constexpr static cwd_operator $cwd;
+[[maybe_unused]] inline constexpr static env_operator $env;
 #endif
 }  // namespace named_args
 #if CPLUSPLUS_VERSION >= 202002L
@@ -1206,7 +1206,7 @@ class subprocess {
                env_appends.push_back(arg.kv);
              }
              if constexpr (std::is_same_v<ArgType, Cwd>) {
-               cwd_ = arg.cwd.string();
+               cwd_ = arg.cwd;
              }
              static_assert(std::is_same_v<Env, std::decay_t<T>> ||
                                std::is_same_v<Stdin, std::decay_t<T>> ||
