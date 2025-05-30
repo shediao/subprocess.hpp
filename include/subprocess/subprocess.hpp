@@ -1092,44 +1092,46 @@ struct EnvItemAppend {
 };
 
 struct cwd_operator {
-  Cwd operator=(std::string const &p) { return Cwd{p}; }
+  Cwd operator=(std::string const &p) const { return Cwd{p}; }
 };
 struct env_operator {
-  Env operator=(std::map<std::string, std::string> env) {
+  Env operator=(std::map<std::string, std::string> env) const {
     return Env{std::move(env)};
   }
-  Env operator+=(std::map<std::string, std::string> env) {
+  Env operator+=(std::map<std::string, std::string> env) const {
     std::map<std::string, std::string> env_tmp{
         get_current_environment_variables()};
     env_tmp.insert(env.begin(), env.end());
     return Env{std::move(env_tmp)};
   }
-  EnvItemAppend operator[](std::string key) { return EnvItemAppend{{key, ""}}; }
+  EnvItemAppend operator[](std::string key) const {
+    return EnvItemAppend{{key, ""}};
+  }
 };
 
 namespace named_args {
 #if defined(_WIN32)
-[[maybe_unused]] inline static auto devnull = std::string{"NUL"};
+[[maybe_unused]] inline const static auto devnull = std::string{"NUL"};
 #else
-[[maybe_unused]] inline static auto devnull = std::string{"/dev/null"};
+[[maybe_unused]] inline const static auto devnull = std::string{"/dev/null"};
 #endif
-[[maybe_unused]] inline static stdin_redirector std_in;
-[[maybe_unused]] inline static stdout_redirector std_out;
-[[maybe_unused]] inline static stderr_redirector std_err;
-[[maybe_unused]] inline static cwd_operator cwd;
-[[maybe_unused]] inline static env_operator env;
+[[maybe_unused]] inline const static stdin_redirector std_in;
+[[maybe_unused]] inline const static stdout_redirector std_out;
+[[maybe_unused]] inline const static stderr_redirector std_err;
+[[maybe_unused]] inline const static cwd_operator cwd;
+[[maybe_unused]] inline const static env_operator env;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
-[[maybe_unused]] inline static auto $devnull = std::string{"NUL"};
+[[maybe_unused]] inline const static auto $devnull = std::string{"NUL"};
 #else
-[[maybe_unused]] inline static auto $devnull = std::string{"/dev/null"};
+[[maybe_unused]] inline const static auto $devnull = std::string{"/dev/null"};
 #endif
-[[maybe_unused]] inline static stdin_redirector $stdin;
-[[maybe_unused]] inline static stdout_redirector $stdout;
-[[maybe_unused]] inline static stderr_redirector $stderr;
-[[maybe_unused]] inline static cwd_operator $cwd;
-[[maybe_unused]] inline static env_operator $env;
+[[maybe_unused]] inline const static stdin_redirector $stdin;
+[[maybe_unused]] inline const static stdout_redirector $stdout;
+[[maybe_unused]] inline const static stderr_redirector $stderr;
+[[maybe_unused]] inline const static cwd_operator $cwd;
+[[maybe_unused]] inline const static env_operator $env;
 #endif
 }  // namespace named_args
 #if CPLUSPLUS_VERSION >= 202002L
