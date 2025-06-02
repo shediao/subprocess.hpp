@@ -703,12 +703,13 @@ struct File {
   explicit File(std::string const &p, bool append = false)
       : path_{p}, append_{append} {}
 
-  File(File &&o) : path_{std::move(o.path_)}, append_{o.append_}, fd_{o.fd_} {
+  File(File &&o) noexcept
+      : path_{std::move(o.path_)}, append_{o.append_}, fd_{o.fd_} {
     o.path_ = "";
     o.append_ = false;
     o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
   }
-  File &operator=(File &&o) {
+  File &operator=(File &&o) noexcept {
     close();
     path_ = std::move(o.path_);
     append_ = o.append_;
@@ -810,8 +811,8 @@ class Stdio {
       : redirect_(std::make_unique<value_type>(std::move(f))) {}
   explicit Stdio(std::vector<char> &buf)
       : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
-  Stdio(Stdio &&) = default;
-  Stdio &operator=(Stdio &&) = default;
+  Stdio(Stdio &&) noexcept = default;
+  Stdio &operator=(Stdio &&) noexcept = default;
   Stdio(Stdio const &) = delete;
   Stdio &operator=(Stdio const &) = delete;
   virtual ~Stdio() {
@@ -1024,8 +1025,8 @@ class Stdio {
 class Stdin : public Stdio {
  public:
   using Stdio::Stdio;
-  Stdin(Stdin &&) = default;
-  Stdin &operator=(Stdin &&) = default;
+  Stdin(Stdin &&) noexcept = default;
+  Stdin &operator=(Stdin &&) noexcept = default;
   Stdin(Stdin const &) = delete;
   Stdin &operator=(Stdin const &) = delete;
   int fileno() const override { return 0; }
@@ -1033,8 +1034,8 @@ class Stdin : public Stdio {
 class Stdout : public Stdio {
  public:
   using Stdio::Stdio;
-  Stdout(Stdout &&) = default;
-  Stdout &operator=(Stdout &&) = default;
+  Stdout(Stdout &&) noexcept = default;
+  Stdout &operator=(Stdout &&) noexcept = default;
   Stdout(Stdout const &) = delete;
   Stdout &operator=(Stdout const &) = delete;
   int fileno() const override { return 1; }
@@ -1042,8 +1043,8 @@ class Stdout : public Stdio {
 class Stderr : public Stdio {
  public:
   using Stdio::Stdio;
-  Stderr(Stderr &&) = default;
-  Stderr &operator=(Stderr &&) = default;
+  Stderr(Stderr &&) noexcept = default;
+  Stderr &operator=(Stderr &&) noexcept = default;
   Stderr(Stderr const &) = delete;
   Stderr &operator=(Stderr const &) = delete;
   int fileno() const override { return 2; }
@@ -1223,8 +1224,8 @@ class subprocess {
     startupinfo_.cb = sizeof(startupinfo_);
 #endif
   }
-  subprocess(subprocess &&) = default;
-  subprocess &operator=(subprocess &&) = default;
+  subprocess(subprocess &&) noexcept = default;
+  subprocess &operator=(subprocess &&) noexcept = default;
   subprocess(const subprocess &) = delete;
   subprocess &operator=(const subprocess &) = delete;
 
