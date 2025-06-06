@@ -28,14 +28,15 @@
 #include <spawn.h>
 #endif
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -182,6 +183,18 @@ class HandleGuard {
 }  // namespace detail
 
 namespace {
+
+std::vector<std::string> split(const std::string &s, char del) {
+  std::istringstream stream{s};
+  std::vector<std::string> ret;
+  std::string line;
+  while (std::getline(stream, line, del)) {
+    if (!line.empty()) {
+      ret.push_back(line);
+    }
+  }
+  return ret;
+}
 
 #if defined(_WIN32)
 inline std::vector<char> create_command_string_data(
@@ -513,7 +526,65 @@ inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
 #endif
 }
 
-inline std::filesystem::path find_executable_in_path(
+#if defined(_WIN32)
+std::optional<std::string> get_file_extension(std::string const &f) {
+  auto const dotPos = f.rfind('.');
+  if (dotPos == std::string::npos) {
+    return std::nullopt;
+  }
+
+  if (dotPos == f.length() - 1) {
+    return std::nullopt;
+  }
+
+  auto const separatorPos = f.find_last_of("/\\");
+  if (separatorPos != std::string::npos) {
+    if (separatorPos > dotPos) {
+      return std::nullopt;
+    }
+    if (dotPos == separatorPos + 1) {
+      return std::nullopt;
+    }
+  } else {
+    if (dotPos == 0) {
+      return std::nullopt;
+    }
+  }
+  return f.substr(dotPos + 1);
+}
+#endif  // !_WIN32
+
+bool is_executable(std::string const &f) {
+#if defined(_WIN32)
+  auto attr = GetFileAttributesA(f.c_str());
+  return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+#else
+  struct stat sb;
+  return (stat(f.c_str(), &sb) == 0 && S_ISREG(sb.st_mode) &&
+          access(f.c_str(), X_OK) == 0);
+#endif
+}
+
+std::optional<std::string> get_env(std::string const &key) {
+#if defined(_WIN32)
+  char *buf{nullptr};
+  size_t len = 0;
+  _dupenv_s(&buf, &len, key.c_str());
+  if (buf != nullptr) {
+    auto ret = std::string(buf);
+    free(buf);
+    return ret;
+  }
+#else
+  auto *env = getenv(key.c_str());
+  if (env) {
+    return std::string(env);
+  }
+#endif
+  return std::nullopt;
+}
+
+inline std::optional<std::string> find_command_in_path(
     std::string const &exe_file) {
 #ifdef _WIN32
   char separator = '\\';
@@ -522,69 +593,49 @@ inline std::filesystem::path find_executable_in_path(
   char separator = '/';
   char path_env_sep = ':';
 #endif
-  auto split_env = [](const char *env, char sep) {
-    std::istringstream stream;
-#if defined(_WIN32)
-    char *buf{nullptr};
-    size_t len = 0;
-    _dupenv_s(&buf, &len, env);
-    if (buf != nullptr) {
-      stream.str(std::string(buf));
-      free(buf);
-    }
-#else
-    stream.str(getenv(env));
-#endif
 
-    std::vector<std::string> ret;
-    std::string line;
-    while (std::getline(stream, line, sep)) {
-      if (!line.empty()) {
-        ret.push_back(line);
-      }
-    }
-    return ret;
-  };
-  if (exe_file.find(separator) == std::string::npos) {
-    std::vector<std::string> paths{split_env("PATH", path_env_sep)};
+  if (exe_file.find_last_of("/\\") != std::string::npos) {
+    return std::nullopt;
+  }
+  auto paths = split(get_env("PATH").value_or(""), path_env_sep);
 #ifdef _WIN32
-    std::vector<std::string> path_exts{split_env("PATHEXT", path_env_sep)};
+  auto path_exts = split(
+      get_env("PATHEXT").value_or(
+          ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"),
+      path_env_sep);
+  for (auto &ext : path_exts) {
+    std::transform(begin(ext), end(ext), ext.begin(), ::tolower);
+  }
+  path_exts.insert(path_exts.begin(), "");
 #endif
-    for (auto &p : paths) {
+  for (auto &p : paths) {
 #ifdef _WIN32
-      std::filesystem::path current_exe_path =
-          std::filesystem::path(p) / exe_file;
-      if (std::filesystem::path(exe_file).has_extension()) {
-        if (exists(current_exe_path) &&
-            std::filesystem::is_regular_file(current_exe_path)) {
-          return current_exe_path;
-        }
-      } else {
-        for (auto &ext : path_exts) {
-          std::string exe_with_ext = exe_file;
-          if (!ext.empty() && ext[0] != '.') {
-            exe_with_ext += ".";
-          }
-          exe_with_ext += ext;
-          auto f = std::filesystem::path(p) / exe_with_ext;
-          if (exists(f) && std::filesystem::is_regular_file(f)) {
-            return f;
-          }
-        }
-        if (exists(current_exe_path) &&
-            std::filesystem::is_regular_file(current_exe_path)) {
-          return current_exe_path;
-        }
-      }
-#else
-      auto f = std::filesystem::path(p) / exe_file;
-      if (std::filesystem::is_regular_file(f) && 0 == access(f.c_str(), X_OK)) {
+    std::string f = p + separator + exe_file;
+    auto ext = get_file_extension(f);
+    if (ext.has_value()) {
+      if (is_executable(f)) {
         return f;
       }
-#endif
+    } else {
+      for (auto ext : path_exts) {
+        std::string f_with_ext{f};
+        if (!ext.empty() && ext[0] != '.') {
+          f_with_ext += ".";
+        }
+        f_with_ext += ext;
+        if (is_executable(f_with_ext)) {
+          return f_with_ext;
+        }
+      }
     }
+#else
+    std::string f = p + separator + exe_file;
+    if (is_executable(f)) {
+      return f;
+    }
+#endif
   }
-  return {};  // Not found
+  return std::nullopt;
 }
 
 inline std::map<std::string, std::string> get_current_environment_variables() {
@@ -1379,10 +1430,9 @@ class subprocess {
 
     std::string exe_to_exec = cmd_[0];
     if (exe_to_exec.find('/') == std::string::npos) {
-      std::filesystem::path resolved_path =
-          find_executable_in_path(exe_to_exec);
-      if (!resolved_path.empty()) {
-        exe_to_exec = resolved_path.string();
+      auto resolved_path = find_command_in_path(exe_to_exec);
+      if (resolved_path.has_value()) {
+        exe_to_exec = resolved_path.value();
       }
     }
 
@@ -1429,10 +1479,9 @@ class subprocess {
 
     std::string exe_to_exec = cmd_[0];
     if (exe_to_exec.find('/') == std::string::npos) {
-      std::filesystem::path resolved_path =
-          find_executable_in_path(exe_to_exec);
-      if (!resolved_path.empty()) {
-        exe_to_exec = resolved_path.string();
+      auto resolved_path = find_command_in_path(exe_to_exec);
+      if (resolved_path.has_value()) {
+        exe_to_exec = resolved_path.value();
       }
     }
 
