@@ -611,8 +611,7 @@ inline std::optional<std::string> find_command_in_path(
   for (auto &p : paths) {
 #ifdef _WIN32
     std::string f = p + separator + exe_file;
-    auto ext = get_file_extension(f);
-    if (ext.has_value()) {
+    if (get_file_extension(f).has_value()) {
       if (is_executable(f)) {
         return f;
       }
