@@ -566,7 +566,7 @@ bool is_executable(std::string const &f) {
 }
 
 std::optional<std::string> get_env(std::string const &key) {
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(__GNUC__)
   char *buf{nullptr};
   size_t len = 0;
   _dupenv_s(&buf, &len, key.c_str());
