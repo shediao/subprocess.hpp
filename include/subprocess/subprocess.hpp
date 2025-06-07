@@ -46,6 +46,18 @@
 #include <variant>
 #include <vector>
 
+#if defined(GetEnvironmentStrings)
+// Unlike most of the WinAPI, GetEnvironmentStrings is a real function and
+// GetEnvironmentStringsA is a macro. In UNICODE builds, GetEnvironmentStrings
+// is also defined as a macro that redirects to GetEnvironmentStringsW, and the
+// narrow character version become inaccessible.
+#if defined(_MSC_VER) || defined(__GNUC__)
+#pragma push_macro("GetEnvironmentStrings")
+#endif
+#undef GetEnvironmentStrings
+#define SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED
+#endif  // defined(GetEnvironmentStrings)
+
 #if !defined(_WIN32)
 extern char **environ;
 #endif  // !_WIN32
@@ -646,26 +658,7 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
   std::map<std::string, std::string> envMap;
 
 #ifdef _WIN32
-#if defined(UNICODE)
-#if defined(GetEnvironmentStrings)
-#define GetEnvironmentStrings_IS_A_MACRO 1
-#define TEMP_GetEnvironmentStrings_VALUE GetEnvironmentStrings
-#undef GetEnvironmentStrings
   char *envBlock = GetEnvironmentStrings();
-#else
-#define GetEnvironmentStrings_IS_A_MACRO 0
-  char *envBlock = GetEnvironmentStrings();
-#endif
-
-#if GetEnvironmentStrings_IS_A_MACRO
-#define GetEnvironmentStrings TEMP_GetEnvironmentStrings_VALUE
-#undef TEMP_GetEnvironmentStrings_VALUE
-#undef GetEnvironmentStrings_IS_A_MACRO
-#endif
-
-#else
-  char *envBlock = GetEnvironmentStrings();
-#endif
   if (envBlock == nullptr) {
     std::cerr << "Error getting environment strings." << std::endl;
     return envMap;
@@ -1661,4 +1654,14 @@ using process::named_arguments::$stderr;
 using process::named_arguments::$stdin;
 using process::named_arguments::$stdout;
 #endif
+
+#if defined(SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED)
+#if defined(_MSC_VER) || defined(__GNUC__)
+#pragma pop_macro("GetEnvironmentStrings")
+#elif defined(UNICODE)
+#define GetEnvironmentStrings GetEnvironmentStringsW
+#endif
+#undef SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED
+#endif  // defined(SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED)
+
 #endif  // __SUBPROCESS_SUBPROCESS_HPP__
