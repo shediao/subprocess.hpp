@@ -2,28 +2,28 @@
 [![cmake-multi-platform](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml)
 [![msys2](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml)
 
-## Basics
+## 基本用法
 
 ```cpp
 #include <subprocess/subprocess.hpp>
 
 using process::run;
-using namespace process::named_arguments;  // for named arguments: std_in,
+using namespace process::named_arguments;  // 用于命名参数: std_in,
                                            // std_out, std_err, cwd, env
 
-// 1. simple usage
+// 1. 简单用法
 int exit_code = run("/bin/echo", "-n", "123");
-int exit_code = run({"/bin/echo", "-n", "123"});  // command is a vector
+int exit_code = run({"/bin/echo", "-n", "123"});  // 命令可以是 vector
 
-// 2. capture stdout&stderr
+// 2. 捕获 stdout 和 stderr
 std::vector<char> stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
-    std_out > stdout_buf,   // > is redirect
-    std_err > stderr_buf    // > is redirect
+    std_out > stdout_buf,   // > 是重定向
+    std_err > stderr_buf    // > 是重定向
 );
 
-// 3. redirect to file
+// 3. 重定向到文件
 std::vector<char> stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
@@ -34,33 +34,33 @@ run(
 std::vector<char> stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
-    std_out >> "/tmp/out.txt",  // >> is append to file
-    std_err >> "/tmp/err.txt"   // >> is append to file
+    std_out >> "/tmp/out.txt",  // >> 是追加到文件
+    std_err >> "/tmp/err.txt"   // >> 是追加到文件
 );
 
-// 4. set environments && append environments
+// 4. 设置环境变量和追加环境变量
 
-// env= is override environments
+// env= 是覆盖环境变量
 run("/usr/bin/printenv", env={
-//                          ^ ~~~override environments
+//                          ^ ~~~覆盖环境变量
   {"e1", "v1"},
   {"e2", "e2"}
 });
 
-// env+= is append to environments
+// env+= 是追加到环境变量
 run("/usr/bin/printenv", env+={
-//                          ^ ~~~ append environments
+//                          ^ ~~~ 追加环境变量
   {"e1", "v1"},
   {"e2", "e2"}
 });
 
 
-// 5. set cwd
+// 5. 设置当前工作目录(cwd)
 run("/bin/pwd", cwd="/home/my");
 
 
 
-// 6. command is a vector
+// 6. 命令是 vector
 std::vector<std::string> cmd;
 cmd.push_back("echo");
 cmd.push_back("-n");
@@ -71,11 +71,11 @@ run(cmd);
 
 ```
 
-## Usage
+## 如何使用
 
-### 1. cmake
+### 1. CMake
 
-```
+```cmake
 FetchContent_Declare(
     subprocess
     GIT_REPOSITORY https://github.com/shediao/subprocess.hpp
@@ -83,26 +83,25 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(subprocess)
 
-target_link_libraries(xxx PRIVATE subprocess::subprocess ...)
+target_link_libraries(你的目标 PRIVATE subprocess::subprocess ...)
 ```
 
-OR
+或者
 
-```
+```cmake
 git clone https://github.com/shediao/subprocess.hpp /path/to/subprocess.hpp
 add_subdirectory(/path/to/subprocess.hpp)
 
 #include <subprocess/subprocess.hpp>
 ```
 
-### 2. others
+### 2. 其他方式
 
-copy `subprocess.hpp` to myproject/dir/include/subprocess/
+将 `subprocess.hpp` 文件复制到你的项目的 `include/subprocess/` 目录下。
 
-## TODO
+## TODO (待办事项)
 
-1. set process priority
-2. windows unicode
-3. pipe run subprocess
-4. parallel run subprocess
-
+1. 设置进程优先级
+2. Windows Unicode 支持
+3. 管道运行子进程
+4. 并行运行子进程
