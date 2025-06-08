@@ -62,7 +62,7 @@
 extern char **environ;
 #endif  // !_WIN32
 
-namespace process {
+namespace subprocess {
 #if defined(__APPLE__) && defined(__MACH__)
 constexpr bool is_macos = true;
 #else
@@ -1643,16 +1643,16 @@ inline pid_type pid() {
 #endif
 }
 
-}  // namespace process
+}  // namespace subprocess
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-using process::$;
-using process::named_arguments::$cwd;
-using process::named_arguments::$devnull;
-using process::named_arguments::$env;
-using process::named_arguments::$stderr;
-using process::named_arguments::$stdin;
-using process::named_arguments::$stdout;
+using subprocess::$;
+using subprocess::named_arguments::$cwd;
+using subprocess::named_arguments::$devnull;
+using subprocess::named_arguments::$env;
+using subprocess::named_arguments::$stderr;
+using subprocess::named_arguments::$stdin;
+using subprocess::named_arguments::$stdout;
 #endif
 
 #if defined(SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED)

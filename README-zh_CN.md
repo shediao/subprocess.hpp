@@ -7,8 +7,8 @@
 ```cpp
 #include <subprocess/subprocess.hpp>
 
-using process::run;
-using namespace process::named_arguments;  // 用于命名参数: std_in,
+using subprocess::run;
+using namespace subprocess::named_arguments;  // 用于命名参数: std_in,
                                            // std_out, std_err, cwd, env
 
 // 1. 简单用法

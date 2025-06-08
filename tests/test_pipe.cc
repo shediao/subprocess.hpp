@@ -6,13 +6,13 @@
 TEST(SubprocessTest, Pipe) {
 #if !defined(_WIN32)
   std::vector<char> out;
-  auto pipe1 = process::detail::Pipe::create();
-  auto pipe2 = process::detail::Pipe::create();
+  auto pipe1 = subprocess::detail::Pipe::create();
+  auto pipe2 = subprocess::detail::Pipe::create();
 
-  process::detail::subprocess p1({"echo", "123\n456"}, $stdout > pipe1);
-  process::detail::subprocess p2({"sed", "-e", "s/3/4/g"},
-                                 $stdin<pipe1, $stdout> pipe2);
-  process::detail::subprocess p3({"grep", "4"}, $stdin<pipe2, $stdout> out);
+  subprocess::detail::subprocess p1({"echo", "123\n456"}, $stdout > pipe1);
+  subprocess::detail::subprocess p2({"sed", "-e", "s/3/4/g"},
+                                    $stdin<pipe1, $stdout> pipe2);
+  subprocess::detail::subprocess p3({"grep", "4"}, $stdin<pipe2, $stdout> out);
 
   p1.run_no_wait();
   p2.run_no_wait();

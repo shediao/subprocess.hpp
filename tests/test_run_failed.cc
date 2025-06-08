@@ -3,8 +3,8 @@
 #include "./utils.h"
 #include "subprocess/subprocess.hpp"
 
-using namespace process::named_arguments;
-using process::run;
+using namespace subprocess::named_arguments;
+using subprocess::run;
 
 TEST(SubprocessTest, CommandNotFound) {
   ASSERT_EQ(127, run("this_command_not_found_in_paths"));

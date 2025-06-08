@@ -3,8 +3,8 @@
 #include "./utils.h"
 #include "subprocess/subprocess.hpp"
 
-using namespace process::named_arguments;
-using process::run;
+using namespace subprocess::named_arguments;
+using subprocess::run;
 TEST(SubprocessTest, RedirectOut) {
   TempFile tmp_file;
   std::vector<char> content{'1', '2', '3'};

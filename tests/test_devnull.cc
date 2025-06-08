@@ -2,8 +2,8 @@
 
 #include "subprocess/subprocess.hpp"
 
-using namespace process::named_arguments;
-using process::run;
+using namespace subprocess::named_arguments;
+using subprocess::run;
 
 TEST(SubprocessTest, Devnull) {
   auto ret =

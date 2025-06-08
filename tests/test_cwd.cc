@@ -5,13 +5,13 @@
 
 #include "subprocess/subprocess.hpp"
 
-using namespace process::named_arguments;
-using process::run;
+using namespace subprocess::named_arguments;
+using subprocess::run;
 
 TEST(SubprocessTest, CWD) {
   std::vector<char> out;
 
-  auto home_dir = process::home();
+  auto home_dir = subprocess::home();
 
 #if !defined(_WIN32)
   run({"/bin/pwd"}, $stdout > out, $cwd = home_dir);
@@ -31,7 +31,7 @@ TEST(SubprocessTest, CWD) {
 TEST(SubprocessTest, CWD2) {
   std::vector<char> out;
 
-  auto home_dir = process::home();
+  auto home_dir = subprocess::home();
 
 #if !defined(_WIN32)
   run("/bin/pwd", $stdout > out, $cwd = home_dir);

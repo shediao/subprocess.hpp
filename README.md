@@ -7,8 +7,8 @@
 ```cpp
 #include <subprocess/subprocess.hpp>
 
-using process::run;
-using namespace process::named_arguments;  // for named arguments: std_in,
+using subprocess::run;
+using namespace subprocess::named_arguments;  // for named arguments: std_in,
                                            // std_out, std_err, cwd, env
 
 // 1. simple usage
