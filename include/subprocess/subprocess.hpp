@@ -23,7 +23,10 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
+#include <pwd.h>
+
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
 #include <spawn.h>
 #endif
@@ -1607,16 +1610,38 @@ inline int $(Args... args) {
 }
 #endif
 
-inline std::string const &home() {
-  static std::string home_dir = []() {
-    auto envs = get_current_environment_variables();
+inline std::optional<std::string> getenv(const std::string &name) {
+  return get_env(name);
+}
+
+inline std::string home() {
 #if defined(_WIN32)
-    return envs["HOMEDRIVE"] + envs["HOMEPATH"];
+  auto user_profile = get_env("USERPROFILE");
+  if (user_profile.has_value() && !user_profile->empty()) {
+    return user_profile.value();
+  }
+  auto home_drive = get_env("HOMEDRIVE");
+  auto homepath = get_env("HOMEPATH");
+  if (home_drive.has_value() && homepath.has_value() && !home_drive->empty() &&
+      !homepath->empty()) {
+    return home_drive.value() + homepath.value();
+  }
+
 #else
-    return envs["HOME"];
+  auto home_dir = get_env("HOME");
+  if (home_dir.has_value() && !home_dir->empty()) {
+    return home_dir.value();
+  }
+
+  // If HOME is not set, fallback to getpwuid
+  // This is a more reliable method for finding the home directory
+  uid_t uid = getuid();
+  struct passwd *pw = getpwuid(uid);
+  if (pw != nullptr && pw->pw_dir != nullptr && pw->pw_dir[0] != '\0') {
+    return std::string(pw->pw_dir);
+  }
 #endif
-  }();
-  return home_dir;
+  return "";
 }
 
 inline std::map<std::string, std::string> environments() {
@@ -1643,7 +1668,45 @@ inline pid_type pid() {
 #endif
 }
 
+inline std::string getcwd() {
+#if defined(_WIN32)
+  auto size = GetCurrentDirectoryA(0, NULL);
+  if (size == 0) {
+    return "";
+  }
+  std::vector<char> buffer(size);
+  if (GetCurrentDirectoryA(size, buffer.data()) == 0) {
+    return "";
+  }
+  return std::string(buffer.data());
+#else
+  std::unique_ptr<char, decltype(&::free)> ret(::getcwd(nullptr, 0), &::free);
+  if (ret) {
+    return std::string(ret.get());
+  } else {
+    return "";
+  }
+#endif
+}
+
+inline bool chdir(std::string const &dir) {
+#if defined(_WIN32)
+  return SetCurrentDirectoryA(dir.c_str());
+#else
+  return -1 != ::chdir(dir.c_str());
+#endif
+}
+
 }  // namespace subprocess
+
+namespace process {
+using subprocess::chdir;
+using subprocess::environments;
+using subprocess::getcwd;
+using subprocess::getenv;
+using subprocess::home;
+using subprocess::pid;
+}  // namespace process
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 using subprocess::$;
