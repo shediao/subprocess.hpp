@@ -14,9 +14,9 @@ TEST(SubprocessTest, CWD) {
   auto home_dir = subprocess::home();
 
 #if !defined(_WIN32)
-  run({"/bin/pwd"}, $stdout > out, $cwd = home_dir);
+  run({"/bin/pwd"}, $stdout > out, $cwd = home_dir.value());
 #else
-  run({"cmd.exe", "/c", "echo %CD%"}, $stdout > out, $cwd = home_dir);
+  run({"cmd.exe", "/c", "echo %CD%"}, $stdout > out, $cwd = home_dir.value());
 #endif
 
   ASSERT_FALSE(out.empty());
@@ -25,7 +25,7 @@ TEST(SubprocessTest, CWD) {
                          [](char c) { return c != '\n' && c != '\r'; });
   out.erase(it.base(), out.end());
 
-  ASSERT_EQ(std::string_view(out.data(), out.size()), home_dir);
+  ASSERT_EQ(std::string_view(out.data(), out.size()), home_dir.value());
 }
 
 TEST(SubprocessTest, CWD2) {
@@ -34,9 +34,9 @@ TEST(SubprocessTest, CWD2) {
   auto home_dir = subprocess::home();
 
 #if !defined(_WIN32)
-  run("/bin/pwd", $stdout > out, $cwd = home_dir);
+  run("/bin/pwd", $stdout > out, $cwd = home_dir.value());
 #else
-  run("cmd.exe", "/c", "echo %CD%", $stdout > out, $cwd = home_dir);
+  run("cmd.exe", "/c", "echo %CD%", $stdout > out, $cwd = home_dir.value());
 #endif
 
   ASSERT_FALSE(out.empty());
@@ -45,5 +45,5 @@ TEST(SubprocessTest, CWD2) {
                          [](char c) { return c != '\n' && c != '\r'; });
   out.erase(it.base(), out.end());
 
-  ASSERT_EQ(std::string_view(out.data(), out.size()), home_dir);
+  ASSERT_EQ(std::string_view(out.data(), out.size()), home_dir.value());
 }

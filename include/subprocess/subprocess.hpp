@@ -1614,23 +1614,22 @@ inline std::optional<std::string> getenv(const std::string &name) {
   return get_env(name);
 }
 
-inline std::string home() {
+inline std::optional<std::string> home() {
 #if defined(_WIN32)
   auto user_profile = get_env("USERPROFILE");
   if (user_profile.has_value() && !user_profile->empty()) {
-    return user_profile.value();
+    return user_profile;
   }
   auto home_drive = get_env("HOMEDRIVE");
   auto homepath = get_env("HOMEPATH");
-  if (home_drive.has_value() && homepath.has_value() && !home_drive->empty() &&
-      !homepath->empty()) {
+  if (home_drive.has_value() && homepath.has_value() &&
+      !home_drive.value().empty() && !homepath.value().empty()) {
     return home_drive.value() + homepath.value();
   }
-
 #else
   auto home_dir = get_env("HOME");
   if (home_dir.has_value() && !home_dir->empty()) {
-    return home_dir.value();
+    return home_dir;
   }
 
   // If HOME is not set, fallback to getpwuid
@@ -1641,7 +1640,7 @@ inline std::string home() {
     return std::string(pw->pw_dir);
   }
 #endif
-  return "";
+  return std::nullopt;
 }
 
 inline std::map<std::string, std::string> environments() {
