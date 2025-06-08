@@ -600,8 +600,8 @@ std::optional<std::string> get_env(std::string const &key) {
   if (env) {
     return std::string(env);
   }
-#endif
   return std::nullopt;
+#endif
 }
 
 inline std::optional<std::string> find_command_in_path(
