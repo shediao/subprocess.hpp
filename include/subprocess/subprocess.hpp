@@ -596,7 +596,7 @@ std::optional<std::string> get_env(std::string const &key) {
   }
   return std::string{buf.data()};
 #else
-  auto *env = getenv(key.c_str());
+  auto *env = ::getenv(key.c_str());
   if (env) {
     return std::string(env);
   }
