@@ -106,3 +106,5 @@ copy `subprocess.hpp` to myproject/dir/include/subprocess/
 3. pipe run subprocess
 4. parallel run subprocess
 
+## docs
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shediao/subprocess.hpp)

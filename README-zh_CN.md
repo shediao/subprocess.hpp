@@ -105,3 +105,6 @@ add_subdirectory(/path/to/subprocess.hpp)
 2. Windows Unicode 支持
 3. 管道运行子进程
 4. 并行运行子进程
+
+## docs
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shediao/subprocess.hpp)
