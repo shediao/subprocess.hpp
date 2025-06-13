@@ -127,8 +127,8 @@ using NativeHandle = int;
 constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 
-namespace {
-void close_native_handle(NativeHandle &handle) {
+namespace detail {
+inline void close_native_handle(NativeHandle &handle) {
   if (handle != INVALID_NATIVE_HANDLE_VALUE) {
 #if defined(_WIN32)
     CloseHandle(handle);
@@ -138,9 +138,6 @@ void close_native_handle(NativeHandle &handle) {
     handle = INVALID_NATIVE_HANDLE_VALUE;
   }
 }
-}  // namespace
-
-namespace detail {
 class HandleGuard {
  public:
   explicit HandleGuard(NativeHandle h =
@@ -182,7 +179,7 @@ class HandleGuard {
   NativeHandle get() const { return handle_; }
   NativeHandle *p_get() { return &handle_; }
 
-  void Close() { close_native_handle(handle_); }
+  void Close() { detail::close_native_handle(handle_); }
 
   bool IsValid() const {
 #if defined(_WIN32)
@@ -195,11 +192,7 @@ class HandleGuard {
  private:
   NativeHandle handle_;
 };
-}  // namespace detail
-
-namespace {
-
-std::vector<std::string> split(const std::string &s, char del) {
+inline std::vector<std::string> split(const std::string &s, char del) {
   std::istringstream stream{s};
   std::vector<std::string> ret;
   std::string line;
@@ -373,7 +366,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         throw std::runtime_error("write error: " + std::to_string(errno));
       }
       if (stdin_str.empty()) {
-        close_native_handle(fds[0].fd);
+        detail::close_native_handle(fds[0].fd);
       }
     }
     if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
@@ -382,7 +375,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         out_buf.insert(out_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        close_native_handle(fds[1].fd);
+        detail::close_native_handle(fds[1].fd);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -394,7 +387,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         err_buf.insert(err_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        close_native_handle(fds[2].fd);
+        detail::close_native_handle(fds[2].fd);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -403,7 +396,7 @@ inline void read_from_native_handle(NativeHandle &fd,
     for (auto &pfd : fds) {
       if (pfd.fd != INVALID_NATIVE_HANDLE_VALUE &&
           (pfd.revents & (POLLNVAL | POLLHUP | POLLERR))) {
-        close_native_handle(pfd.fd);
+        detail::close_native_handle(pfd.fd);
       }
     }
     if (fds[0].fd == INVALID_NATIVE_HANDLE_VALUE &&
@@ -442,9 +435,9 @@ inline void read_from_native_handle(NativeHandle &fd,
     auto const ready =
         select(max_fd + 1, &read_fds, &write_fds, nullptr, nullptr);
     if (ready == 0) {
-      close_native_handle(in);
-      close_native_handle(out);
-      close_native_handle(err);
+      detail::close_native_handle(in);
+      detail::close_native_handle(out);
+      detail::close_native_handle(err);
       break;
     }
     if (ready == -1) {
@@ -459,7 +452,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         throw std::runtime_error("write error: " + std::to_string(errno));
       }
       if (stdin_str.empty()) {
-        close_native_handle(in);
+        detail::close_native_handle(in);
       }
     }
     if (out != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(out, &read_fds)) {
@@ -468,7 +461,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         out_buf.insert(out_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        close_native_handle(out);
+        detail::close_native_handle(out);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -480,7 +473,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         err_buf.insert(err_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        close_native_handle(err);
+        detail::close_native_handle(err);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -542,7 +535,7 @@ inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
 }
 
 #if defined(_WIN32)
-std::optional<std::string> get_file_extension(std::string const &f) {
+inline std::optional<std::string> get_file_extension(std::string const &f) {
   auto const dotPos = f.rfind('.');
   if (dotPos == std::string::npos) {
     return std::nullopt;
@@ -569,7 +562,7 @@ std::optional<std::string> get_file_extension(std::string const &f) {
 }
 #endif  // !_WIN32
 
-bool is_executable(std::string const &f) {
+inline bool is_executable(std::string const &f) {
 #if defined(_WIN32)
   auto attr = GetFileAttributesA(f.c_str());
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
@@ -580,7 +573,7 @@ bool is_executable(std::string const &f) {
 #endif
 }
 
-std::optional<std::string> get_env(std::string const &key) {
+inline std::optional<std::string> get_env(std::string const &key) {
 #if defined(_WIN32)
   std::vector<char> buf(128);
   auto const size = GetEnvironmentVariableA(key.c_str(), buf.data(),
@@ -704,13 +697,11 @@ inline std::map<std::string, std::string> get_current_environment_variables() {
 #endif
   return envMap;
 }
-}  // namespace
-namespace detail {
 class Pipe {
  public:
   static Pipe create() { return Pipe{}; }
-  void close_read() { close_native_handle(fds_[0]); }
-  void close_write() { close_native_handle(fds_[1]); }
+  void close_read() { detail::close_native_handle(fds_[0]); }
+  void close_write() { detail::close_native_handle(fds_[1]); }
   void close_all() {
     close_read();
     close_write();
@@ -770,7 +761,7 @@ struct File {
     o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
     return *this;
   }
-  ~File() { close_native_handle(fd_); }
+  ~File() { detail::close_native_handle(fd_); }
 
   void open_for_read() { open_impl(ReadOnly); }
   void open_for_write() {
@@ -780,7 +771,7 @@ struct File {
       open_impl(WriteTruncate);
     }
   }
-  void close() { close_native_handle(fd_); }
+  void close() { detail::close_native_handle(fd_); }
   NativeHandle fd() { return fd_; }
 
  private:
@@ -936,12 +927,13 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            close_native_handle(fileno() == 0 ? value.read() : value.write());
+            detail::close_native_handle(fileno() == 0 ? value.read()
+                                                      : value.write());
           } else if constexpr (std::is_same_v<T, File>) {
             value.close();
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            close_native_handle(fileno() == 0 ? value.pipe().read()
-                                              : value.pipe().write());
+            detail::close_native_handle(fileno() == 0 ? value.pipe().read()
+                                                      : value.pipe().write());
           }
         },
         *redirect_);
@@ -1007,8 +999,8 @@ class Stdio {
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             dup2(fileno() == 0 ? value.read() : value.write(), fileno());
-            close_native_handle(value.read());
-            close_native_handle(value.write());
+            detail::close_native_handle(value.read());
+            detail::close_native_handle(value.write());
           } else if constexpr (std::is_same_v<T, File>) {
             dup2(value.fd(), fileno());
             value.close();
@@ -1611,23 +1603,23 @@ inline int $(Args... args) {
 #endif
 
 inline std::optional<std::string> getenv(const std::string &name) {
-  return get_env(name);
+  return detail::get_env(name);
 }
 
 inline std::optional<std::string> home() {
 #if defined(_WIN32)
-  auto user_profile = get_env("USERPROFILE");
+  auto user_profile = detail::get_env("USERPROFILE");
   if (user_profile.has_value() && !user_profile->empty()) {
     return user_profile;
   }
-  auto home_drive = get_env("HOMEDRIVE");
-  auto homepath = get_env("HOMEPATH");
+  auto home_drive = detail::get_env("HOMEDRIVE");
+  auto homepath = detail::get_env("HOMEPATH");
   if (home_drive.has_value() && homepath.has_value() &&
       !home_drive.value().empty() && !homepath.value().empty()) {
     return home_drive.value() + homepath.value();
   }
 #else
-  auto home_dir = get_env("HOME");
+  auto home_dir = detail::get_env("HOME");
   if (home_dir.has_value() && !home_dir->empty()) {
     return home_dir;
   }
@@ -1644,7 +1636,7 @@ inline std::optional<std::string> home() {
 }
 
 inline std::map<std::string, std::string> environments() {
-  return get_current_environment_variables();
+  return detail::get_current_environment_variables();
 }
 
 #if defined(_WIN32)
