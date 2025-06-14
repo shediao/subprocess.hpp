@@ -21,6 +21,9 @@
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
+#if defined(UNICODE) || defined(_UNICODE)
+#include <cwctype>
+#endif
 #else
 #include <fcntl.h>
 #include <limits.h>
@@ -128,6 +131,42 @@ constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 
 namespace detail {
+#if (defined(_WIN32) || defined(_WIN64)) && \
+    (defined(UNICODE) || defined(_UNICODE))
+// Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
+inline std::wstring to_wstring(const std::string &str) {
+  if (str.empty()) {
+    return {};
+  }
+  int size_needed =
+      MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+  if (size_needed <= 0) {
+    // Consider throwing an exception for conversion errors
+    return {};
+  }
+  std::wstring wstr(size_needed, 0);
+  MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0],
+                      size_needed);
+  return wstr;
+}
+
+// Helper function to convert a UTF-16 std::wstring to a UTF-8 std::string
+inline std::string to_string(const std::wstring &wstr) {
+  if (wstr.empty()) {
+    return {};
+  }
+  int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(),
+                                        NULL, 0, NULL, NULL);
+  if (size_needed <= 0) {
+    // Consider throwing an exception for conversion errors
+    return {};
+  }
+  std::string str(size_needed, 0);
+  WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &str[0],
+                      size_needed, NULL, NULL);
+  return str;
+}
+#endif
 inline void close_native_handle(NativeHandle &handle) {
   if (handle != INVALID_NATIVE_HANDLE_VALUE) {
 #if defined(_WIN32)
@@ -192,10 +231,12 @@ class HandleGuard {
  private:
   NativeHandle handle_;
 };
-inline std::vector<std::string> split(const std::string &s, char del) {
-  std::istringstream stream{s};
-  std::vector<std::string> ret;
-  std::string line;
+template <typename CharT>
+inline std::vector<std::basic_string<CharT>> split(
+    const std::basic_string<CharT> &s, CharT del) {
+  std::basic_istringstream<CharT> stream{s};
+  std::vector<std::basic_string<CharT>> ret;
+  std::basic_string<CharT> line;
   while (std::getline(stream, line, del)) {
     if (!line.empty()) {
       ret.push_back(line);
@@ -205,27 +246,29 @@ inline std::vector<std::string> split(const std::string &s, char del) {
 }
 
 #if defined(_WIN32)
-inline std::vector<char> create_command_string_data(
-    std::vector<std::string> const &cmds) {
-  std::vector<char> command;
+template <typename CharT>
+inline std::vector<CharT> create_command_string_data(
+    std::vector<std::basic_string<CharT>> const &cmds) {
+  std::vector<CharT> command;
   for (auto const &cmd : cmds) {
     if (!command.empty()) {
-      command.push_back(' ');
+      command.push_back(TEXT(' '));
     }
     if (cmd.empty()) {
-      command.push_back('"');
-      command.push_back('"');
+      command.push_back(TEXT('"'));
+      command.push_back(TEXT('"'));
       continue;
     }
-    auto need_quota = std::any_of(cmd.begin(), cmd.end(),
-                                  [](char c) { return c <= ' ' || c == '"'; });
+    auto need_quota = std::any_of(cmd.begin(), cmd.end(), [](CharT c) {
+      return c <= TEXT(' ') || c == TEXT('"');
+    });
     if (need_quota) {
-      command.push_back('"');
+      command.push_back(TEXT('"'));
     }
     if (need_quota) {
       for (auto c : cmd) {
-        if (c == '"') {
-          command.push_back('\\');
+        if (c == TEXT('"')) {
+          command.push_back(TEXT('\\'));
         }
         command.push_back(c);
       }
@@ -233,24 +276,24 @@ inline std::vector<char> create_command_string_data(
       command.insert(command.end(), cmd.begin(), cmd.end());
     }
     if (need_quota) {
-      command.push_back('"');
+      command.push_back(TEXT('"'));
     }
   }
-  command.push_back('\0');
+  command.push_back(TEXT('\0'));
   return command;
 }
 
-inline std::vector<char> create_environment_string_data(
-    std::map<std::string, std::string> const &envs) {
-  std::vector<char> env_block;
+inline std::vector<TCHAR> create_environment_string_data(
+    std::map<std::basic_string<TCHAR>, std::basic_string<TCHAR>> const &envs) {
+  std::vector<TCHAR> env_block;
   for (auto const &[key, value] : envs) {
     env_block.insert(env_block.end(), key.begin(), key.end());
-    env_block.push_back('=');
+    env_block.push_back(TEXT('='));
     env_block.insert(env_block.end(), value.begin(), value.end());
-    env_block.push_back('\0');
+    env_block.push_back(TEXT('\0'));
   }
   if (!env_block.empty()) {
-    env_block.push_back('\0');
+    env_block.push_back(TEXT('\0'));
   }
   return env_block;
 }
@@ -263,12 +306,17 @@ inline std::string get_last_error_msg() {
   LPVOID errorMsg{NULL};
   std::stringstream out;
   out << "Error: " << error;
-  FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-                     FORMAT_MESSAGE_IGNORE_INSERTS,
-                 NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                 (LPSTR)&errorMsg, 0, NULL);
+
+  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                    FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                (LPTSTR)&errorMsg, 0, NULL);
   if (errorMsg) {
+#if defined(UNICODE) || defined(_UNICODE)
+    out << ": " << to_string((wchar_t *)errorMsg);
+#else
     out << ": " << (char *)errorMsg;
+#endif
     LocalFree(errorMsg);
   }
   return out.str();
@@ -564,7 +612,11 @@ inline std::optional<std::string> get_file_extension(std::string const &f) {
 
 inline bool is_executable(std::string const &f) {
 #if defined(_WIN32)
+#if defined(UNICODE) || defined(_UNICODE)
+  auto attr = GetFileAttributesW(to_wstring(f).c_str());
+#else
   auto attr = GetFileAttributesA(f.c_str());
+#endif
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 #else
   struct stat sb;
@@ -575,19 +627,30 @@ inline bool is_executable(std::string const &f) {
 
 inline std::optional<std::string> get_env(std::string const &key) {
 #if defined(_WIN32)
-  std::vector<char> buf(128);
-  auto const size = GetEnvironmentVariableA(key.c_str(), buf.data(),
-                                            static_cast<DWORD>(buf.size()));
-  if (GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+#if defined(UNICODE) || defined(_UNICODE)
+  std::vector<TCHAR> buf;
+  auto wkey = to_wstring(key);
+  auto const size =
+      GetEnvironmentVariableW(wkey.c_str(), nullptr, static_cast<DWORD>(0));
+  if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
     return std::nullopt;
   }
-  if (size > buf.size()) {
-    buf.resize(static_cast<size_t>(size));
-    buf[0] = '\0';
-    GetEnvironmentVariableA(key.c_str(), buf.data(),
-                            static_cast<DWORD>(buf.size()));
+  buf.resize(static_cast<size_t>(size));
+  GetEnvironmentVariableW(wkey.c_str(), buf.data(),
+                          static_cast<DWORD>(buf.size()));
+  return to_string(buf.data());
+#else
+  std::vector<TCHAR> buf;
+  auto const size =
+      GetEnvironmentVariableA(key.c_str(), nullptr, static_cast<DWORD>(0));
+  if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+    return std::nullopt;
   }
+  buf.resize(static_cast<size_t>(size));
+  GetEnvironmentVariableA(key.c_str(), buf.data(),
+                          static_cast<DWORD>(buf.size()));
   return std::string{buf.data()};
+#endif
 #else
   auto *env = ::getenv(key.c_str());
   if (env) {
@@ -650,53 +713,80 @@ inline std::optional<std::string> find_command_in_path(
   return std::nullopt;
 }
 
-inline std::map<std::string, std::string> get_current_environment_variables() {
-  std::map<std::string, std::string> envMap;
+#if defined(_WIN32)
+inline std::map<std::string, std::string> get_all_envs() {
+  std::map<std::string, std::string> envs;
 
-#ifdef _WIN32
-  char *envBlock = GetEnvironmentStrings();
+#if defined(UNICODE) || defined(_UNICODE)
+  auto *envBlock = GetEnvironmentStringsW();
+#else
+  auto *envBlock = GetEnvironmentStrings();
+#endif
   if (envBlock == nullptr) {
-    std::cerr << "Error getting environment strings." << std::endl;
-    return envMap;
+    return envs;
   }
 
-  char *currentEnv = envBlock;
-  while (*currentEnv != '\0') {
-    std::string envString(currentEnv);
-    size_t pos = envString.find('=');
-    if (pos != std::string::npos) {
-      std::string key = envString.substr(0, pos);
-      std::string value = envString.substr(pos + 1);
-      envMap[key] = value;
+  const auto *currentEnv = envBlock;
+  while (*currentEnv != TEXT('\0')) {
+#if defined(UNICODE) || defined(_UNICODE)
+    std::wstring_view envString(currentEnv);
+#else
+    std::string_view envString(currentEnv);
+#endif
+    auto pos = envString.find(TEXT('='));
+    // Weird variables in Windows that start with '='.
+    // The key is the name of a drive, like "=C:", and the value is the
+    // current working directory on that drive.
+    if (pos == 0) {
+      pos = envString.find(TEXT('='), 1);
     }
+#if defined(UNICODE) || defined(_UNICODE)
+    if (pos != std::wstring_view::npos) {
+      auto key = std::wstring(envString.substr(0, pos));
+      auto value = std::wstring(envString.substr(pos + 1));
+      std::transform(key.begin(), key.end(), key.begin(),
+                     [](wchar_t c) { return std::towupper(c); });
+      envs[detail::to_string(key)] = detail::to_string(value);
+    }
+#else
+    if (pos != std::string_view::npos) {
+      auto key = std::string(envString.substr(0, pos));
+      auto value = std::string(envString.substr(pos + 1));
+      std::transform(key.begin(), key.end(), key.begin(),
+                     [](unsigned char c) { return std::toupper(c); });
+      envs[std::move(key)] = std::move(value);
+    }
+#endif
     currentEnv +=
         envString.length() + 1;  // Move to the next environment variable
   }
 
 #if defined(UNICODE)
-  FreeEnvironmentStringsA(envBlock);
-#else
   FreeEnvironmentStrings(envBlock);
-#endif
-
 #else
-
+  FreeEnvironmentStringsA(envBlock);
+#endif
+  return envs;
+}
+#else
+inline std::map<std::string, std::string> get_all_envs() {
+  std::map<std::string, std::string> envs;
   if (environ == nullptr) {
-    return envMap;
+    return envs;
   }
 
   for (char **env = environ; *env != nullptr; ++env) {
-    std::string envString(*env);
-    size_t pos = envString.find('=');
+    std::string_view envString(*env);
+    auto pos = envString.find('=');
     if (pos != std::string::npos) {
-      std::string key = envString.substr(0, pos);
-      std::string value = envString.substr(pos + 1);
-      envMap[key] = value;
+      std::string_view key = envString.substr(0, pos);
+      std::string_view value = envString.substr(pos + 1);
+      envs[std::string(key)] = std::string(value);
     }
   }
-#endif
-  return envMap;
+  return envs;
 }
+#endif
 class Pipe {
  public:
   static Pipe create() { return Pipe{}; }
@@ -782,8 +872,12 @@ struct File {
     sa.lpSecurityDescriptor = nullptr;
     sa.bInheritHandle = TRUE;  // Make the handle inheritable
 
-    fd_ = CreateFileA(
+    fd_ = CreateFile(
+#if defined(UNICODE) || defined(_UNICODE)
+        to_wstring(path_).c_str(),
+#else
         path_.c_str(),
+#endif
         type == ReadOnly
             ? GENERIC_READ
             : (type == WriteAppend ? FILE_APPEND_DATA : GENERIC_WRITE),
@@ -1143,8 +1237,7 @@ struct env_operator {
     return Env{std::move(env)};
   }
   Env operator+=(std::map<std::string, std::string> env) const {
-    std::map<std::string, std::string> env_tmp{
-        get_current_environment_variables()};
+    std::map<std::string, std::string> env_tmp{get_all_envs()};
     env_tmp.insert(env.begin(), env.end());
     return Env{std::move(env_tmp)};
   }
@@ -1229,7 +1322,14 @@ class subprocess {
     requires(is_named_argument<T> && ...)
 #endif
   explicit subprocess(std::vector<std::string> cmd, T &&...args)
-      : cmd_(std::move(cmd)) {
+#if !(defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE)))
+      : cmd_(std::move(cmd))
+#endif
+  {
+#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+    std::transform(cmd.begin(), cmd.end(), back_inserter(cmd_),
+                   [](std::string const &s) { return to_wstring(s); });
+#endif
     std::map<std::string, std::string> environments;
     std::vector<std::pair<std::string, std::string>> env_appends;
     (void)(..., ([&]<typename Arg>(Arg &&arg) {
@@ -1250,7 +1350,11 @@ class subprocess {
                env_appends.push_back(arg.kv);
              }
              if constexpr (std::is_same_v<ArgType, Cwd>) {
+#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+               cwd_ = detail::to_wstring(arg.cwd);
+#else
                cwd_ = arg.cwd;
+#endif
              }
              static_assert(std::is_same_v<Env, std::decay_t<T>> ||
                                std::is_same_v<Stdin, std::decay_t<T>> ||
@@ -1260,7 +1364,13 @@ class subprocess {
                                std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                            "Invalid argument type passed to run function.");
            }(std::forward<T>(args))));
+#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+    for (auto const &[key, val] : environments) {
+      env_[detail::to_wstring(key)] = detail::to_wstring(val);
+    }
+#else
     env_ = environments;
+#endif
 #if defined(_WIN32)
     ZeroMemory(&process_information_, sizeof(process_information_));
     ZeroMemory(&startupinfo_, sizeof(startupinfo_));
@@ -1291,11 +1401,10 @@ class subprocess {
 
     auto env_block = create_environment_string_data(env_);
 
-    auto success =
-        CreateProcessA(nullptr, command.data(), NULL, NULL, TRUE, 0,
-                       env_block.empty() ? nullptr : env_block.data(),
-                       cwd_.empty() ? nullptr : cwd_.data(), &startupinfo_,
-                       &process_information_);
+    auto success = CreateProcess(nullptr, command.data(), NULL, NULL, TRUE, 0,
+                                 env_block.empty() ? nullptr : env_block.data(),
+                                 cwd_.empty() ? nullptr : cwd_.data(),
+                                 &startupinfo_, &process_information_);
 
     if (success) {
       manage_pipe_io();
@@ -1504,15 +1613,21 @@ class subprocess {
 #endif  // !_WIN32
 
  private:
+#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+  std::vector<std::wstring> cmd_;
+  std::wstring cwd_{};
+  std::map<std::wstring, std::wstring> env_;
+#else
   std::vector<std::string> cmd_;
   std::string cwd_{};
   std::map<std::string, std::string> env_;
+#endif
   Stdin stdin_;
   Stdout stdout_;
   Stderr stderr_;
 #if defined(_WIN32)
   PROCESS_INFORMATION process_information_;
-  STARTUPINFOA startupinfo_;
+  STARTUPINFO startupinfo_;
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
 #endif
@@ -1635,8 +1750,8 @@ inline std::optional<std::string> home() {
   return std::nullopt;
 }
 
-inline std::map<std::string, std::string> environments() {
-  return detail::get_current_environment_variables();
+inline std::map<std::string, std::string> environs() {
+  return detail::get_all_envs();
 }
 
 #if defined(_WIN32)
@@ -1661,15 +1776,19 @@ inline pid_type pid() {
 
 inline std::string getcwd() {
 #if defined(_WIN32)
-  auto size = GetCurrentDirectoryA(0, NULL);
+  auto size = GetCurrentDirectory(0, NULL);
   if (size == 0) {
     return "";
   }
-  std::vector<char> buffer(size);
-  if (GetCurrentDirectoryA(size, buffer.data()) == 0) {
+  std::vector<TCHAR> buffer(size);
+  if (GetCurrentDirectory(size, buffer.data()) == 0) {
     return "";
   }
+#if defined(UNICODE) || defined(_UNICODE)
+  return detail::to_string(buffer.data());
+#else
   return std::string(buffer.data());
+#endif
 #else
   std::unique_ptr<char, decltype(&::free)> ret(::getcwd(nullptr, 0), &::free);
   if (ret) {
@@ -1682,7 +1801,11 @@ inline std::string getcwd() {
 
 inline bool chdir(std::string const &dir) {
 #if defined(_WIN32)
+#if defined(UNICODE) || defined(_UNICODE)
+  return SetCurrentDirectoryW(detail::to_wstring(dir).c_str());
+#else
   return SetCurrentDirectoryA(dir.c_str());
+#endif
 #else
   return -1 != ::chdir(dir.c_str());
 #endif
@@ -1692,7 +1815,7 @@ inline bool chdir(std::string const &dir) {
 
 namespace process {
 using subprocess::chdir;
-using subprocess::environments;
+using subprocess::environs;
 using subprocess::getcwd;
 using subprocess::getenv;
 using subprocess::home;
