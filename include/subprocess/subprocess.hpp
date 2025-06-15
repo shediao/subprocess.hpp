@@ -21,7 +21,7 @@
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
 #include <cwctype>
 #endif
 #else
@@ -131,8 +131,7 @@ constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 
 namespace detail {
-#if (defined(_WIN32) || defined(_WIN64)) && \
-    (defined(UNICODE) || defined(_UNICODE))
+#if (defined(_WIN32) || defined(_WIN64)) && defined(UNICODE)
 // Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
 inline std::wstring to_wstring(const std::string &str) {
   if (str.empty()) {
@@ -312,7 +311,7 @@ inline std::string get_last_error_msg() {
                 NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                 (LPTSTR)&errorMsg, 0, NULL);
   if (errorMsg) {
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
     out << ": " << to_string((wchar_t *)errorMsg);
 #else
     out << ": " << (char *)errorMsg;
@@ -612,7 +611,7 @@ inline std::optional<std::string> get_file_extension(std::string const &f) {
 
 inline bool is_executable(std::string const &f) {
 #if defined(_WIN32)
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
   auto attr = GetFileAttributesW(to_wstring(f).c_str());
 #else
   auto attr = GetFileAttributesA(f.c_str());
@@ -627,7 +626,7 @@ inline bool is_executable(std::string const &f) {
 
 inline std::optional<std::string> get_env(std::string const &key) {
 #if defined(_WIN32)
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
   std::vector<TCHAR> buf;
   auto wkey = to_wstring(key);
   auto const size =
@@ -717,7 +716,7 @@ inline std::optional<std::string> find_command_in_path(
 inline std::map<std::string, std::string> get_all_envs() {
   std::map<std::string, std::string> envs;
 
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
   auto *envBlock = GetEnvironmentStringsW();
 #else
   auto *envBlock = GetEnvironmentStrings();
@@ -728,7 +727,7 @@ inline std::map<std::string, std::string> get_all_envs() {
 
   const auto *currentEnv = envBlock;
   while (*currentEnv != TEXT('\0')) {
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
     std::wstring_view envString(currentEnv);
 #else
     std::string_view envString(currentEnv);
@@ -740,7 +739,7 @@ inline std::map<std::string, std::string> get_all_envs() {
     if (pos == 0) {
       pos = envString.find(TEXT('='), 1);
     }
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
     if (pos != std::wstring_view::npos) {
       auto key = std::wstring(envString.substr(0, pos));
       auto value = std::wstring(envString.substr(pos + 1));
@@ -873,7 +872,7 @@ struct File {
     sa.bInheritHandle = TRUE;  // Make the handle inheritable
 
     fd_ = CreateFile(
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
         to_wstring(path_).c_str(),
 #else
         path_.c_str(),
@@ -1322,11 +1321,11 @@ class subprocess {
     requires(is_named_argument<T> && ...)
 #endif
   explicit subprocess(std::vector<std::string> cmd, T &&...args)
-#if !(defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE)))
+#if !(defined(_WIN32) && defined(UNICODE))
       : cmd_(std::move(cmd))
 #endif
   {
-#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+#if defined(_WIN32) && defined(UNICODE)
     std::transform(cmd.begin(), cmd.end(), back_inserter(cmd_),
                    [](std::string const &s) { return to_wstring(s); });
 #endif
@@ -1350,7 +1349,7 @@ class subprocess {
                env_appends.push_back(arg.kv);
              }
              if constexpr (std::is_same_v<ArgType, Cwd>) {
-#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+#if defined(_WIN32) && defined(UNICODE)
                cwd_ = detail::to_wstring(arg.cwd);
 #else
                cwd_ = arg.cwd;
@@ -1364,7 +1363,7 @@ class subprocess {
                                std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                            "Invalid argument type passed to run function.");
            }(std::forward<T>(args))));
-#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+#if defined(_WIN32) && defined(UNICODE)
     for (auto const &[key, val] : environments) {
       env_[detail::to_wstring(key)] = detail::to_wstring(val);
     }
@@ -1402,7 +1401,7 @@ class subprocess {
     auto env_block = create_environment_string_data(env_);
 
     auto success = CreateProcess(nullptr, command.data(), NULL, NULL, TRUE,
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
                                  CREATE_UNICODE_ENVIRONMENT,
 #else
                                  0,
@@ -1618,7 +1617,7 @@ class subprocess {
 #endif  // !_WIN32
 
  private:
-#if defined(_WIN32) && (defined(UNICODE) || defined(_UNICODE))
+#if defined(_WIN32) && defined(UNICODE)
   std::vector<std::wstring> cmd_;
   std::wstring cwd_{};
   std::map<std::wstring, std::wstring> env_;
@@ -1789,7 +1788,7 @@ inline std::string getcwd() {
   if (GetCurrentDirectory(size, buffer.data()) == 0) {
     return "";
   }
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
   return detail::to_string(buffer.data());
 #else
   return std::string(buffer.data());
@@ -1806,7 +1805,7 @@ inline std::string getcwd() {
 
 inline bool chdir(std::string const &dir) {
 #if defined(_WIN32)
-#if defined(UNICODE) || defined(_UNICODE)
+#if defined(UNICODE)
   return SetCurrentDirectoryW(detail::to_wstring(dir).c_str());
 #else
   return SetCurrentDirectoryA(dir.c_str());
