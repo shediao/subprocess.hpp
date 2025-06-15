@@ -1215,10 +1215,17 @@ struct Cwd {
   std::string cwd;
 };
 
+// set envs to process environment(override)
 struct Env {
   std::map<std::string, std::string> env;
 };
 
+// append envs to process environment
+struct EnvAppend {
+  std::map<std::string, std::string> env;
+};
+
+// append value for special environment, for example: PATH
 struct EnvItemAppend {
   EnvItemAppend &operator=(EnvItemAppend const &) = delete;
   EnvItemAppend &operator+=(std::string val) {
@@ -1235,10 +1242,8 @@ struct env_operator {
   Env operator=(std::map<std::string, std::string> env) const {
     return Env{std::move(env)};
   }
-  Env operator+=(std::map<std::string, std::string> env) const {
-    std::map<std::string, std::string> env_tmp{get_all_envs()};
-    env_tmp.insert(env.begin(), env.end());
-    return Env{std::move(env_tmp)};
+  EnvAppend operator+=(std::map<std::string, std::string> env) const {
+    return EnvAppend{std::move(env)};
   }
   EnvItemAppend operator[](std::string key) const {
     return EnvItemAppend{{key, ""}};
@@ -1277,6 +1282,7 @@ concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
                             std::is_same_v<Stdout, std::decay_t<T>> ||
                             std::is_same_v<Stderr, std::decay_t<T>> ||
                             std::is_same_v<Cwd, std::decay_t<T>> ||
+                            std::is_same_v<EnvAppend, std::decay_t<T>> ||
                             std::is_same_v<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
 concept is_string_type = std::is_same_v<char *, std::decay_t<T>> ||
@@ -1290,6 +1296,7 @@ constexpr bool is_named_argument = std::integral_constant<
               std::is_same_v<Stdout, std::decay_t<T>> ||
               std::is_same_v<Stderr, std::decay_t<T>> ||
               std::is_same_v<Cwd, std::decay_t<T>> ||
+              std::is_same_v<EnvAppend, std::decay_t<T>> ||
               std::is_same_v<EnvItemAppend, std::decay_t<T>>>::value;
 template <typename T>
 constexpr bool is_string_type = std::integral_constant<
@@ -1330,7 +1337,8 @@ class subprocess {
                    [](std::string const &s) { return to_wstring(s); });
 #endif
     std::map<std::string, std::string> environments;
-    std::vector<std::pair<std::string, std::string>> env_appends;
+    std::map<std::string, std::string> env_appends;
+    std::vector<std::pair<std::string, std::string>> env_item_appends;
     (void)(..., ([&]<typename Arg>(Arg &&arg) {
              using ArgType = std::decay_t<Arg>;
              if constexpr (std::is_same_v<ArgType, Stdin>) {
@@ -1345,8 +1353,11 @@ class subprocess {
              if constexpr (std::is_same_v<ArgType, Env>) {
                environments.insert(arg.env.begin(), arg.env.end());
              }
+             if constexpr (std::is_same_v<ArgType, EnvAppend>) {
+               env_appends.insert(arg.env.begin(), arg.env.end());
+             }
              if constexpr (std::is_same_v<ArgType, EnvItemAppend>) {
-               env_appends.push_back(arg.kv);
+               env_item_appends.push_back(arg.kv);
              }
              if constexpr (std::is_same_v<ArgType, Cwd>) {
 #if defined(_WIN32) && defined(UNICODE)
@@ -1360,9 +1371,37 @@ class subprocess {
                                std::is_same_v<Stdout, std::decay_t<T>> ||
                                std::is_same_v<Stderr, std::decay_t<T>> ||
                                std::is_same_v<Cwd, std::decay_t<T>> ||
+                               std::is_same_v<EnvAppend, std::decay_t<T>> ||
                                std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                            "Invalid argument type passed to run function.");
            }(std::forward<T>(args))));
+    if ((!env_item_appends.empty() || !env_appends.empty()) &&
+        environments.empty()) {
+      environments = detail::get_all_envs();
+    }
+    environments.insert(env_appends.begin(), env_appends.end());
+#ifdef _WIN32
+    char path_env_sep = ';';
+#else
+    char path_env_sep = ':';
+#endif
+    for (auto const &item : env_item_appends) {
+      auto it = environments.find(item.first);
+#ifdef _WIN32
+      if (it == environments.end()) {
+        auto upper_key = item.first;
+        std::transform(upper_key.begin(), upper_key.end(), upper_key.begin(),
+                       [](char c) { return std::toupper(c); });
+        it = environments.find(upper_key);
+      }
+#endif
+      if (it == environments.end()) {
+        environments.insert(item);
+      } else {
+        it->second.push_back(path_env_sep);
+        it->second.append(item.second);
+      }
+    }
 #if defined(_WIN32) && defined(UNICODE)
     for (auto const &[key, val] : environments) {
       env_[detail::to_wstring(key)] = detail::to_wstring(val);
