@@ -577,7 +577,12 @@ inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
 #if defined(_WIN32)
   return read_write_per_thread(in, in_buf, out, out_buf, err, err_buf);
 #else
+#if defined(SUBPROCESS_MULTIPLEXING_USE_SELECT) && \
+    SUBPROCESS_MULTIPLEXING_USE_SELECT
+  return multiplexing_use_select(in, in_buf, out, out_buf, err, err_buf);
+#else
   return multiplexing_use_poll(in, in_buf, out, out_buf, err, err_buf);
+#endif
 #endif
 }
 
