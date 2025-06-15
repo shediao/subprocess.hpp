@@ -1645,11 +1645,12 @@ class subprocess {
       if (ret != 0) {
         pid_ = INVALID_NATIVE_HANDLE_VALUE;
       }
-    }
-    auto ret = posix_spawn(&pid_, exe_to_exec.c_str(), &action, nullptr,
-                           cmd.data(), envs.empty() ? nullptr : envs.data());
-    if (ret != 0) {
-      pid_ = INVALID_NATIVE_HANDLE_VALUE;
+    } else {
+      auto ret = posix_spawn(&pid_, exe_to_exec.c_str(), &action, nullptr,
+                             cmd.data(), nullptr);
+      if (ret != 0) {
+        pid_ = INVALID_NATIVE_HANDLE_VALUE;
+      }
     }
   }
 #endif  // SUBPROCESS_USE_POSIX_SPAWN
