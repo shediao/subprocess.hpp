@@ -1631,7 +1631,11 @@ class subprocess {
   Stderr stderr_;
 #if defined(_WIN32)
   PROCESS_INFORMATION process_information_;
+#if defined(UNICODE)
   STARTUPINFO startupinfo_;
+#else
+  STARTUPINFOA startupinfo_;
+#endif
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
 #endif
