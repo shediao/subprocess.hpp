@@ -1401,7 +1401,12 @@ class subprocess {
 
     auto env_block = create_environment_string_data(env_);
 
-    auto success = CreateProcess(nullptr, command.data(), NULL, NULL, TRUE, 0,
+    auto success = CreateProcess(nullptr, command.data(), NULL, NULL, TRUE,
+#if defined(UNICODE) || defined(_UNICODE)
+                                 CREATE_UNICODE_ENVIRONMENT,
+#else
+                                 0,
+#endif
                                  env_block.empty() ? nullptr : env_block.data(),
                                  cwd_.empty() ? nullptr : cwd_.data(),
                                  &startupinfo_, &process_information_);
