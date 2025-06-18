@@ -230,17 +230,38 @@ class HandleGuard {
  private:
   NativeHandle handle_;
 };
-template <typename CharT>
-inline std::vector<std::basic_string<CharT>> split(
-    const std::basic_string<CharT> &s, CharT del) {
-  std::basic_istringstream<CharT> stream{s};
-  std::vector<std::basic_string<CharT>> ret;
-  std::basic_string<CharT> line;
-  while (std::getline(stream, line, del)) {
-    if (!line.empty()) {
-      ret.push_back(line);
+
+template <typename CharT, typename F, typename C>
+  requires std::is_same_v<bool,
+                          decltype(std::declval<F>()(std::declval<CharT>()))>
+C &split_to_if(C &to, const std::basic_string<CharT> &str, F f,
+               int max_count = -1, bool is_compress_token = false) {
+  auto begin = str.begin();
+  auto delimiter = begin;
+  size_t MAX_COUNT = max_count < 0 ? std::numeric_limits<size_t>::max()
+                                   : static_cast<size_t>(max_count);
+  size_t count = 0;
+
+  while (count++ < MAX_COUNT &&
+         (delimiter = std::find_if(begin, str.end(), f)) != str.end()) {
+    to.insert(to.end(), {begin, delimiter});
+    if (is_compress_token) {
+      begin = std::find_if_not(delimiter, str.end(), f);
+    } else {
+      begin = std::next(delimiter);
     }
   }
+
+  to.insert(to.end(), {begin, str.end()});
+
+  return to;
+}
+
+template <typename CharT>
+inline std::vector<std::basic_string<CharT>> split(
+    const std::basic_string<CharT> &s, CharT delim) {
+  std::vector<std::basic_string<CharT>> ret;
+  split_to_if(ret, s, [delim](CharT c) { return c == delim; });
   return ret;
 }
 
