@@ -21,9 +21,8 @@
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
-#if defined(UNICODE)
-#include <cwctype>
-#endif
+
+#include <locale>
 #else
 #include <fcntl.h>
 #include <limits.h>
@@ -51,18 +50,6 @@
 #include <thread>
 #include <variant>
 #include <vector>
-
-#if defined(GetEnvironmentStrings)
-// Unlike most of the WinAPI, GetEnvironmentStrings is a real function and
-// GetEnvironmentStringsA is a macro. In UNICODE builds, GetEnvironmentStrings
-// is also defined as a macro that redirects to GetEnvironmentStringsW, and the
-// narrow character version become inaccessible.
-#if defined(_MSC_VER) || defined(__GNUC__)
-#pragma push_macro("GetEnvironmentStrings")
-#endif
-#undef GetEnvironmentStrings
-#define SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED
-#endif  // defined(GetEnvironmentStrings)
 
 #if !defined(_WIN32)
 extern char **environ;
@@ -131,7 +118,7 @@ constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 
 namespace detail {
-#if (defined(_WIN32) || defined(_WIN64)) && defined(UNICODE)
+#if defined(_WIN32)
 // Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
 inline std::wstring to_wstring(const std::string &str) {
   if (str.empty()) {
@@ -165,7 +152,8 @@ inline std::string to_string(const std::wstring &wstr) {
                       size_needed, NULL, NULL);
   return str;
 }
-#endif
+#endif  // _WIN32
+
 inline void close_native_handle(NativeHandle &handle) {
   if (handle != INVALID_NATIVE_HANDLE_VALUE) {
 #if defined(_WIN32)
@@ -264,29 +252,28 @@ inline std::vector<std::basic_string<CharT>> split(
 }
 
 #if defined(_WIN32)
-template <typename CharT>
-inline std::vector<CharT> create_command_string_data(
-    std::vector<std::basic_string<CharT>> const &cmds) {
-  std::vector<CharT> command;
+inline std::vector<wchar_t> create_command_string_data(
+    std::vector<std::basic_string<wchar_t>> const &cmds) {
+  std::vector<wchar_t> command;
   for (auto const &cmd : cmds) {
     if (!command.empty()) {
-      command.push_back(TEXT(' '));
+      command.push_back(L' ');
     }
     if (cmd.empty()) {
-      command.push_back(TEXT('"'));
-      command.push_back(TEXT('"'));
+      command.push_back(L'"');
+      command.push_back(L'"');
       continue;
     }
-    auto need_quota = std::any_of(cmd.begin(), cmd.end(), [](CharT c) {
-      return c <= TEXT(' ') || c == TEXT('"');
+    auto need_quota = std::any_of(cmd.begin(), cmd.end(), [](wchar_t c) {
+      return c <= L' ' || c == L'"';
     });
     if (need_quota) {
-      command.push_back(TEXT('"'));
+      command.push_back(L'"');
     }
     if (need_quota) {
       for (auto c : cmd) {
-        if (c == TEXT('"')) {
-          command.push_back(TEXT('\\'));
+        if (c == L'"') {
+          command.push_back(L'\\');
         }
         command.push_back(c);
       }
@@ -294,24 +281,25 @@ inline std::vector<CharT> create_command_string_data(
       command.insert(command.end(), cmd.begin(), cmd.end());
     }
     if (need_quota) {
-      command.push_back(TEXT('"'));
+      command.push_back(L'"');
     }
   }
-  command.push_back(TEXT('\0'));
+  command.push_back(L'\0');
   return command;
 }
 
-inline std::vector<TCHAR> create_environment_string_data(
-    std::map<std::basic_string<TCHAR>, std::basic_string<TCHAR>> const &envs) {
-  std::vector<TCHAR> env_block;
+inline std::vector<wchar_t> create_environment_string_data(
+    std::map<std::basic_string<wchar_t>, std::basic_string<wchar_t>> const
+        &envs) {
+  std::vector<wchar_t> env_block;
   for (auto const &[key, value] : envs) {
     env_block.insert(env_block.end(), key.begin(), key.end());
-    env_block.push_back(TEXT('='));
+    env_block.push_back(L'=');
     env_block.insert(env_block.end(), value.begin(), value.end());
-    env_block.push_back(TEXT('\0'));
+    env_block.push_back(L'\0');
   }
   if (!env_block.empty()) {
-    env_block.push_back(TEXT('\0'));
+    env_block.push_back(L'\0');
   }
   return env_block;
 }
@@ -325,16 +313,12 @@ inline std::string get_last_error_msg() {
   std::stringstream out;
   out << "Error: " << error;
 
-  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-                    FORMAT_MESSAGE_IGNORE_INSERTS,
-                NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                (LPTSTR)&errorMsg, 0, NULL);
+  FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                     FORMAT_MESSAGE_IGNORE_INSERTS,
+                 NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                 (LPWSTR)&errorMsg, 0, NULL);
   if (errorMsg) {
-#if defined(UNICODE)
     out << ": " << to_string((wchar_t *)errorMsg);
-#else
-    out << ": " << (char *)errorMsg;
-#endif
     LocalFree(errorMsg);
   }
   return out.str();
@@ -635,11 +619,7 @@ inline std::optional<std::string> get_file_extension(std::string const &f) {
 
 inline bool is_executable(std::string const &f) {
 #if defined(_WIN32)
-#if defined(UNICODE)
   auto attr = GetFileAttributesW(to_wstring(f).c_str());
-#else
-  auto attr = GetFileAttributesA(f.c_str());
-#endif
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 #else
   struct stat sb;
@@ -650,30 +630,17 @@ inline bool is_executable(std::string const &f) {
 
 inline std::optional<std::string> get_env(std::string const &key) {
 #if defined(_WIN32)
-#if defined(UNICODE)
-  std::vector<TCHAR> buf;
   auto wkey = to_wstring(key);
   auto const size =
       GetEnvironmentVariableW(wkey.c_str(), nullptr, static_cast<DWORD>(0));
   if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
     return std::nullopt;
   }
+  std::vector<wchar_t> buf;
   buf.resize(static_cast<size_t>(size));
   GetEnvironmentVariableW(wkey.c_str(), buf.data(),
                           static_cast<DWORD>(buf.size()));
   return to_string(buf.data());
-#else
-  std::vector<TCHAR> buf;
-  auto const size =
-      GetEnvironmentVariableA(key.c_str(), nullptr, static_cast<DWORD>(0));
-  if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
-    return std::nullopt;
-  }
-  buf.resize(static_cast<size_t>(size));
-  GetEnvironmentVariableA(key.c_str(), buf.data(),
-                          static_cast<DWORD>(buf.size()));
-  return std::string{buf.data()};
-#endif
 #else
   auto *env = ::getenv(key.c_str());
   if (env) {
@@ -737,58 +704,36 @@ inline std::optional<std::string> find_command_in_path(
 }
 
 #if defined(_WIN32)
-inline std::map<std::string, std::string> get_all_envs() {
-  std::map<std::string, std::string> envs;
+inline std::map<std::wstring, std::wstring> get_all_envs() {
+  std::map<std::wstring, std::wstring> envs;
 
-#if defined(UNICODE)
   auto *envBlock = GetEnvironmentStringsW();
-#else
-  auto *envBlock = GetEnvironmentStrings();
-#endif
   if (envBlock == nullptr) {
     return envs;
   }
 
   const auto *currentEnv = envBlock;
-  while (*currentEnv != TEXT('\0')) {
-#if defined(UNICODE)
+  while (*currentEnv != L'\0') {
     std::wstring_view envString(currentEnv);
-#else
-    std::string_view envString(currentEnv);
-#endif
-    auto pos = envString.find(TEXT('='));
+    auto pos = envString.find(L'=');
     // Weird variables in Windows that start with '='.
     // The key is the name of a drive, like "=C:", and the value is the
     // current working directory on that drive.
     if (pos == 0) {
-      pos = envString.find(TEXT('='), 1);
+      pos = envString.find(L'=', 1);
     }
-#if defined(UNICODE)
     if (pos != std::wstring_view::npos) {
       auto key = std::wstring(envString.substr(0, pos));
       auto value = std::wstring(envString.substr(pos + 1));
       std::transform(key.begin(), key.end(), key.begin(),
-                     [](wchar_t c) { return std::towupper(c); });
-      envs[detail::to_string(key)] = detail::to_string(value);
+                     [](wchar_t c) { return std::toupper(c, std::locale()); });
+      envs[key] = value;
     }
-#else
-    if (pos != std::string_view::npos) {
-      auto key = std::string(envString.substr(0, pos));
-      auto value = std::string(envString.substr(pos + 1));
-      std::transform(key.begin(), key.end(), key.begin(),
-                     [](unsigned char c) { return std::toupper(c); });
-      envs[std::move(key)] = std::move(value);
-    }
-#endif
     currentEnv +=
         envString.length() + 1;  // Move to the next environment variable
   }
 
-#if defined(UNICODE)
-  FreeEnvironmentStrings(envBlock);
-#else
-  FreeEnvironmentStringsA(envBlock);
-#endif
+  FreeEnvironmentStringsW(envBlock);
   return envs;
 }
 #else
@@ -856,11 +801,22 @@ struct File {
   using OpenType::WriteTruncate;
 
   explicit File(std::string const &p, bool append = false)
+      : path_{
+#if defined(_WIN32)
+        to_wstring(p)
+#else
+          p
+#endif
+      }, append_{append} {
+  }
+#if defined(_WIN32)
+  explicit File(std::wstring const &p, bool append = false)
       : path_{p}, append_{append} {}
+#endif
 
   File(File &&o) noexcept
       : path_{std::move(o.path_)}, append_{o.append_}, fd_{o.fd_} {
-    o.path_ = "";
+    o.path_.clear();
     o.append_ = false;
     o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
   }
@@ -869,7 +825,7 @@ struct File {
     path_ = std::move(o.path_);
     append_ = o.append_;
     fd_ = o.fd_;
-    o.path_ = "";
+    o.path_.clear();
     o.append_ = false;
     o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
     return *this;
@@ -895,12 +851,8 @@ struct File {
     sa.lpSecurityDescriptor = nullptr;
     sa.bInheritHandle = TRUE;  // Make the handle inheritable
 
-    fd_ = CreateFile(
-#if defined(UNICODE)
-        to_wstring(path_).c_str(),
-#else
+    fd_ = CreateFileW(
         path_.c_str(),
-#endif
         type == ReadOnly
             ? GENERIC_READ
             : (type == WriteAppend ? FILE_APPEND_DATA : GENERIC_WRITE),
@@ -910,7 +862,7 @@ struct File {
                          : (type == WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
         FILE_ATTRIBUTE_NORMAL, nullptr);
     if (fd_ == INVALID_HANDLE_VALUE) {
-      throw std::runtime_error{"open failed: " + path_ +
+      throw std::runtime_error{"open failed: " + to_string(path_) +
                                ", error: " + std::to_string(GetLastError())};
     }
 #else
@@ -925,7 +877,11 @@ struct File {
     }
 #endif
   }
+#if defined(_WIN32)
+  std::wstring path_;
+#else
   std::string path_;
+#endif
   bool append_{false};
   NativeHandle fd_{INVALID_NATIVE_HANDLE_VALUE};
 };
@@ -1213,64 +1169,153 @@ class Stderr : public Stdio {
 struct stdin_redirector {
   Stdin operator<(Pipe p) const { return Stdin{std::move(p)}; }
   Stdin operator<(std::string const &file) const { return Stdin{File{file}}; }
+#if defined(_WIN32)
+  Stdin operator<(std::wstring const &file) const { return Stdin{File{file}}; }
+#endif
   Stdin operator<(std::vector<char> &buf) const { return Stdin{buf}; }
 };
 
 struct stdout_redirector {
   Stdout operator>(Pipe const &p) const { return Stdout{p}; }
   Stdout operator>(std::string const &file) const { return Stdout{File{file}}; }
+#if defined(_WIN32)
+  Stdout operator>(std::wstring const &file) const {
+    return Stdout{File{file}};
+  }
+#endif
   Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
 
   Stdout operator>>(std::string const &file) const {
     return Stdout{File{file, true}};
   }
+#if defined(_WIN32)
+  Stdout operator>>(std::wstring const &file) const {
+    return Stdout{File{file, true}};
+  }
+#endif
 };
 
 struct stderr_redirector {
   Stderr operator>(Pipe p) const { return Stderr{std::move(p)}; }
   Stderr operator>(std::string const &file) const { return Stderr{File{file}}; }
+#if defined(_WIN32)
+  Stderr operator>(std::wstring const &file) const {
+    return Stderr{File{file}};
+  }
+#endif
   Stderr operator>(std::vector<char> &buf) const { return Stderr{buf}; }
   Stderr operator>>(std::string const &file) const {
     return Stderr{File{file, true}};
   }
+#if defined(_WIN32)
+  Stderr operator>>(std::wstring const &file) const {
+    return Stderr{File{file, true}};
+  }
+#endif
 };
 
 struct Cwd {
+#if defined(_WIN32)
+  std::wstring cwd;
+#else
   std::string cwd;
+#endif
 };
 
 // set envs to process environment(override)
 struct Env {
+#if defined(_WIN32)
+  std::map<std::wstring, std::wstring> env;
+#else
   std::map<std::string, std::string> env;
+#endif
 };
 
 // append envs to process environment
 struct EnvAppend {
+#if defined(_WIN32)
+  std::map<std::wstring, std::wstring> env;
+#else
   std::map<std::string, std::string> env;
+#endif
 };
 
 // append value for special environment, for example: PATH
 struct EnvItemAppend {
   EnvItemAppend &operator=(EnvItemAppend const &) = delete;
   EnvItemAppend &operator+=(std::string val) {
+#if defined(_WIN32)
+    kv.second = to_wstring(val);
+#else
+    kv.second = val;
+#endif
+    return *this;
+  }
+
+#if defined(_WIN32)
+  EnvItemAppend &operator+=(std::wstring val) {
     kv.second = val;
     return *this;
   }
+#endif
+#if defined(_WIN32)
+  std::pair<std::wstring, std::wstring> kv;
+#else
   std::pair<std::string, std::string> kv;
+#endif
 };
 
 struct cwd_operator {
-  Cwd operator=(std::string const &p) const { return Cwd{p}; }
+  Cwd operator=(std::string const &p) const {
+#if defined(_WIN32)
+    return Cwd{detail::to_wstring(p)};
+#else
+    return Cwd{p};
+#endif
+  }
+#if defined(_WIN32)
+  Cwd operator=(std::wstring const &p) const { return Cwd{p}; }
+#endif
 };
 struct env_operator {
   Env operator=(std::map<std::string, std::string> env) const {
+#if defined(_WIN32)
+    std::map<std::wstring, std::wstring> wenv;
+    for (auto const &entry : env) {
+      wenv[detail::to_wstring(entry.first)] = detail::to_wstring(entry.second);
+    }
+    return Env{std::move(wenv)};
+#else
+    return Env{std::move(env)};
+#endif
+  }
+#if defined(_WIN32)
+  Env operator=(std::map<std::wstring, std::wstring> env) const {
     return Env{std::move(env)};
   }
+#endif
   EnvAppend operator+=(std::map<std::string, std::string> env) const {
+#if defined(_WIN32)
+    std::map<std::wstring, std::wstring> wenv;
+    for (auto const &entry : env) {
+      wenv[detail::to_wstring(entry.first)] = detail::to_wstring(entry.second);
+    }
+    return EnvAppend{std::move(wenv)};
+#else
+    return EnvAppend{std::move(env)};
+#endif
+  }
+#if defined(_WIN32)
+  EnvAppend operator+=(std::map<std::wstring, std::wstring> env) const {
     return EnvAppend{std::move(env)};
   }
+#endif
   EnvItemAppend operator[](std::string key) const {
+#if defined(_WIN32)
+    return EnvItemAppend{{to_wstring(key), L""}};
+#else
     return EnvItemAppend{{key, ""}};
+#endif
   }
 };
 
@@ -1310,8 +1355,11 @@ concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
                             std::is_same_v<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
 concept is_string_type = std::is_same_v<char *, std::decay_t<T>> ||
+                         std::is_same_v<wchar_t *, std::decay_t<T>> ||
                          std::is_same_v<const char *, std::decay_t<T>> ||
-                         std::is_same_v<std::string, std::decay_t<T>>;
+                         std::is_same_v<const wchar_t *, std::decay_t<T>> ||
+                         std::is_same_v<std::string, std::decay_t<T>> ||
+                         std::is_same_v<std::wstring, std::decay_t<T>>;
 #else
 template <typename T>
 constexpr bool is_named_argument = std::integral_constant<
@@ -1326,7 +1374,10 @@ template <typename T>
 constexpr bool is_string_type = std::integral_constant<
     bool, std::is_same_v<char *, std::decay_t<T>> ||
               std::is_same_v<const char *, std::decay_t<T>> ||
-              std::is_same_v<std::string, std::decay_t<T>>>::value;
+              std::is_same_v<wchar_t *, std::decay_t<T>> ||
+              std::is_same_v<const wchar_t *, std::decay_t<T>> ||
+              std::is_same_v<std::string, std::decay_t<T>> ||
+              std::is_same_v<std::wstring, std::decay_t<T>>>::value;
 #endif
 
 template <typename...>
@@ -1351,18 +1402,21 @@ class subprocess {
 #if CPLUSPLUS_VERSION >= 202002L
     requires(is_named_argument<T> && ...)
 #endif
+#if defined(_WIN32)
+  explicit subprocess(std::vector<std::wstring> cmd, T &&...args)
+#else
   explicit subprocess(std::vector<std::string> cmd, T &&...args)
-#if !(defined(_WIN32) && defined(UNICODE))
-      : cmd_(std::move(cmd))
 #endif
-  {
-#if defined(_WIN32) && defined(UNICODE)
-    std::transform(cmd.begin(), cmd.end(), back_inserter(cmd_),
-                   [](std::string const &s) { return to_wstring(s); });
-#endif
+      : cmd_(std::move(cmd)) {
+#if defined(_WIN32)
+    std::map<std::wstring, std::wstring> environments;
+    std::map<std::wstring, std::wstring> env_appends;
+    std::vector<std::pair<std::wstring, std::wstring>> env_item_appends;
+#else
     std::map<std::string, std::string> environments;
     std::map<std::string, std::string> env_appends;
     std::vector<std::pair<std::string, std::string>> env_item_appends;
+#endif
     (void)(..., ([&]<typename Arg>(Arg &&arg) {
              using ArgType = std::decay_t<Arg>;
              if constexpr (std::is_same_v<ArgType, Stdin>) {
@@ -1384,11 +1438,7 @@ class subprocess {
                env_item_appends.push_back(arg.kv);
              }
              if constexpr (std::is_same_v<ArgType, Cwd>) {
-#if defined(_WIN32) && defined(UNICODE)
-               cwd_ = detail::to_wstring(arg.cwd);
-#else
                cwd_ = arg.cwd;
-#endif
              }
              static_assert(std::is_same_v<Env, std::decay_t<T>> ||
                                std::is_same_v<Stdin, std::decay_t<T>> ||
@@ -1415,7 +1465,7 @@ class subprocess {
       if (it == environments.end()) {
         auto upper_key = item.first;
         std::transform(upper_key.begin(), upper_key.end(), upper_key.begin(),
-                       [](char c) { return std::toupper(c); });
+                       [](auto c) { return std::toupper(c, std::locale()); });
         it = environments.find(upper_key);
       }
 #endif
@@ -1426,19 +1476,31 @@ class subprocess {
         it->second.append(item.second);
       }
     }
-#if defined(_WIN32) && defined(UNICODE)
-    for (auto const &[key, val] : environments) {
-      env_[detail::to_wstring(key)] = detail::to_wstring(val);
-    }
-#else
     env_ = environments;
-#endif
 #if defined(_WIN32)
     ZeroMemory(&process_information_, sizeof(process_information_));
     ZeroMemory(&startupinfo_, sizeof(startupinfo_));
     startupinfo_.cb = sizeof(startupinfo_);
 #endif
   }
+
+#if defined(_WIN32)
+  template <typename... T>
+#if CPLUSPLUS_VERSION >= 202002L
+    requires(is_named_argument<T> && ...)
+#endif
+  explicit subprocess(std::vector<std::string> cmd, T &&...args)
+      : subprocess(
+            [](auto const &cmd) {
+              std::vector<std::wstring> ret;
+              std::transform(cmd.begin(), cmd.end(), std::back_inserter(ret),
+                             [](auto const &s) { return to_wstring(s); });
+              return ret;
+            }(cmd),
+            std::forward<T>(args)...) {
+  }
+#endif
+
   subprocess(subprocess &&) noexcept = default;
   subprocess &operator=(subprocess &&) noexcept = default;
   subprocess(const subprocess &) = delete;
@@ -1463,20 +1525,16 @@ class subprocess {
 
     auto env_block = create_environment_string_data(env_);
 
-    auto success = CreateProcess(nullptr, command.data(), NULL, NULL, TRUE,
-#if defined(UNICODE)
-                                 CREATE_UNICODE_ENVIRONMENT,
-#else
-                                 0,
-#endif
-                                 env_block.empty() ? nullptr : env_block.data(),
-                                 cwd_.empty() ? nullptr : cwd_.data(),
-                                 &startupinfo_, &process_information_);
+    auto success = CreateProcessW(
+        nullptr, command.data(), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT,
+        env_block.empty() ? nullptr : env_block.data(),
+        cwd_.empty() ? nullptr : cwd_.data(), &startupinfo_,
+        &process_information_);
 
     if (success) {
       manage_pipe_io();
     } else {
-      std::cerr << get_last_error_msg() << '\n';
+      std::wcerr << to_wstring(get_last_error_msg()) << L'\n';
       process_information_.hProcess = INVALID_NATIVE_HANDLE_VALUE;
       stdin_.close_all();
       stdout_.close_all();
@@ -1681,7 +1739,7 @@ class subprocess {
 #endif  // !_WIN32
 
  private:
-#if defined(_WIN32) && defined(UNICODE)
+#if defined(_WIN32)
   std::vector<std::wstring> cmd_;
   std::wstring cwd_{};
   std::map<std::wstring, std::wstring> env_;
@@ -1695,11 +1753,7 @@ class subprocess {
   Stderr stderr_;
 #if defined(_WIN32)
   PROCESS_INFORMATION process_information_;
-#if defined(UNICODE)
-  STARTUPINFO startupinfo_;
-#else
-  STARTUPINFOA startupinfo_;
-#endif
+  STARTUPINFOW startupinfo_;
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
 #endif
@@ -1733,6 +1787,19 @@ inline int run(std::vector<std::string> cmd, T &&...args) {
 #endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
+
+#if defined(_WIN32)
+template <typename... T>
+#if CPLUSPLUS_VERSION >= 202002L
+  requires(detail::is_named_argument<T> && ...)
+#endif
+inline int run(std::vector<std::wstring> cmd, T &&...args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert((detail::is_named_argument<T>) && ...);
+#endif
+  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
+}
+#endif
 
 template <typename... Args>
 #if CPLUSPLUS_VERSION >= 202002L
@@ -1775,6 +1842,22 @@ inline int $(std::vector<std::string> cmd, T &&...args) {
 #endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
+
+#if defined(_WIN32)
+#if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
+template <typename... T>
+#if CPLUSPLUS_VERSION >= 202002L
+  requires(detail::is_named_argument<T> && ...)
+#endif
+inline int $(std::vector<std::wstring> cmd, T &&...args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert((detail::is_named_argument<T>) && ...);
+#endif
+  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
+}
+#endif  // USE_DOLLAR_NAMED_VARIABLES
+#endif  // _WIN32
+
 template <typename... Args>
 #if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
@@ -1822,7 +1905,13 @@ inline std::optional<std::string> home() {
   return std::nullopt;
 }
 
-inline std::map<std::string, std::string> environs() {
+inline
+#if defined(_WIN32)
+    std::map<std::wstring, std::wstring>
+#else
+    std::map<std::string, std::string>
+#endif
+    environs() {
   return detail::get_all_envs();
 }
 
@@ -1848,19 +1937,15 @@ inline pid_type pid() {
 
 inline std::string getcwd() {
 #if defined(_WIN32)
-  auto size = GetCurrentDirectory(0, NULL);
+  auto size = GetCurrentDirectoryW(0, NULL);
   if (size == 0) {
     return "";
   }
-  std::vector<TCHAR> buffer(size);
-  if (GetCurrentDirectory(size, buffer.data()) == 0) {
+  std::vector<wchar_t> buffer(size);
+  if (GetCurrentDirectoryW(size, buffer.data()) == 0) {
     return "";
   }
-#if defined(UNICODE)
   return detail::to_string(buffer.data());
-#else
-  return std::string(buffer.data());
-#endif
 #else
   std::unique_ptr<char, decltype(&::free)> ret(::getcwd(nullptr, 0), &::free);
   if (ret) {
@@ -1873,11 +1958,7 @@ inline std::string getcwd() {
 
 inline bool chdir(std::string const &dir) {
 #if defined(_WIN32)
-#if defined(UNICODE)
   return SetCurrentDirectoryW(detail::to_wstring(dir).c_str());
-#else
-  return SetCurrentDirectoryA(dir.c_str());
-#endif
 #else
   return -1 != ::chdir(dir.c_str());
 #endif
@@ -1903,14 +1984,5 @@ using subprocess::named_arguments::$stderr;
 using subprocess::named_arguments::$stdin;
 using subprocess::named_arguments::$stdout;
 #endif
-
-#if defined(SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED)
-#if defined(_MSC_VER) || defined(__GNUC__)
-#pragma pop_macro("GetEnvironmentStrings")
-#elif defined(UNICODE)
-#define GetEnvironmentStrings GetEnvironmentStringsW
-#endif
-#undef SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED
-#endif  // defined(SUBPROCESS_HPP_GET_ENVIRONMENT_STRINGS_UNDEFINED)
 
 #endif  // __SUBPROCESS_SUBPROCESS_HPP__

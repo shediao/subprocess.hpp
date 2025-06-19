@@ -61,7 +61,13 @@ class RunFunctionTest : public ::testing::Test {
 
 // 1. Test simple command success
 TEST_F(RunFunctionTest, RunTrueCommand) {
-  int exit_code = run({"true"});
+  int exit_code = run({
+#if defined(_WIN32)
+      TEXT("cmd.exe"), TEXT("/c"), TEXT("exit /b 0")
+#else
+      "true"
+#endif
+  });
   ASSERT_EQ(exit_code, 0);
 }
 
@@ -83,7 +89,9 @@ TEST_F(RunFunctionTest, CaptureStdoutBasic) {
   std::vector<char> stdout_buf;
   int exit_code = run(
 #if defined(_WIN32)
-      {"cmd.exe", "/c", "<nul set /p=Hello Stdout&exit /b 0"}
+      {
+        TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=Hello Stdout&exit /b 0")
+      }
 #else
       {"/bin/echo", "-n", "Hello Stdout"}
 #endif
@@ -99,7 +107,8 @@ TEST_F(RunFunctionTest, CaptureStderrBasic) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Hello Stderr>&2&exit /b 0"
+          TEXT("cmd.exe"), TEXT("/c"),
+          TEXT("<nul set /p=Hello Stderr>&2&exit /b 0")
 #else
           "/bin/bash", "-c", "echo -n 'Hello Stderr' >&2"
 #endif
@@ -116,7 +125,8 @@ TEST_F(RunFunctionTest, CaptureBothStdoutAndStderr) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Out& <nul set /p=Err>&2&exit /b 0"
+          TEXT("cmd.exe"), TEXT("/c"),
+          TEXT("<nul set /p=Out& <nul set /p=Err>&2&exit /b 0")
 #else
           "/bin/bash", "-c", "echo -n Out; echo -n Err >&2"
 #endif
@@ -133,7 +143,7 @@ TEST_F(RunFunctionTest, CaptureEmptyStdoutFromTrue) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "exit /b 0"
+          TEXT("cmd.exe"), TEXT("/c"), TEXT("exit /b 0")
 #else
           "true"
 #endif
@@ -146,7 +156,14 @@ TEST_F(RunFunctionTest, CaptureEmptyStdoutFromTrue) {
 // 8. Test capture empty stderr (e.g., from "true" command)
 TEST_F(RunFunctionTest, CaptureEmptyStderrFromTrue) {
   std::vector<char> stderr_buf;
-  int exit_code = run("true", std_err > stderr_buf);
+  int exit_code = run(
+#if defined(_WIN32)
+      TEXT("cmd.exe"), TEXT("/c"), TEXT("exit /b 0")
+#else
+      "true"
+#endif
+                                       ,
+      std_err > stderr_buf);
   ASSERT_EQ(exit_code, 0);
   ASSERT_TRUE(stderr_buf.empty());
 }
@@ -157,7 +174,8 @@ TEST_F(RunFunctionTest, RedirectStdoutToFileOverwrite) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Overwrite Content&exit /b 0"
+          TEXT("cmd.exe"), TEXT("/c"),
+          TEXT("<nul set /p=Overwrite Content&exit /b 0")
 #else
           "/bin/echo", "-n", "Overwrite Content"
 #endif
@@ -173,7 +191,8 @@ TEST_F(RunFunctionTest, RedirectStderrToFileOverwrite) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Error Overwrite>&2&exit /b 0"
+          TEXT("cmd.exe"), TEXT("/c"),
+          TEXT("<nul set /p=Error Overwrite>&2&exit /b 0")
 #else
           "/bin/bash", "-c", "echo -n 'Error Overwrite' >&2"
 #endif
@@ -190,7 +209,7 @@ TEST_F(RunFunctionTest, RedirectStdoutToFileAppend) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Appended&exit /b 0"
+          TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=Appended&exit /b 0")
 #else
           "/bin/echo", "-n", "Appended"
 #endif
@@ -207,7 +226,8 @@ TEST_F(RunFunctionTest, RedirectStderrToFileAppend) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=AppendedError>&2&exit /b 0"
+          TEXT("cmd.exe"), TEXT("/c"),
+          TEXT("<nul set /p=AppendedError>&2&exit /b 0")
 #else
           "/bin/bash", "-c", "echo -n 'AppendedError' >&2"
 #endif
@@ -222,8 +242,9 @@ TEST_F(RunFunctionTest, EnvOverrideCheckValue) {
   std::vector<char> stdout_buf;
   // Assuming OverrideEnv is the way to specify overriding environment map
 #if defined(_WIN32)
-  int exit_code = run("cmd.exe", "/c", "<nul set /p=%MY_TEST_VAR%&exit /b 0",
-                      env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
+  int exit_code = run(
+      TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=%MY_TEST_VAR%&exit /b 0"),
+      env = {{TEXT("MY_TEST_VAR"), TEXT("is_set")}}, std_out > stdout_buf);
 #else
   int exit_code = run("/bin/bash", "-c", "echo -n $MY_TEST_VAR",
                       env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
@@ -240,10 +261,9 @@ TEST_F(RunFunctionTest, EnvAppendCheckValueAndPath) {
   // exist.
 #if defined(_WIN32)
   int exit_code =
-      run({"cmd.exe", "/c",
-           "<nul set /p=%MY_APPEND_VAR%&if defined PATH (<nul set "
-           "/p=_haspath)&exit "
-           "/b 0"},
+      run({TEXT("cmd.exe"), TEXT("/c"),
+           TEXT("<nul set /p=%MY_APPEND_VAR%&if defined PATH (<nul set "
+                "/p=_haspath)&exit /b 0")},
           env += {{"MY_APPEND_VAR", "appended"}}, std_out > stdout_buf);
 #else
   int exit_code =
@@ -353,7 +373,7 @@ TEST_F(RunFunctionTest, CommandWithMultipleArgumentsComplex) {
   int exit_code = run(
       {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "echo one two words three"
+          TEXT("cmd.exe"), TEXT("/c"), TEXT("echo one two words three")
 #else
           "/bin/echo", "one", "two words", "three"
 #endif
@@ -373,9 +393,9 @@ TEST_F(RunFunctionTest, CommandNameFromSystemPathMkdirHelp) {
 // `mkdir --help` usually exits 0 and prints to stdout.
 // On Windows `mkdir /?`
 #ifdef _WIN32
-  int exit_code =
-      run("cmd.exe", "/c", "echo true&exit /b 0", std_out > stdout_buf,
-          std_err > stdout_buf);  // some help output to stderr
+  int exit_code = run(TEXT("cmd.exe"), TEXT("/c"), TEXT("echo true&exit /b 0"),
+                      std_out > stdout_buf,
+                      std_err > stdout_buf);  // some help output to stderr
 #else
   int exit_code = run("echo", "true", std_out > stdout_buf);
 #endif
