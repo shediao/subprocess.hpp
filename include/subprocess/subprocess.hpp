@@ -6,18 +6,12 @@
  *   int run(...);
  *   int $(...);
  *   namespace named_arguments {
- *     $cwd;
- *     $devnull;
- *     $env;
- *     $stderr;
- *     $stdin;
- *     $stdout;
- *     cwd;
- *     devnull;
- *     env;
- *     std_err;
- *     std_in;
- *     std_out;
+ *     cwd;     $cwd;
+ *     devnull; $devnull;
+ *     env;     $env;
+ *     stderr;  $stderr;
+ *     stdin;   $stdin;
+ *     stdout;  $stdout;
  *   }
  * }
  * using subprocess::$;
@@ -29,6 +23,11 @@
  * using subprocess::named_arguments::$stdout;
  *
  * EXAMPLES:
+ *
+ *   #include <subprocess/subprocess.hpp>
+ *   using namespace subprocess::named_arguments;
+ *   using subprocess::run
+ *
  *   auto exit_code = run("command", "arg1", "arg2",..., "argN");
  *
  *   run("command", "arg1", "arg2",..., "argN",
