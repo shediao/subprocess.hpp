@@ -1,6 +1,51 @@
 #ifndef __SUBPROCESS_SUBPROCESS_HPP__
 #define __SUBPROCESS_SUBPROCESS_HPP__
 
+/*******************************************************************************
+ * namespace subprocess {
+ *   int run(...);
+ *   int $(...);
+ *   namespace named_arguments {
+ *     $cwd;
+ *     $devnull;
+ *     $env;
+ *     $stderr;
+ *     $stdin;
+ *     $stdout;
+ *     cwd;
+ *     devnull;
+ *     env;
+ *     std_err;
+ *     std_in;
+ *     std_out;
+ *   }
+ * }
+ * using subprocess::$;
+ * using subprocess::named_arguments::$cwd;
+ * using subprocess::named_arguments::$devnull;
+ * using subprocess::named_arguments::$env;
+ * using subprocess::named_arguments::$stderr;
+ * using subprocess::named_arguments::$stdin;
+ * using subprocess::named_arguments::$stdout;
+ *
+ * EXAMPLES:
+ *   auto exit_code = run("command", "arg1", "arg2",..., "argN");
+ *
+ *   run("command", "arg1", "arg2",..., "argN",
+ *            $stdin < $devnull,
+ *            $stdout > $devnull,
+ *            $stderr > $devnull);
+ *
+ *   run("pwd", $cwd = "/tmp/");
+ *
+ *   run("printenv", env+={{"env1","val1"}, {"env2", "val2"}});
+ *
+ *   run("printenv", "PATH", env["PATH"]+="/tmp/");
+ *
+ *   run(L"cmd", L"echo %PATH% & exit /b 0");
+ *
+ ******************************************************************************/
+
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -45,7 +90,6 @@
 #include <iostream>
 #include <map>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <variant>
@@ -205,7 +249,7 @@ class HandleGuard {
   NativeHandle get() const { return handle_; }
   NativeHandle *p_get() { return &handle_; }
 
-  void Close() { detail::close_native_handle(handle_); }
+  void Close() { close_native_handle(handle_); }
 
   bool IsValid() const {
 #if defined(_WIN32)
@@ -310,18 +354,19 @@ inline std::string get_last_error_msg() {
 #if defined(_WIN32)
   DWORD error = GetLastError();
   LPVOID errorMsg{NULL};
-  std::stringstream out;
-  out << "Error: " << error;
 
   FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
                      FORMAT_MESSAGE_IGNORE_INSERTS,
                  NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                  (LPWSTR)&errorMsg, 0, NULL);
   if (errorMsg) {
-    out << ": " << to_string((wchar_t *)errorMsg);
+    auto ret = to_string((wchar_t *)errorMsg);
     LocalFree(errorMsg);
+    return ret;
+  } else {
+    return "Unknown error or FormatMessageW failed, error code: " +
+           std::to_string(error);
   }
-  return out.str();
 #else   // _WIN32
   int error = errno;
   auto *err_msg = strerror(error);
@@ -336,7 +381,7 @@ inline std::string get_last_error_msg() {
 
 inline void write_to_native_handle(NativeHandle &fd,
                                    std::vector<char> &write_data) {
-  detail::HandleGuard auto_closed(fd);
+  HandleGuard auto_closed(fd);
   std::string_view write_view{write_data.begin(), write_data.end()};
   while (!write_view.empty()) {
 #if defined(_WIN32)
@@ -363,7 +408,7 @@ inline void write_to_native_handle(NativeHandle &fd,
 
 inline void read_from_native_handle(NativeHandle &fd,
                                     std::vector<char> &out_buf) {
-  detail::HandleGuard auto_closed(fd);
+  HandleGuard auto_closed(fd);
   char buf[1024];
 #if defined(_WIN32)
   DWORD read_count{0};
@@ -416,7 +461,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         throw std::runtime_error("write error: " + std::to_string(errno));
       }
       if (stdin_str.empty()) {
-        detail::close_native_handle(fds[0].fd);
+        close_native_handle(fds[0].fd);
       }
     }
     if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
@@ -425,7 +470,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         out_buf.insert(out_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        detail::close_native_handle(fds[1].fd);
+        close_native_handle(fds[1].fd);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -437,7 +482,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         err_buf.insert(err_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        detail::close_native_handle(fds[2].fd);
+        close_native_handle(fds[2].fd);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -446,7 +491,7 @@ inline void read_from_native_handle(NativeHandle &fd,
     for (auto &pfd : fds) {
       if (pfd.fd != INVALID_NATIVE_HANDLE_VALUE &&
           (pfd.revents & (POLLNVAL | POLLHUP | POLLERR))) {
-        detail::close_native_handle(pfd.fd);
+        close_native_handle(pfd.fd);
       }
     }
     if (fds[0].fd == INVALID_NATIVE_HANDLE_VALUE &&
@@ -485,9 +530,9 @@ inline void read_from_native_handle(NativeHandle &fd,
     auto const ready =
         select(max_fd + 1, &read_fds, &write_fds, nullptr, nullptr);
     if (ready == 0) {
-      detail::close_native_handle(in);
-      detail::close_native_handle(out);
-      detail::close_native_handle(err);
+      close_native_handle(in);
+      close_native_handle(out);
+      close_native_handle(err);
       break;
     }
     if (ready == -1) {
@@ -502,7 +547,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         throw std::runtime_error("write error: " + std::to_string(errno));
       }
       if (stdin_str.empty()) {
-        detail::close_native_handle(in);
+        close_native_handle(in);
       }
     }
     if (out != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(out, &read_fds)) {
@@ -511,7 +556,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         out_buf.insert(out_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        detail::close_native_handle(out);
+        close_native_handle(out);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -523,7 +568,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         err_buf.insert(err_buf.end(), buf, buf + read_count);
       }
       if (read_count == 0) {
-        detail::close_native_handle(err);
+        close_native_handle(err);
       }
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
@@ -758,8 +803,8 @@ inline std::map<std::string, std::string> get_all_envs() {
 class Pipe {
  public:
   static Pipe create() { return Pipe{}; }
-  void close_read() { detail::close_native_handle(fds_[0]); }
-  void close_write() { detail::close_native_handle(fds_[1]); }
+  void close_read() { close_native_handle(fds_[0]); }
+  void close_write() { close_native_handle(fds_[1]); }
   void close_all() {
     close_read();
     close_write();
@@ -830,7 +875,7 @@ struct File {
     o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
     return *this;
   }
-  ~File() { detail::close_native_handle(fd_); }
+  ~File() { close_native_handle(fd_); }
 
   void open_for_read() { open_impl(ReadOnly); }
   void open_for_write() {
@@ -840,7 +885,7 @@ struct File {
       open_impl(WriteTruncate);
     }
   }
-  void close() { detail::close_native_handle(fd_); }
+  void close() { close_native_handle(fd_); }
   NativeHandle fd() { return fd_; }
 
  private:
@@ -1000,13 +1045,12 @@ class Stdio {
     std::visit(
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            detail::close_native_handle(fileno() == 0 ? value.read()
-                                                      : value.write());
+            close_native_handle(fileno() == 0 ? value.read() : value.write());
           } else if constexpr (std::is_same_v<T, File>) {
             value.close();
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            detail::close_native_handle(fileno() == 0 ? value.pipe().read()
-                                                      : value.pipe().write());
+            close_native_handle(fileno() == 0 ? value.pipe().read()
+                                              : value.pipe().write());
           }
         },
         *redirect_);
@@ -1072,8 +1116,8 @@ class Stdio {
         [this]<typename T>([[maybe_unused]] T &value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             dup2(fileno() == 0 ? value.read() : value.write(), fileno());
-            detail::close_native_handle(value.read());
-            detail::close_native_handle(value.write());
+            close_native_handle(value.read());
+            close_native_handle(value.write());
           } else if constexpr (std::is_same_v<T, File>) {
             dup2(value.fd(), fileno());
             value.close();
@@ -1268,7 +1312,7 @@ struct EnvItemAppend {
 struct cwd_operator {
   Cwd operator=(std::string const &p) const {
 #if defined(_WIN32)
-    return Cwd{detail::to_wstring(p)};
+    return Cwd{to_wstring(p)};
 #else
     return Cwd{p};
 #endif
@@ -1282,7 +1326,7 @@ struct env_operator {
 #if defined(_WIN32)
     std::map<std::wstring, std::wstring> wenv;
     for (auto const &entry : env) {
-      wenv[detail::to_wstring(entry.first)] = detail::to_wstring(entry.second);
+      wenv[to_wstring(entry.first)] = to_wstring(entry.second);
     }
     return Env{std::move(wenv)};
 #else
@@ -1298,7 +1342,7 @@ struct env_operator {
 #if defined(_WIN32)
     std::map<std::wstring, std::wstring> wenv;
     for (auto const &entry : env) {
-      wenv[detail::to_wstring(entry.first)] = detail::to_wstring(entry.second);
+      wenv[to_wstring(entry.first)] = to_wstring(entry.second);
     }
     return EnvAppend{std::move(wenv)};
 #else
@@ -1451,7 +1495,7 @@ class subprocess {
            }(std::forward<T>(args))));
     if ((!env_item_appends.empty() || !env_appends.empty()) &&
         environments.empty()) {
-      environments = detail::get_all_envs();
+      environments = get_all_envs();
     }
     environments.insert(env_appends.begin(), env_appends.end());
 #ifdef _WIN32
