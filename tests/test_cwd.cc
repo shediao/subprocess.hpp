@@ -9,7 +9,7 @@ using namespace subprocess::named_arguments;
 using subprocess::run;
 
 TEST(SubprocessTest, CWD) {
-  std::vector<char> out;
+  subprocess::buffer out;
 
   auto home_dir = subprocess::home();
 
@@ -21,15 +21,16 @@ TEST(SubprocessTest, CWD) {
 
   ASSERT_FALSE(out.empty());
 
-  auto it = std::find_if(rbegin(out), rend(out),
+  auto out_view = out.to_string_view();
+  auto it = std::find_if(rbegin(out_view), rend(out_view),
                          [](char c) { return c != '\n' && c != '\r'; });
-  out.erase(it.base(), out.end());
+  out_view = out_view.substr(0, it.base() - out_view.begin());
 
-  ASSERT_EQ(std::string_view(out.data(), out.size()), home_dir.value());
+  ASSERT_EQ(out_view, home_dir.value());
 }
 
 TEST(SubprocessTest, CWD2) {
-  std::vector<char> out;
+  subprocess::buffer out;
 
   auto home_dir = subprocess::home();
 
@@ -41,9 +42,10 @@ TEST(SubprocessTest, CWD2) {
 
   ASSERT_FALSE(out.empty());
 
-  auto it = std::find_if(rbegin(out), rend(out),
+  auto out_view = out.to_string_view();
+  auto it = std::find_if(rbegin(out_view), rend(out_view),
                          [](char c) { return c != '\n' && c != '\r'; });
-  out.erase(it.base(), out.end());
+  out_view = out_view.substr(0, it.base() - out_view.begin());
 
-  ASSERT_EQ(std::string_view(out.data(), out.size()), home_dir.value());
+  ASSERT_EQ(out_view, home_dir.value());
 }

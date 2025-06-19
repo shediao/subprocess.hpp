@@ -9,11 +9,6 @@ using namespace std::string_literals;
 using namespace subprocess;
 using namespace subprocess::named_arguments;
 
-// Helper function to convert vector<char> to string
-static std::string vecCharToString(const std::vector<char>& vec) {
-  return std::string(vec.begin(), vec.end());
-}
-
 #if !defined(_WIN32)
 // Helper function to write file contents (for setting up append tests)
 static bool writeFileContents(const std::string& path,
@@ -86,7 +81,7 @@ TEST_F(RunFunctionTest, RunNonExistentCommand) {
 
 // 4. Test capture stdout
 TEST_F(RunFunctionTest, CaptureStdoutBasic) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
   int exit_code = run(
 #if defined(_WIN32)
       {
@@ -98,12 +93,12 @@ TEST_F(RunFunctionTest, CaptureStdoutBasic) {
       ,
       std_out > stdout_buf);
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(vecCharToString(stdout_buf), "Hello Stdout");
+  ASSERT_EQ(stdout_buf.to_string(), "Hello Stdout");
 }
 
 // 5. Test capture stderr
 TEST_F(RunFunctionTest, CaptureStderrBasic) {
-  std::vector<char> stderr_buf;
+  subprocess::buffer stderr_buf;
   int exit_code = run(
       {
 #if defined(_WIN32)
@@ -115,13 +110,13 @@ TEST_F(RunFunctionTest, CaptureStderrBasic) {
       },
       std_err > stderr_buf);
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(vecCharToString(stderr_buf), "Hello Stderr");
+  ASSERT_EQ(stderr_buf.to_string(), "Hello Stderr");
 }
 
 // 6. Test capture both stdout and stderr
 TEST_F(RunFunctionTest, CaptureBothStdoutAndStderr) {
-  std::vector<char> stdout_buf;
-  std::vector<char> stderr_buf;
+  subprocess::buffer stdout_buf;
+  subprocess::buffer stderr_buf;
   int exit_code = run(
       {
 #if defined(_WIN32)
@@ -133,13 +128,13 @@ TEST_F(RunFunctionTest, CaptureBothStdoutAndStderr) {
       },
       std_out > stdout_buf, std_err > stderr_buf);
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(vecCharToString(stdout_buf), "Out");
-  ASSERT_EQ(vecCharToString(stderr_buf), "Err");
+  ASSERT_EQ(stdout_buf.to_string(), "Out");
+  ASSERT_EQ(stderr_buf.to_string(), "Err");
 }
 
 // 7. Test capture empty stdout (e.g., from "true" command)
 TEST_F(RunFunctionTest, CaptureEmptyStdoutFromTrue) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
   int exit_code = run(
       {
 #if defined(_WIN32)
@@ -155,7 +150,7 @@ TEST_F(RunFunctionTest, CaptureEmptyStdoutFromTrue) {
 
 // 8. Test capture empty stderr (e.g., from "true" command)
 TEST_F(RunFunctionTest, CaptureEmptyStderrFromTrue) {
-  std::vector<char> stderr_buf;
+  subprocess::buffer stderr_buf;
   int exit_code = run(
 #if defined(_WIN32)
       TEXT("cmd.exe"), TEXT("/c"), TEXT("exit /b 0")
@@ -239,7 +234,7 @@ TEST_F(RunFunctionTest, RedirectStderrToFileAppend) {
 
 // 13. Test set environment variables (override) - check specific var
 TEST_F(RunFunctionTest, EnvOverrideCheckValue) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
   // Assuming OverrideEnv is the way to specify overriding environment map
 #if defined(_WIN32)
   int exit_code = run(
@@ -250,12 +245,12 @@ TEST_F(RunFunctionTest, EnvOverrideCheckValue) {
                       env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(vecCharToString(stdout_buf), "is_set");
+  ASSERT_EQ(stdout_buf.to_string(), "is_set");
 }
 
 // 14. Test append environment variables - check new var and PATH presence
 TEST_F(RunFunctionTest, EnvAppendCheckValueAndPath) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
   // Assuming AppendEnv is the way to specify appending environment map
   // This test checks if the appended var is set AND common vars like PATH still
   // exist.
@@ -273,13 +268,13 @@ TEST_F(RunFunctionTest, EnvAppendCheckValueAndPath) {
           env += {{"MY_APPEND_VAR", "appended"}}, std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(vecCharToString(stdout_buf), "appended_haspath");
+  ASSERT_EQ(stdout_buf.to_string(), "appended_haspath");
 }
 
 // 15. Test set environment variables (override) - check it clears other common
 // vars like PATH
 TEST_F(RunFunctionTest, EnvOverrideClearsPath) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code = run(
       {"cmd.exe", "/c",
@@ -297,12 +292,12 @@ fi
                       env = {{"ONLY_VAR", "visible"}}, std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(vecCharToString(stdout_buf), "isolated");
+  ASSERT_EQ(stdout_buf.to_string(), "isolated");
 }
 
 // 16. Test set current working directory (cwd)
 TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
 #ifdef _WIN32
   // On Windows, pwd might not exist or /tmp might not be standard.
   // This test might need adjustment for Windows. For now, POSIX assumed.
@@ -315,7 +310,7 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
                       std_out > stdout_buf);  // Example for Windows
   ASSERT_EQ(exit_code, 0);
   // Output format of `cmd /c cd` is "C:\Windows", no trailing newline typically
-  std::string output = vecCharToString(stdout_buf);
+  std::string output = stdout_buf.to_string();
   // Remove potential trailing \r\n
   if (!output.empty() && output.back() == '\n') {
     output.pop_back();
@@ -328,9 +323,9 @@ TEST_F(RunFunctionTest, CwdSetToTmpAndPwd) {
   int exit_code = run("/bin/pwd", cwd = "/tmp", std_out > stdout_buf);
   ASSERT_EQ(exit_code, 0);
 #if defined(__APPLE__)
-  ASSERT_EQ(vecCharToString(stdout_buf), "/private/tmp\n");
+  ASSERT_EQ(stdout_buf.to_string(), "/private/tmp\n");
 #else
-  ASSERT_EQ(vecCharToString(stdout_buf), "/tmp\n");
+  ASSERT_EQ(stdout_buf.to_string(), "/tmp\n");
 #endif
 #endif
 }
@@ -344,7 +339,7 @@ TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
       std::filesystem::path(temp_file.path()).filename().string();
   ASSERT_TRUE(temp_file.write("Relative Content"s));
 
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
 // On Windows, use `type` instead of `cat`.
 #ifdef _WIN32
   int exit_code = run({"cmd.exe", "/c", "type " + relative_file_name},
@@ -355,7 +350,7 @@ TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
 #endif
 
   ASSERT_EQ(exit_code, 0);
-  std::string output = vecCharToString(stdout_buf);
+  std::string output = stdout_buf.to_string();
 #ifdef _WIN32  // `type` command might add \r\n
   if (!output.empty() && output.back() == '\n') {
     output.pop_back();
@@ -369,7 +364,7 @@ TEST_F(RunFunctionTest, CwdSetAndReadRelativeFile) {
 
 // 18. Test command with multiple arguments, including one with spaces
 TEST_F(RunFunctionTest, CommandWithMultipleArgumentsComplex) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
   int exit_code = run(
       {
 #if defined(_WIN32)
@@ -381,15 +376,15 @@ TEST_F(RunFunctionTest, CommandWithMultipleArgumentsComplex) {
       std_out > stdout_buf);
   ASSERT_EQ(exit_code, 0);
 #if defined(_WIN32)
-  ASSERT_EQ(vecCharToString(stdout_buf), "one two words three\r\n");
+  ASSERT_EQ(stdout_buf.to_string(), "one two words three\r\n");
 #else
-  ASSERT_EQ(vecCharToString(stdout_buf), "one two words three\n");
+  ASSERT_EQ(stdout_buf.to_string(), "one two words three\n");
 #endif
 }
 
 // 19. Test command name from system PATH (using a common command)
 TEST_F(RunFunctionTest, CommandNameFromSystemPathMkdirHelp) {
-  std::vector<char> stdout_buf;
+  subprocess::buffer stdout_buf;
 // `mkdir --help` usually exits 0 and prints to stdout.
 // On Windows `mkdir /?`
 #ifdef _WIN32
@@ -413,17 +408,17 @@ TEST_F(RunFunctionTest, RunShellScriptFull) {
   ASSERT_TRUE(temp_file.write(
       "@echo off\necho script_out\necho script_err 1>&2\nexit /b 5"s));
 
-  std::vector<char> stdout_buf;
-  std::vector<char> stderr_buf;
+  subprocess::buffer stdout_buf;
+  subprocess::buffer stderr_buf;
   // cmd /c script.bat to run
   int exit_code = run({"cmd.exe", "/c", temp_file.path()}, std_out > stdout_buf,
                       std_err > stderr_buf);
 
   ASSERT_EQ(exit_code, 5);
   // Output from echo in batch includes \r\n
-  ASSERT_EQ(vecCharToString(stdout_buf), "script_out\r\n");
+  ASSERT_EQ(stdout_buf.to_string(), "script_out\r\n");
   ASSERT_EQ(
-      vecCharToString(stderr_buf),
+      stderr_buf.to_string(),
       "script_err \r\n");  // Note: stderr from echo might have trailing space
 #else
   const std::string script_path = "/tmp/test_run_script.sh";
@@ -438,14 +433,14 @@ TEST_F(RunFunctionTest, RunShellScriptFull) {
   int chmod_exit_code = run({"/bin/chmod", "+x", script_path});
   ASSERT_EQ(chmod_exit_code, 0);
 
-  std::vector<char> stdout_buf;
-  std::vector<char> stderr_buf;
+  subprocess::buffer stdout_buf;
+  subprocess::buffer stderr_buf;
   int script_exit_code =
       run({script_path}, std_out > stdout_buf, std_err > stderr_buf);
 
   ASSERT_EQ(script_exit_code, 5);
-  ASSERT_EQ(vecCharToString(stdout_buf), "script_out");
-  ASSERT_EQ(vecCharToString(stderr_buf), "script_err");
+  ASSERT_EQ(stdout_buf.to_string(), "script_out");
+  ASSERT_EQ(stderr_buf.to_string(), "script_err");
   removeFile(script_path);
 #endif
 }

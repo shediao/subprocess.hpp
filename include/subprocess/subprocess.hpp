@@ -28,6 +28,10 @@
  *   using namespace subprocess::named_arguments;
  *   using subprocess::run
  *
+ *   sbuprocess::buffer inbuf{"xxxxxxxxx"};
+ *   sbuprocess::buffer outbuf;
+ *   sbuprocess::buffer errbuf;
+ *
  *   auto exit_code = run("command", "arg1", "arg2",..., "argN");
  *
  *   run("command", "arg1", "arg2",..., "argN",
@@ -35,13 +39,13 @@
  *            $stdout > $devnull,
  *            $stderr > $devnull);
  *
- *   run("pwd", $cwd = "/tmp/");
+ *   run("pwd", $cwd = "/tmp/", $stdout > outbuf);
  *
  *   run("printenv", env+={{"env1","val1"}, {"env2", "val2"}});
  *
  *   run("printenv", "PATH", env["PATH"]+="/tmp/");
  *
- *   run(L"cmd", L"echo %PATH% & exit /b 0");
+ *   run(L"cmd", L"echo %PATH% & exit /b 0", $stdout > outbuf);
  *
  ******************************************************************************/
 
@@ -151,6 +155,35 @@ constexpr bool is_posix =
 #define USE_DOLLAR_NAMED_VARIABLES 1
 #endif
 
+namespace detail {
+class subprocess;
+class Stdio;
+class Stdin;
+class Stdout;
+class Stderr;
+}  // namespace detail
+class buffer {
+  friend class detail::subprocess;
+  friend class detail::Stdio;
+  friend class detail::Stdin;
+  friend class detail::Stdout;
+  friend class detail::Stderr;
+
+ public:
+  buffer() = default;
+  buffer(std::string const &str) : buf_(str.begin(), str.end()) {}
+  auto *data() { return buf_.data(); }
+  auto size() { return buf_.size(); }
+  auto to_string_view() { return std::string_view(buf_.data(), buf_.size()); }
+  auto to_string() { return std::string(buf_.data(), buf_.size()); }
+  auto empty() { return buf_.empty(); }
+  auto clear() { return buf_.clear(); }
+
+ private:
+  std::vector<char> buf_;
+};
+
+namespace detail {
 #if defined(_WIN32)
 using NativeHandle = HANDLE;
 const static inline NativeHandle INVALID_NATIVE_HANDLE_VALUE =
@@ -160,7 +193,6 @@ using NativeHandle = int;
 constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 
-namespace detail {
 #if defined(_WIN32)
 // Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
 inline std::wstring to_wstring(const std::string &str) {
@@ -931,14 +963,14 @@ struct File {
 };
 
 class Buffer {
-  using buffer_container_type = std::vector<char>;
+  using buffer_container_type = buffer;
 
  public:
   Buffer(buffer_container_type &buf)
       : buf_{std::ref(buf)}, pipe_{Pipe::create()} {}
   Buffer() : buf_{buffer_container_type{}}, pipe_{Pipe::create()} {}
 
-  std::vector<char> &buf() {
+  buffer &buf() {
     return std::visit(
         []<typename T>(T &value) -> buffer_container_type & {
           if constexpr (std::is_same_v<T, buffer_container_type>) {
@@ -968,7 +1000,7 @@ class Stdio {
   explicit Stdio(Pipe const &p) : redirect_(std::make_unique<value_type>(p)) {}
   explicit Stdio(File f)
       : redirect_(std::make_unique<value_type>(std::move(f))) {}
-  explicit Stdio(std::vector<char> &buf)
+  explicit Stdio(buffer &buf)
       : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
   Stdio(Stdio &&) noexcept = default;
   Stdio &operator=(Stdio &&) noexcept = default;
@@ -1215,7 +1247,7 @@ struct stdin_redirector {
 #if defined(_WIN32)
   Stdin operator<(std::wstring const &file) const { return Stdin{File{file}}; }
 #endif
-  Stdin operator<(std::vector<char> &buf) const { return Stdin{buf}; }
+  Stdin operator<(buffer &buf) const { return Stdin{buf}; }
 };
 
 struct stdout_redirector {
@@ -1226,7 +1258,11 @@ struct stdout_redirector {
     return Stdout{File{file}};
   }
 #endif
-  Stdout operator>(std::vector<char> &buf) const { return Stdout{buf}; }
+  Stdout operator>(buffer &buf) const {
+    buf.clear();
+    return Stdout{buf};
+  }
+  Stdout operator>>(buffer &buf) const { return Stdout{buf}; }
 
   Stdout operator>>(std::string const &file) const {
     return Stdout{File{file, true}};
@@ -1246,7 +1282,11 @@ struct stderr_redirector {
     return Stderr{File{file}};
   }
 #endif
-  Stderr operator>(std::vector<char> &buf) const { return Stderr{buf}; }
+  Stderr operator>(buffer &buf) const {
+    buf.clear();
+    return Stderr{buf};
+  }
+  Stderr operator>>(buffer &buf) const { return Stderr{buf}; }
   Stderr operator>>(std::string const &file) const {
     return Stderr{File{file, true}};
   }
@@ -1662,11 +1702,14 @@ class subprocess {
     std::vector<char> tmp_buf;
     read_write_pipes(
         in.has_value() ? in.value().get() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
+        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf().buf_
+                       : tmp_buf,
         out.has_value() ? out.value().get() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
+        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf().buf_
+                        : tmp_buf,
         err.has_value() ? err.value().get() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
+        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf().buf_
+                        : tmp_buf);
 #else
     auto in = stdin_.get_parent_pipe_fd_for_polling();
     auto out = stdout_.get_parent_pipe_fd_for_polling();
@@ -1676,11 +1719,14 @@ class subprocess {
     std::vector<char> tmp_buf;
     read_write_pipes(
         in.has_value() ? in.value().get() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
+        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf().buf_
+                       : tmp_buf,
         out.has_value() ? out.value().get() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
+        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf().buf_
+                        : tmp_buf,
         err.has_value() ? err.value().get() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
+        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf().buf_
+                        : tmp_buf);
 #endif
   }
 #if !defined(_WIN32)
@@ -1962,13 +2008,6 @@ inline
 using pid_type = unsigned long;
 #else
 using pid_type = int;
-#endif
-#if (defined(_WIN32) || defined(__FreeBSD__) || defined(__DragonFly__) || \
-     defined(__NetBSD__) || defined(__sun))
-constexpr static NativeHandle root_pid = 0;
-#elif (defined(__APPLE__) && defined(__MACH__) || defined(__linux__) || \
-       defined(__ANDROID__) || defined(__OpenBSD__))
-constexpr static NativeHandle root_pid = 1;
 #endif
 inline pid_type pid() {
 #if defined(_WIN32)

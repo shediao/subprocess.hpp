@@ -16,7 +16,7 @@ int exit_code = run("/bin/echo", "-n", "123");
 int exit_code = run({"/bin/echo", "-n", "123"});  // command is a vector
 
 // 2. capture stdout&stderr
-std::vector<char> stdout_buf, stderr_buf;
+subprocess::buffer stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out > stdout_buf,   // > is redirect
@@ -24,14 +24,14 @@ run(
 );
 
 // 3. redirect to file
-std::vector<char> stdout_buf, stderr_buf;
+subprocess::buffer stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out > "/tmp/out.txt",
     std_err > "/tmp/err.txt"
 );
 
-std::vector<char> stdout_buf, stderr_buf;
+subprocess::buffer stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out >> "/tmp/out.txt",  // >> is append to file

@@ -6,8 +6,8 @@ using namespace subprocess::named_arguments;
 using subprocess::run;
 
 TEST(SubprocessTest, CaptureOutputs) {
-  std::vector<char> out;
-  std::vector<char> err;
+  subprocess::buffer out;
+  subprocess::buffer err;
 
 #if !defined(_WIN32)
   run("/bin/bash", "-c", "echo -n 123; echo -n '345' >&2", std_out > out,

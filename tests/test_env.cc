@@ -6,7 +6,7 @@ using namespace subprocess::named_arguments;
 using subprocess::run;
 
 TEST(SubprocessTest, Environment) {
-  std::vector<char> out;
+  subprocess::buffer out;
 #if !defined(_WIN32)
   auto ret = run("/usr/bin/printenv", "env1", env = {{"env1", "value1"}},
                  std_out > out);
@@ -17,14 +17,14 @@ TEST(SubprocessTest, Environment) {
 
   ASSERT_EQ(ret, 0);
 #if !defined(_WIN32)
-  ASSERT_EQ(std::string_view(out.data(), out.size()), "value1\n");
+  ASSERT_EQ(out.to_string_view(), "value1\n");
 #else
-  ASSERT_EQ(std::string_view(out.data(), out.size()), "value1");
+  ASSERT_EQ(out.to_string_view(), "value1");
 #endif
 }
 
 TEST(SubprocessTest, Environment2) {
-  std::vector<char> out;
+  subprocess::buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $env1", $env += {{"env1", "value1"}},
                  $stdout > out);
@@ -34,5 +34,5 @@ TEST(SubprocessTest, Environment2) {
 #endif
 
   ASSERT_EQ(ret, 0);
-  ASSERT_EQ(std::string_view(out.data(), out.size()), "value1");
+  ASSERT_EQ(out.to_string_view(), "value1");
 }

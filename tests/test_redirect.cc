@@ -7,27 +7,23 @@ using namespace subprocess::named_arguments;
 using subprocess::run;
 TEST(SubprocessTest, RedirectOut) {
   TempFile tmp_file;
-  std::vector<char> content{'1', '2', '3'};
+  subprocess::buffer content{"123"};
 #if !defined(_WIN32)
-  run({"echo", "-n", std::string(content.data(), content.size())},
-      std_out > tmp_file.path());
+  run({"echo", "-n", content.to_string()}, std_out > tmp_file.path());
 #else
-  run({"cmd.exe", "/c",
-       "<nul set /p=" + std::string(content.data(), content.size())},
+  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string()},
       std_out > tmp_file.path());
 #endif
-  ASSERT_EQ(content, tmp_file.content());
+  ASSERT_EQ(content.to_string(), tmp_file.content_str());
 }
 TEST(SubprocessTest, RedirectOutAppend) {
   TempFile tmp_file;
   tmp_file.write(std::string{"000"});
-  std::vector<char> content{'1', '2', '3'};
+  subprocess::buffer content{"123"};
 #if !defined(_WIN32)
-  run({"echo", "-n", std::string(content.data(), content.size())},
-      std_out >> tmp_file.path());
+  run({"echo", "-n", content.to_string()}, std_out >> tmp_file.path());
 #else
-  run({"cmd.exe", "/c",
-       "<nul set /p=" + std::string(content.data(), content.size())},
+  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string()},
       std_out >> tmp_file.path());
 #endif
   ASSERT_EQ("000123", tmp_file.content_str());
@@ -35,30 +31,26 @@ TEST(SubprocessTest, RedirectOutAppend) {
 
 TEST(SubprocessTest, RedirectErr) {
   TempFile tmp_file;
-  std::vector<char> content{'1', '2', '3'};
+  subprocess::buffer content{"123"};
 #if !defined(_WIN32)
-  run({"bash", "-c",
-       "echo -n " + std::string(content.data(), content.size()) + " >&2"},
+  run({"bash", "-c", "echo -n " + content.to_string() + " >&2"},
       std_err > tmp_file.path());
 #else
-  run({"cmd.exe", "/c",
-       "<nul set /p=" + std::string(content.data(), content.size()) + ">&2"},
+  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2"},
       std_err > tmp_file.path());
 #endif
-  ASSERT_EQ(content, tmp_file.content());
+  ASSERT_EQ(content.to_string(), tmp_file.content_str());
 }
 
 TEST(SubprocessTest, RedirectErrAppend) {
   TempFile tmp_file;
   tmp_file.write(std::string("999"));
-  std::vector<char> content{'1', '2', '3'};
+  subprocess::buffer content{"123"};
 #if !defined(_WIN32)
-  run({"bash", "-c",
-       "echo -n " + std::string(content.data(), content.size()) + " >&2"},
+  run({"bash", "-c", "echo -n " + content.to_string() + " >&2"},
       std_err >> tmp_file.path());
 #else
-  run({"cmd.exe", "/c",
-       "<nul set /p=" + std::string(content.data(), content.size()) + ">&2"},
+  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2"},
       std_err >> tmp_file.path());
 #endif
   ASSERT_EQ("999123", tmp_file.content_str());

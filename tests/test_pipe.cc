@@ -5,7 +5,7 @@
 
 TEST(SubprocessTest, Pipe) {
 #if !defined(_WIN32)
-  std::vector<char> out;
+  subprocess::buffer out;
   auto pipe1 = subprocess::detail::Pipe::create();
   auto pipe2 = subprocess::detail::Pipe::create();
 
@@ -24,6 +24,6 @@ TEST(SubprocessTest, Pipe) {
   ASSERT_EQ(r1, 0);
   ASSERT_EQ(r2, 0);
   ASSERT_EQ(r3, 0);
-  ASSERT_EQ((std::vector<char>{'1', '2', '4', '\n', '4', '5', '6', '\n'}), out);
+  ASSERT_EQ((std::string_view{"124\n456\n"}), out.to_string_view());
 #endif
 }

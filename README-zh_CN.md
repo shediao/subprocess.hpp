@@ -16,7 +16,7 @@ int exit_code = run("/bin/echo", "-n", "123");
 int exit_code = run({"/bin/echo", "-n", "123"});  // 命令可以是 vector
 
 // 2. 捕获 stdout 和 stderr
-std::vector<char> stdout_buf, stderr_buf;
+subprocess::buffer stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out > stdout_buf,   // > 是重定向
@@ -24,14 +24,14 @@ run(
 );
 
 // 3. 重定向到文件
-std::vector<char> stdout_buf, stderr_buf;
+subprocess::buffer stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out > "/tmp/out.txt",
     std_err > "/tmp/err.txt"
 );
 
-std::vector<char> stdout_buf, stderr_buf;
+subprocess::buffer stdout_buf, stderr_buf;
 run(
     "/bin/bash", "-c", "echo -n 123; echo -n '345' >&2",
     std_out >> "/tmp/out.txt",  // >> 是追加到文件
