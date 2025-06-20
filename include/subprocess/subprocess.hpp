@@ -195,35 +195,37 @@ constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 
 #if defined(_WIN32)
 // Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
-inline std::wstring to_wstring(const std::string &str) {
+inline std::wstring to_wstring(const std::string &str,
+                               const UINT from_codepage = CP_UTF8) {
   if (str.empty()) {
     return {};
   }
   int size_needed =
-      MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+      MultiByteToWideChar(from_codepage, 0, &str[0], (int)str.size(), NULL, 0);
   if (size_needed <= 0) {
-    // Consider throwing an exception for conversion errors
-    return {};
+    throw std::runtime_error("MultiByteToWideChar error: " +
+                             std::to_string(GetLastError()));
   }
   std::wstring wstr(size_needed, 0);
-  MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0],
+  MultiByteToWideChar(from_codepage, 0, &str[0], (int)str.size(), &wstr[0],
                       size_needed);
   return wstr;
 }
 
 // Helper function to convert a UTF-16 std::wstring to a UTF-8 std::string
-inline std::string to_string(const std::wstring &wstr) {
+inline std::string to_string(const std::wstring &wstr,
+                             const UINT to_codepage = CP_UTF8) {
   if (wstr.empty()) {
     return {};
   }
-  int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(),
-                                        NULL, 0, NULL, NULL);
+  int size_needed = WideCharToMultiByte(to_codepage, 0, &wstr[0],
+                                        (int)wstr.size(), NULL, 0, NULL, NULL);
   if (size_needed <= 0) {
-    // Consider throwing an exception for conversion errors
-    return {};
+    throw std::runtime_error("WideCharToMultiByte error: " +
+                             std::to_string(GetLastError()));
   }
   std::string str(size_needed, 0);
-  WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &str[0],
+  WideCharToMultiByte(to_codepage, 0, &wstr[0], (int)wstr.size(), &str[0],
                       size_needed, NULL, NULL);
   return str;
 }
@@ -294,6 +296,60 @@ class HandleGuard {
   NativeHandle handle_;
 };
 
+template <typename T, typename = std::void_t<>>
+struct has_push_back : public std::false_type {};
+template <typename C>
+struct has_push_back<C, std::void_t<decltype(std::declval<C>().push_back(
+                            std::declval<typename C::value_type>()))>>
+    : public std::true_type {};
+template <typename T>
+constexpr bool has_push_back_v = has_push_back<T>::value;
+
+template <typename T, typename = std::void_t<>>
+struct has_emplace_back : public std::false_type {};
+template <typename C>
+struct has_emplace_back<C, std::void_t<decltype(std::declval<C>().emplace_back(
+                               std::declval<typename C::value_type>()))>>
+    : public std::true_type {};
+template <typename T>
+constexpr bool has_emplace_back_v = has_emplace_back<T>::value;
+
+template <typename T, typename = std::void_t<>>
+struct has_insert : public std::false_type {};
+template <typename C>
+struct has_insert<C, std::void_t<decltype(std::declval<C>().insert(
+                         std::declval<typename C::value_type>()))>>
+    : public std::true_type {};
+template <typename T>
+constexpr bool has_insert_v = has_insert<T>::value;
+
+template <typename T, typename = std::void_t<>>
+struct has_emplace : public std::false_type {};
+template <typename C>
+struct has_emplace<C, std::void_t<decltype(std::declval<C>().emplace(
+                          std::declval<typename C::value_type>()))>>
+    : public std::true_type {};
+template <typename T>
+constexpr bool has_emplace_v = has_emplace<T>::value;
+
+template <typename T, typename = std::void_t<>>
+struct has_push : public std::false_type {};
+template <typename C>
+struct has_push<C, std::void_t<decltype(std::declval<C>().push(
+                       std::declval<typename C::value_type>()))>>
+    : public std::true_type {};
+template <typename T>
+constexpr bool has_push_v = has_push<T>::value;
+
+template <typename T, typename = std::void_t<>>
+struct has_push_front : public std::false_type {};
+template <typename C>
+struct has_push_front<C, std::void_t<decltype(std::declval<C>().push_front(
+                             std::declval<typename C::value_type>()))>>
+    : public std::true_type {};
+template <typename T>
+constexpr bool has_push_front_v = has_push_front<T>::value;
+
 template <typename CharT, typename F, typename C>
   requires std::is_same_v<bool,
                           decltype(std::declval<F>()(std::declval<CharT>()))>
@@ -313,7 +369,23 @@ C &split_to_if(C &to, const std::basic_string<CharT> &str, F f,
     }
   }
 
-  to.insert(to.end(), {begin, str.end()});
+  if constexpr (has_emplace_back_v<C>) {
+    to.emplace_back(begin, str.end());
+  } else if constexpr (has_emplace_v<C>) {
+    to.emplace(begin, str.end());
+  } else if constexpr (has_push_back_v<C>) {
+    to.push_back({begin, str.end()});
+  } else if constexpr (has_insert_v<C>) {
+    to.insert({begin, str.end()});
+  } else if constexpr (has_push_v<C>) {
+    to.push({begin, str.end()});
+  } else if constexpr (has_push_front_v<C>) {
+    to.push_front({begin, str.end()});
+  } else {
+    static_assert(
+        !std::is_same_v<C, C>,
+        "The container does not support adding elements via a known method.");
+  }
 
   return to;
 }
