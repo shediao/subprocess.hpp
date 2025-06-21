@@ -166,6 +166,45 @@ class Stdin;
 class Stdout;
 class Stderr;
 }  // namespace detail
+
+#if defined(_WIN32)
+// Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
+inline std::wstring to_wstring(const std::string_view str,
+                               const UINT from_codepage = CP_UTF8) {
+  if (str.empty()) {
+    return {};
+  }
+  int size_needed = MultiByteToWideChar(from_codepage, 0, str.data(),
+                                        (int)str.size(), NULL, 0);
+  if (size_needed <= 0) {
+    throw std::runtime_error("MultiByteToWideChar error: " +
+                             std::to_string(GetLastError()));
+  }
+  std::wstring wstr(size_needed, 0);
+  MultiByteToWideChar(from_codepage, 0, str.data(), (int)str.size(), &wstr[0],
+                      size_needed);
+  return wstr;
+}
+
+// Helper function to convert a UTF-16 std::wstring to a UTF-8 std::string
+inline std::string to_string(const std::wstring_view wstr,
+                             const UINT to_codepage = CP_UTF8) {
+  if (wstr.empty()) {
+    return {};
+  }
+  int size_needed = WideCharToMultiByte(to_codepage, 0, wstr.data(),
+                                        (int)wstr.size(), NULL, 0, NULL, NULL);
+  if (size_needed <= 0) {
+    throw std::runtime_error("WideCharToMultiByte error: " +
+                             std::to_string(GetLastError()));
+  }
+  std::string str(size_needed, 0);
+  WideCharToMultiByte(to_codepage, 0, wstr.data(), (int)wstr.size(), &str[0],
+                      size_needed, NULL, NULL);
+  return str;
+}
+#endif  // _WIN32
+
 class buffer {
   friend class detail::subprocess;
   friend class detail::Stdio;
@@ -175,15 +214,36 @@ class buffer {
 
  public:
   buffer() = default;
-  buffer(std::string const &str) : buf_(str.begin(), str.end()) {}
+  buffer(std::string_view const &str) : buf_(str.begin(), str.end()) {}
   auto *data() { return buf_.data(); }
   auto size() { return buf_.size(); }
-  auto to_string_view() { return std::string_view(buf_.data(), buf_.size()); }
-  auto to_string() { return std::string(buf_.data(), buf_.size()); }
+  auto to_string() {
+#if defined(_WIN32)
+    if (encode_codepage_ == decode_codepage_) {
+      return std::string(buf_.data(), buf_.size());
+    } else {
+      return subprocess::to_string(
+          subprocess::to_wstring({buf_.data(), buf_.size()}, encode_codepage_),
+          decode_codepage_);
+    }
+#else
+    return std::string(buf_.data(), buf_.size());
+#endif
+  }
   auto empty() { return buf_.empty(); }
   auto clear() { return buf_.clear(); }
+#if defined(_WIN32)
+  UINT encode_codepage() { return encode_codepage_; };
+  UINT decode_codepage() { return decode_codepage_; };
+  void encode_codepage(UINT codepage) { encode_codepage_ = codepage; };
+  void decode_codepage(UINT codepage) { decode_codepage_ = codepage; };
+#endif
 
  private:
+#if defined(_WIN32)
+  UINT encode_codepage_{CP_UTF8};
+  UINT decode_codepage_{CP_UTF8};
+#endif
   std::vector<char> buf_;
 };
 
@@ -196,44 +256,6 @@ const static inline NativeHandle INVALID_NATIVE_HANDLE_VALUE =
 using NativeHandle = int;
 constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
-
-#if defined(_WIN32)
-// Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
-inline std::wstring to_wstring(const std::string &str,
-                               const UINT from_codepage = CP_UTF8) {
-  if (str.empty()) {
-    return {};
-  }
-  int size_needed =
-      MultiByteToWideChar(from_codepage, 0, &str[0], (int)str.size(), NULL, 0);
-  if (size_needed <= 0) {
-    throw std::runtime_error("MultiByteToWideChar error: " +
-                             std::to_string(GetLastError()));
-  }
-  std::wstring wstr(size_needed, 0);
-  MultiByteToWideChar(from_codepage, 0, &str[0], (int)str.size(), &wstr[0],
-                      size_needed);
-  return wstr;
-}
-
-// Helper function to convert a UTF-16 std::wstring to a UTF-8 std::string
-inline std::string to_string(const std::wstring &wstr,
-                             const UINT to_codepage = CP_UTF8) {
-  if (wstr.empty()) {
-    return {};
-  }
-  int size_needed = WideCharToMultiByte(to_codepage, 0, &wstr[0],
-                                        (int)wstr.size(), NULL, 0, NULL, NULL);
-  if (size_needed <= 0) {
-    throw std::runtime_error("WideCharToMultiByte error: " +
-                             std::to_string(GetLastError()));
-  }
-  std::string str(size_needed, 0);
-  WideCharToMultiByte(to_codepage, 0, &wstr[0], (int)wstr.size(), &str[0],
-                      size_needed, NULL, NULL);
-  return str;
-}
-#endif  // _WIN32
 
 inline void close_native_handle(NativeHandle &handle) {
   if (handle != INVALID_NATIVE_HANDLE_VALUE) {
@@ -2105,7 +2127,7 @@ inline std::string getcwd() {
   if (GetCurrentDirectoryW(size, buffer.data()) == 0) {
     return "";
   }
-  return detail::to_string(buffer.data());
+  return to_string(buffer.data());
 #else
   std::unique_ptr<char, decltype(&::free)> ret(::getcwd(nullptr, 0), &::free);
   if (ret) {
@@ -2118,7 +2140,7 @@ inline std::string getcwd() {
 
 inline bool chdir(std::string const &dir) {
 #if defined(_WIN32)
-  return SetCurrentDirectoryW(detail::to_wstring(dir).c_str());
+  return SetCurrentDirectoryW(to_wstring(dir).c_str());
 #else
   return -1 != ::chdir(dir.c_str());
 #endif

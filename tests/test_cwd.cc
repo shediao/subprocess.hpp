@@ -22,7 +22,7 @@ TEST(SubprocessTest, CWD) {
 
   ASSERT_FALSE(out.empty());
 
-  auto out_view = out.to_string_view();
+  auto out_view = std::string_view(out.data(), out.size());
   auto it = std::find_if(rbegin(out_view), rend(out_view),
                          [](char c) { return c != '\n' && c != '\r'; });
   out_view = out_view.substr(0, it.base() - out_view.begin());
@@ -44,7 +44,7 @@ TEST(SubprocessTest, CWD2) {
 
   ASSERT_FALSE(out.empty());
 
-  auto out_view = out.to_string_view();
+  auto out_view = std::string_view(out.data(), out.size());
   auto it = std::find_if(rbegin(out_view), rend(out_view),
                          [](char c) { return c != '\n' && c != '\r'; });
   out_view = out_view.substr(0, it.base() - out_view.begin());

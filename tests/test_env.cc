@@ -18,9 +18,9 @@ TEST(SubprocessTest, Environment) {
 
   ASSERT_EQ(ret, 0);
 #if !defined(_WIN32)
-  ASSERT_EQ(out.to_string_view(), "value1\n");
+  ASSERT_EQ(std::string_view(out.data(), out.size()), "value1\n");
 #else
-  ASSERT_EQ(out.to_string_view(), "value1");
+  ASSERT_EQ(std::string_view(out.data(), out.size()), "value1");
 #endif
 }
 
@@ -36,7 +36,7 @@ TEST(SubprocessTest, Environment2) {
 #endif
 
   ASSERT_EQ(ret, 0);
-  ASSERT_EQ(out.to_string_view(), "value1");
+  ASSERT_EQ(std::string_view(out.data(), out.size()), "value1");
 }
 
 TEST(SubprocessTest, Environment3) {
@@ -51,7 +51,7 @@ TEST(SubprocessTest, Environment3) {
 #endif
   ASSERT_EQ(ret, 0);
   ASSERT_GT(out.size(), 10);
-  ASSERT_EQ(out.to_string_view().substr(out.size() - 9), "XXXXXXXXX");
+  ASSERT_EQ(std::string_view(out.data() + out.size() - 9, 9), "XXXXXXXXX");
 }
 
 TEST(SubprocessTest, Environment4) {
@@ -66,5 +66,5 @@ TEST(SubprocessTest, Environment4) {
 #endif
   ASSERT_EQ(ret, 0);
   ASSERT_GT(out.size(), 10);
-  ASSERT_NE(out.to_string_view().substr(0, 9), "XXXXXXXXX");
+  ASSERT_NE(std::string_view(out.data(), 9), "XXXXXXXXX");
 }

@@ -24,6 +24,7 @@ TEST(SubprocessTest, Pipe) {
   ASSERT_EQ(r1, 0);
   ASSERT_EQ(r2, 0);
   ASSERT_EQ(r3, 0);
-  ASSERT_EQ((std::string_view{"124\n456\n"}), out.to_string_view());
+  ASSERT_EQ((std::string_view{"124\n456\n"}),
+            (std::string_view{out.data(), out.size()}));
 #endif
 }
