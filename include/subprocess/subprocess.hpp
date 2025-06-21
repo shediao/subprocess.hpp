@@ -59,9 +59,9 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#if (defined(_MSVC_LANG) && _MSVC_LANG < 201703L) || \
-    (!defined(_MSVC_LANG) && __cplusplus < 201703L)
-#error "This code requires C++17 or later."
+#if (defined(_MSVC_LANG) && _MSVC_LANG < 202002L) || \
+    (!defined(_MSVC_LANG) && __cplusplus < 202002L)
+#error "This code requires C++20 or later."
 #endif
 
 #if defined(_MSVC_LANG)
@@ -355,10 +355,8 @@ template <typename T>
 constexpr bool has_push_front_v = has_push_front<T>::value;
 
 template <typename CharT, typename F, typename C>
-#if CPLUSPLUS_VERSION >= 202002L
   requires std::is_same_v<bool,
                           decltype(std::declval<F>()(std::declval<CharT>()))>
-#endif
 C &split_to_if(C &to, const std::basic_string<CharT> &str, F f,
                int max_count = -1, bool is_compress_token = false) {
   auto begin = str.begin();
@@ -1522,7 +1520,6 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static env_operator $env;
 #endif
 }  // namespace named_args
-#if CPLUSPLUS_VERSION >= 202002L
 template <typename T>
 concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
                             std::is_same_v<Stdin, std::decay_t<T>> ||
@@ -1538,26 +1535,6 @@ concept is_string_type = std::is_same_v<char *, std::decay_t<T>> ||
                          std::is_same_v<const wchar_t *, std::decay_t<T>> ||
                          std::is_same_v<std::string, std::decay_t<T>> ||
                          std::is_same_v<std::wstring, std::decay_t<T>>;
-#else
-template <typename T>
-constexpr bool is_named_argument = std::integral_constant<
-    bool, std::is_same_v<Env, std::decay_t<T>> ||
-              std::is_same_v<Stdin, std::decay_t<T>> ||
-              std::is_same_v<Stdout, std::decay_t<T>> ||
-              std::is_same_v<Stderr, std::decay_t<T>> ||
-              std::is_same_v<Cwd, std::decay_t<T>> ||
-              std::is_same_v<EnvAppend, std::decay_t<T>> ||
-              std::is_same_v<EnvItemAppend, std::decay_t<T>>>::value;
-template <typename T>
-constexpr bool is_string_type = std::integral_constant<
-    bool, std::is_same_v<char *, std::decay_t<T>> ||
-              std::is_same_v<const char *, std::decay_t<T>> ||
-              std::is_same_v<wchar_t *, std::decay_t<T>> ||
-              std::is_same_v<const wchar_t *, std::decay_t<T>> ||
-              std::is_same_v<std::string, std::decay_t<T>> ||
-              std::is_same_v<std::wstring, std::decay_t<T>>>::value;
-#endif
-
 template <typename...>
 struct named_arg_typelist;
 
@@ -1577,9 +1554,7 @@ using named_arg_typelist_t = typename named_arg_typelist<T...>::type;
 class subprocess {
  public:
   template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
     requires(is_named_argument<T> && ...)
-#endif
 #if defined(_WIN32)
   explicit subprocess(std::vector<std::wstring> cmd, T &&...args)
 #else
@@ -1669,9 +1644,7 @@ class subprocess {
 
 #if defined(_WIN32)
   template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
     requires(is_named_argument<T> && ...)
-#endif
   explicit subprocess(std::vector<std::string> cmd, T &&...args)
       : subprocess(
             [](auto const &cmd) {
@@ -1680,8 +1653,7 @@ class subprocess {
                              [](auto const &s) { return to_wstring(s); });
               return ret;
             }(cmd),
-            std::forward<T>(args)...) {
-  }
+            std::forward<T>(args)...) {}
 #endif
 
   subprocess(subprocess &&) noexcept = default;
@@ -1967,40 +1939,23 @@ using detail::named_args::std_out;
 }  // namespace named_arguments
 
 template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
   requires(detail::is_named_argument<T> && ...)
-#endif
 inline int run(std::vector<std::string> cmd, T &&...args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T> && ...));
-#endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 #if defined(_WIN32)
 template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
   requires(detail::is_named_argument<T> && ...)
-#endif
 inline int run(std::vector<std::wstring> cmd, T &&...args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T>) && ...);
-#endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif
 
 template <typename... Args>
-#if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
            ...)
-#endif
 inline int run(Args... args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert(
-      ((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
-       ...));
-#endif
   std::tuple<Args...> args_tuple{std::move(args)...};
   using ArgsTuple = std::tuple<Args...>;
   using NamedArgTypelist =
@@ -2023,55 +1978,33 @@ inline int run(Args... args) {
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
   requires(detail::is_named_argument<T> && ...)
-#endif
 inline int $(std::vector<std::string> cmd, T &&...args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T> && ...));
-#endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 #if defined(_WIN32)
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
   requires(detail::is_named_argument<T> && ...)
-#endif
 inline int $(std::vector<std::wstring> cmd, T &&...args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T>) && ...);
-#endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif  // USE_DOLLAR_NAMED_VARIABLES
 #endif  // _WIN32
 
 template <typename... Args>
-#if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
            ...)
-#endif
 inline int $(Args... args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert(
-      ((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
-       ...));
-#endif
   return run(std::forward<Args>(args)...);
 }
 #endif
 
 template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<T> && ...) && true)
-#endif
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::string> cmd, T &&...args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T> && ...));
-#endif
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto &[exit_code_, std_out_, std_err_] = result;
@@ -2081,14 +2014,9 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 }
 #if defined(_WIN32)
 template <typename... T>
-#if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<T> && ...) && true)
-#endif
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::wstring> cmd, T &&...args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T>) && ...);
-#endif
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto &[exit_code_, std_out_, std_err_] = result;
@@ -2099,17 +2027,10 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 #endif  // _WIN32
 
 template <typename... Args>
-#if CPLUSPLUS_VERSION >= 202002L
   requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
            ...)
-#endif
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     Args... args) {
-#if CPLUSPLUS_VERSION < 202002L
-  static_assert(
-      ((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
-       ...));
-#endif
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto &[exit_code_, std_out_, std_err_] = result;
