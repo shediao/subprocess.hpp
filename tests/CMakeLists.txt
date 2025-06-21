@@ -10,6 +10,21 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(googletest)
 
+if(${CMAKE_SYSTEM_NAME} STREQUAL ${CMAKE_HOST_SYSTEM_NAME} AND NOT MSVC)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+     OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+     OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+    if(APPLE OR LINUX)
+      set(CMAKE_CXX_FLAGS_DEBUG
+          "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined -fno-omit-frame-pointer -fno-optimize-sibling-calls"
+      )
+    endif()
+
+  endif()
+endif()
+
 function(add_subprocess_test test_name test_files)
   add_executable(${test_name} ${test_files})
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
