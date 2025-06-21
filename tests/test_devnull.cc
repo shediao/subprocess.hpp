@@ -8,7 +8,7 @@ using subprocess::run;
 TEST(SubprocessTest, Devnull) {
   auto ret =
 #if defined(_WIN32)
-      run("cmd.exe", "/c", "echo 123", $stdout > $devnull);
+      run(TEXT("cmd.exe"), TEXT("/c"), TEXT("echo 123"), $stdout > $devnull);
 #else
       run("/bin/echo", "123", $stdout > $devnull);
 #endif

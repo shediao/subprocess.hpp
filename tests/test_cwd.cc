@@ -16,7 +16,8 @@ TEST(SubprocessTest, CWD) {
 #if !defined(_WIN32)
   run({"/bin/pwd"}, $stdout > out, $cwd = home_dir.value());
 #else
-  run({"cmd.exe", "/c", "echo %CD%"}, $stdout > out, $cwd = home_dir.value());
+  run({TEXT("cmd.exe"), TEXT("/c"), TEXT("echo %CD%")}, $stdout > out,
+      $cwd = home_dir.value());
 #endif
 
   ASSERT_FALSE(out.empty());
@@ -37,7 +38,8 @@ TEST(SubprocessTest, CWD2) {
 #if !defined(_WIN32)
   run("/bin/pwd", $stdout > out, $cwd = home_dir.value());
 #else
-  run("cmd.exe", "/c", "echo %CD%", $stdout > out, $cwd = home_dir.value());
+  run(TEXT("cmd.exe"), TEXT("/c"), TEXT("echo %CD%"), $stdout > out,
+      $cwd = home_dir.value());
 #endif
 
   ASSERT_FALSE(out.empty());

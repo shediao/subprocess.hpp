@@ -11,8 +11,9 @@ TEST(SubprocessTest, Environment) {
   auto ret = run("/usr/bin/printenv", "env1", env = {{"env1", "value1"}},
                  std_out > out);
 #else
-  auto ret = run("cmd.exe", "/c", "<nul set /p=%env1%&exit /b 0",
-                 env = {{"env1", "value1"}}, std_out > out);
+  auto ret =
+      run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=%env1%&exit /b 0"),
+          env = {{TEXT("env1"), TEXT("value1")}}, std_out > out);
 #endif
 
   ASSERT_EQ(ret, 0);
@@ -29,8 +30,9 @@ TEST(SubprocessTest, Environment2) {
   auto ret = run("bash", "-c", "echo -n $env1", $env += {{"env1", "value1"}},
                  $stdout > out);
 #else
-  auto ret = run("cmd.exe", "/c", "<nul set /p=%env1%&exit /b 0",
-                 $env += {{"env1", "value1"}}, $stdout > out);
+  auto ret =
+      run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=%env1%&exit /b 0"),
+          $env += {{TEXT("env1"), TEXT("value1")}}, $stdout > out);
 #endif
 
   ASSERT_EQ(ret, 0);
