@@ -38,3 +38,33 @@ TEST(SubprocessTest, Environment2) {
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out.to_string_view(), "value1");
 }
+
+TEST(SubprocessTest, Environment3) {
+  subprocess::buffer out;
+#if !defined(_WIN32)
+  auto ret = run("bash", "-c", "echo -n $PATH", $env["PATH"] += "XXXXXXXXX",
+                 $stdout > out);
+#else
+  auto ret =
+      run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=%PATH%&exit /b 0"),
+          $env["PATH"] += "XXXXXXXXX", $stdout > out);
+#endif
+  ASSERT_EQ(ret, 0);
+  ASSERT_GT(out.size(), 10);
+  ASSERT_EQ(out.to_string_view().substr(out.size() - 9), "XXXXXXXXX");
+}
+
+TEST(SubprocessTest, Environment4) {
+  subprocess::buffer out;
+#if !defined(_WIN32)
+  auto ret = run("bash", "-c", "echo -n $PATH", $env["PATH"] <<= "XXXXXXXXX",
+                 $stdout > out);
+#else
+  auto ret =
+      run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=%PATH%&exit /b 0"),
+          $env["PATH"] <<= "XXXXXXXXX", $stdout > out);
+#endif
+  ASSERT_EQ(ret, 0);
+  ASSERT_GT(out.size(), 10);
+  ASSERT_NE(out.to_string_view().substr(0, 9), "XXXXXXXXX");
+}

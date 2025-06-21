@@ -1401,26 +1401,43 @@ struct EnvAppend {
 
 // append value for special environment, for example: PATH
 struct EnvItemAppend {
-  EnvItemAppend &operator=(EnvItemAppend const &) = delete;
   EnvItemAppend &operator+=(std::string val) {
 #if defined(_WIN32)
-    kv.second = to_wstring(val);
+    std::get<1>(kv) = to_wstring(val);
 #else
-    kv.second = val;
+    std::get<1>(kv) = val;
 #endif
+    std::get<2>(kv) = true;
+    return *this;
+  }
+  EnvItemAppend &operator<<=(std::string val) {
+#if defined(_WIN32)
+    std::get<1>(kv) = to_wstring(val);
+#else
+    std::get<1>(kv) = val;
+#endif
+    std::get<2>(kv) = false;
     return *this;
   }
 
 #if defined(_WIN32)
   EnvItemAppend &operator+=(std::wstring val) {
-    kv.second = val;
+    std::get<1>(kv) = val;
+    std::get<2>(kv) = true;
+    return *this;
+  }
+  EnvItemAppend &operator<<=(std::wstring val) {
+    std::get<1>(kv) = val;
+    std::get<2>(kv) = false;
     return *this;
   }
 #endif
+
 #if defined(_WIN32)
-  std::pair<std::wstring, std::wstring> kv;
+  // name, value, is_append
+  std::tuple<std::wstring, std::wstring, bool> kv;
 #else
-  std::pair<std::string, std::string> kv;
+  std::tuple<std::string, std::string, bool> kv;
 #endif
 };
 
@@ -1471,9 +1488,9 @@ struct env_operator {
 #endif
   EnvItemAppend operator[](std::string key) const {
 #if defined(_WIN32)
-    return EnvItemAppend{{to_wstring(key), L""}};
+    return EnvItemAppend{{to_wstring(key), L"", true}};
 #else
-    return EnvItemAppend{{key, ""}};
+    return EnvItemAppend{{key, "", true}};
 #endif
   }
 };
@@ -1570,11 +1587,11 @@ class subprocess {
 #if defined(_WIN32)
     std::map<std::wstring, std::wstring> environments;
     std::map<std::wstring, std::wstring> env_appends;
-    std::vector<std::pair<std::wstring, std::wstring>> env_item_appends;
+    std::vector<std::tuple<std::wstring, std::wstring, bool>> env_item_appends;
 #else
     std::map<std::string, std::string> environments;
     std::map<std::string, std::string> env_appends;
-    std::vector<std::pair<std::string, std::string>> env_item_appends;
+    std::vector<std::tuple<std::string, std::string, bool>> env_item_appends;
 #endif
     (void)(..., ([&]<typename Arg>(Arg &&arg) {
              using ArgType = std::decay_t<Arg>;
@@ -1594,7 +1611,7 @@ class subprocess {
                env_appends.insert(arg.env.begin(), arg.env.end());
              }
              if constexpr (std::is_same_v<ArgType, EnvItemAppend>) {
-               env_item_appends.push_back(arg.kv);
+               env_item_appends.push_back(std::forward<Arg>(arg).kv);
              }
              if constexpr (std::is_same_v<ArgType, Cwd>) {
                cwd_ = arg.cwd;
@@ -1618,21 +1635,26 @@ class subprocess {
 #else
     char path_env_sep = ':';
 #endif
-    for (auto const &item : env_item_appends) {
-      auto it = environments.find(item.first);
+    for (auto const &[name, value, is_append] : env_item_appends) {
+      auto it = environments.find(name);
 #ifdef _WIN32
       if (it == environments.end()) {
-        auto upper_key = item.first;
+        auto upper_key = name;
         std::transform(upper_key.begin(), upper_key.end(), upper_key.begin(),
                        [](auto c) { return std::toupper(c, std::locale()); });
         it = environments.find(upper_key);
       }
 #endif
       if (it == environments.end()) {
-        environments.insert(item);
+        environments.insert({name, value});
       } else {
-        it->second.push_back(path_env_sep);
-        it->second.append(item.second);
+        if (is_append) {
+          it->second.push_back(path_env_sep);
+          it->second.append(value);
+        } else {
+          it->second.insert(it->second.begin(), value.begin(), value.end());
+          it->second.insert(it->second.begin(), path_env_sep);
+        }
       }
     }
     env_ = environments;
