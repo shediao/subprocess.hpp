@@ -1,4 +1,3 @@
-
 [![cmake-multi-platform](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml)
 [![msys2](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml)
 
@@ -69,6 +68,9 @@ cmd.push_back("subprocess");
 
 run(cmd);
 
+// 7. capture output
+auto [exit_code, out, err] = capture_run("command", "arg1", "arg2", ..., "argN");
+
 ```
 
 ## Usage
@@ -107,4 +109,5 @@ copy `subprocess.hpp` to myproject/dir/include/subprocess/
 4. parallel run subprocess
 
 ## docs
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shediao/subprocess.hpp)

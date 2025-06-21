@@ -47,6 +47,10 @@
  *
  *   run(L"cmd", L"echo %PATH% & exit /b 0", $stdout > outbuf);
  *
+ *
+ *   auto [exit_code, out, err] = capture_run("command", "arg1", "arg2",...,
+ *"argN");
+ *
  ******************************************************************************/
 
 #include <functional>
@@ -2032,6 +2036,60 @@ inline int $(Args... args) {
   return run(std::forward<Args>(args)...);
 }
 #endif
+
+template <typename... T>
+#if CPLUSPLUS_VERSION >= 202002L
+  requires((detail::is_named_argument<T> && ...) && true)
+#endif
+inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
+    std::vector<std::string> cmd, T &&...args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert((detail::is_named_argument<T>) && ...);
+#endif
+  using namespace named_arguments;
+  std::tuple<int, subprocess::buffer, subprocess::buffer> result;
+  auto &[exit_code_, std_out_, std_err_] = result;
+  exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
+                   std_err > std_err_);
+  return result;
+}
+#if defined(_WIN32)
+template <typename... T>
+#if CPLUSPLUS_VERSION >= 202002L
+  requires((detail::is_named_argument<T> && ...) && true)
+#endif
+inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
+    std::vector<std::wstring> cmd, T &&...args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert((detail::is_named_argument<T>) && ...);
+#endif
+  using namespace named_arguments;
+  std::tuple<int, subprocess::buffer, subprocess::buffer> result;
+  auto &[exit_code_, std_out_, std_err_] = result;
+  exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
+                   std_err > std_err_);
+  return result;
+}
+#endif  // _WIN32
+
+template <typename... Args>
+#if CPLUSPLUS_VERSION >= 202002L
+  requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
+           ...)
+#endif
+inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
+    Args... args) {
+#if CPLUSPLUS_VERSION < 202002L
+  static_assert(
+      (detail::is_named_argument<Args> || detail::is_string_type<Args>) && ...);
+#endif
+  using namespace named_arguments;
+  std::tuple<int, subprocess::buffer, subprocess::buffer> result;
+  auto &[exit_code_, std_out_, std_err_] = result;
+  exit_code_ =
+      run(std::forward<Args>(args)..., std_out > std_out_, std_err > std_err_);
+  return result;
+}
 
 inline std::optional<std::string> getenv(const std::string &name) {
   return detail::get_env(name);

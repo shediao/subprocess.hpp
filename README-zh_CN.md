@@ -1,4 +1,3 @@
-
 [![cmake-multi-platform](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml)
 [![msys2](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml)
 
@@ -69,6 +68,9 @@ cmd.push_back("subprocess");
 
 run(cmd);
 
+// 7. 捕获输出
+auto [exit_code, out, err] = capture_run("command", "arg1", "arg2", ..., "argN");
+
 ```
 
 ## 如何使用
@@ -107,4 +109,5 @@ add_subdirectory(/path/to/subprocess.hpp)
 4. 并行运行子进程
 
 ## docs
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shediao/subprocess.hpp)
