@@ -19,7 +19,6 @@ target_include_directories(
   subprocess INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                        $<INSTALL_INTERFACE:include>)
 
-target_compile_features(subprocess INTERFACE cxx_std_20)
 add_library(subprocess::subprocess ALIAS subprocess)
 
 if(SUBPROCESS_BUILD_TESTS)

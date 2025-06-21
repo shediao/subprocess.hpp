@@ -355,8 +355,10 @@ template <typename T>
 constexpr bool has_push_front_v = has_push_front<T>::value;
 
 template <typename CharT, typename F, typename C>
+#if CPLUSPLUS_VERSION >= 202002L
   requires std::is_same_v<bool,
                           decltype(std::declval<F>()(std::declval<CharT>()))>
+#endif
 C &split_to_if(C &to, const std::basic_string<CharT> &str, F f,
                int max_count = -1, bool is_compress_token = false) {
   auto begin = str.begin();
@@ -489,7 +491,7 @@ inline std::string get_last_error_msg() {
 inline void write_to_native_handle(NativeHandle &fd,
                                    std::vector<char> &write_data) {
   HandleGuard auto_closed(fd);
-  std::string_view write_view{write_data.begin(), write_data.end()};
+  std::string_view write_view{write_data.data(), write_data.size()};
   while (!write_view.empty()) {
 #if defined(_WIN32)
     DWORD write_count{0};
@@ -545,7 +547,7 @@ inline void read_from_native_handle(NativeHandle &fd,
                        {.fd = out, .events = POLLIN, .revents = 0},
                        {.fd = err, .events = POLLIN, .revents = 0}};
 
-  std::string_view stdin_str{in_buf.begin(), in_buf.end()};
+  std::string_view stdin_str{in_buf.data(), in_buf.size()};
 
   char buf[1024];
   while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
@@ -614,7 +616,7 @@ inline void read_from_native_handle(NativeHandle &fd,
 [[maybe_unused]] inline void multiplexing_use_select(
     NativeHandle &in, std::vector<char> &in_buf, NativeHandle &out,
     std::vector<char> &out_buf, NativeHandle &err, std::vector<char> &err_buf) {
-  std::string_view stdin_str{in_buf.begin(), in_buf.end()};
+  std::string_view stdin_str{in_buf.data(), in_buf.size()};
   char buf[1024];
 
   fd_set read_fds;
@@ -948,9 +950,6 @@ struct File {
     WriteTruncate,
     WriteAppend,
   };
-  using OpenType::ReadOnly;
-  using OpenType::WriteAppend;
-  using OpenType::WriteTruncate;
 
   explicit File(std::string const &p, bool append = false)
       : path_{
@@ -984,12 +983,12 @@ struct File {
   }
   ~File() { close_native_handle(fd_); }
 
-  void open_for_read() { open_impl(ReadOnly); }
+  void open_for_read() { open_impl(OpenType::ReadOnly); }
   void open_for_write() {
     if (append_) {
-      open_impl(WriteAppend);
+      open_impl(OpenType::WriteAppend);
     } else {
-      open_impl(WriteTruncate);
+      open_impl(OpenType::WriteTruncate);
     }
   }
   void close() { close_native_handle(fd_); }
@@ -1005,24 +1004,27 @@ struct File {
 
     fd_ = CreateFileW(
         path_.c_str(),
-        type == ReadOnly
+        type == OpenType::ReadOnly
             ? GENERIC_READ
-            : (type == WriteAppend ? FILE_APPEND_DATA : GENERIC_WRITE),
+            : (type == OpenType::WriteAppend ? FILE_APPEND_DATA
+                                             : GENERIC_WRITE),
         FILE_SHARE_READ,
         &sa,  // Security attributes
-        type == ReadOnly ? OPEN_EXISTING
-                         : (type == WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
+        type == OpenType::ReadOnly
+            ? OPEN_EXISTING
+            : (type == OpenType::WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
         FILE_ATTRIBUTE_NORMAL, nullptr);
     if (fd_ == INVALID_HANDLE_VALUE) {
       throw std::runtime_error{"open failed: " + to_string(path_) +
                                ", error: " + std::to_string(GetLastError())};
     }
 #else
-    fd_ = (type == ReadOnly)
+    fd_ = (type == OpenType::ReadOnly)
               ? open(path_.c_str(), O_RDONLY)
               : open(path_.c_str(),
-                     (type == WriteAppend) ? (O_WRONLY | O_CREAT | O_APPEND)
-                                           : (O_WRONLY | O_CREAT | O_TRUNC),
+                     (type == OpenType::WriteAppend)
+                         ? (O_WRONLY | O_CREAT | O_APPEND)
+                         : (O_WRONLY | O_CREAT | O_TRUNC),
                      0644);
     if (fd_ == -1) {
       throw std::runtime_error{"open failed: " + path_};
@@ -1970,7 +1972,7 @@ template <typename... T>
 #endif
 inline int run(std::vector<std::string> cmd, T &&...args) {
 #if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T>) && ...);
+  static_assert((detail::is_named_argument<T> && ...));
 #endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
@@ -1996,7 +1998,8 @@ template <typename... Args>
 inline int run(Args... args) {
 #if CPLUSPLUS_VERSION < 202002L
   static_assert(
-      (detail::is_named_argument<Args> || detail::is_string_type<Args>) && ...);
+      ((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
+       ...));
 #endif
   std::tuple<Args...> args_tuple{std::move(args)...};
   using ArgsTuple = std::tuple<Args...>;
@@ -2025,7 +2028,7 @@ template <typename... T>
 #endif
 inline int $(std::vector<std::string> cmd, T &&...args) {
 #if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T>) && ...);
+  static_assert((detail::is_named_argument<T> && ...));
 #endif
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
@@ -2053,7 +2056,8 @@ template <typename... Args>
 inline int $(Args... args) {
 #if CPLUSPLUS_VERSION < 202002L
   static_assert(
-      (detail::is_named_argument<Args> || detail::is_string_type<Args>) && ...);
+      ((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
+       ...));
 #endif
   return run(std::forward<Args>(args)...);
 }
@@ -2066,7 +2070,7 @@ template <typename... T>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::string> cmd, T &&...args) {
 #if CPLUSPLUS_VERSION < 202002L
-  static_assert((detail::is_named_argument<T>) && ...);
+  static_assert((detail::is_named_argument<T> && ...));
 #endif
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
@@ -2103,7 +2107,8 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     Args... args) {
 #if CPLUSPLUS_VERSION < 202002L
   static_assert(
-      (detail::is_named_argument<Args> || detail::is_string_type<Args>) && ...);
+      ((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
+       ...));
 #endif
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;

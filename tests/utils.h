@@ -42,7 +42,7 @@ inline std::string getTempFilePath(std::string const& prefix,
     }
   }();
   std::string template_str = temp_dir;
-  if (!template_str.ends_with('/')) {
+  if (template_str[template_str.length() - 1] != '/') {
     template_str.push_back('/');
   }
   if (!prefix.empty()) {
