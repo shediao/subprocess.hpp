@@ -1,71 +1,116 @@
+# Set the C++ standard to 20.
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Fetch and configure googletest.
 include(FetchContent)
-
 FetchContent_Declare(
   googletest
   GIT_REPOSITORY https://github.com/google/googletest.git
   GIT_TAG v1.15.2
   GIT_SHALLOW TRUE)
-
 FetchContent_MakeAvailable(googletest)
 
-if(${CMAKE_SYSTEM_NAME} STREQUAL ${CMAKE_HOST_SYSTEM_NAME} AND NOT MSVC)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
-     OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-     OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-    if(APPLE OR LINUX)
-      set(CMAKE_CXX_FLAGS_DEBUG
-          "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined -fno-omit-frame-pointer -fno-optimize-sibling-calls"
-      )
-    endif()
+# --- Compiler and Platform Specific Configuration ---
 
+# Define common compile options based on the compiler.
+set(SUBPROCESS_MSVC_COMPILE_OPTIONS "/W4" "/WX" "/utf-8" "/EHsc")
+set(SUBPROCESS_GCC_CLANG_COMPILE_OPTIONS "-Wall" "-Wextra" "-Werror")
+
+if(MSVC)
+  set(SUBPROCESS_COMMON_COMPILE_OPTIONS ${SUBPROCESS_MSVC_COMPILE_OPTIONS})
+else()
+  set(SUBPROCESS_COMMON_COMPILE_OPTIONS ${SUBPROCESS_GCC_CLANG_COMPILE_OPTIONS})
+endif()
+
+# Configure sanitizer flags for Debug builds on Linux and macOS when not
+# cross-compiling.
+set(SUBPROCESS_SANITIZER_CXX_FLAGS "")
+set(SUBPROCESS_SANITIZER_LINK_FLAGS "")
+if(NOT CMAKE_CROSSCOMPILING)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    list(
+      APPEND
+      SUBPROCESS_SANITIZER_CXX_FLAGS
+      "-fsanitize=address,undefined"
+      "-fno-omit-frame-pointer"
+      "-fno-optimize-sibling-calls"
+      "-g"
+      "-O0")
+    list(APPEND SUBPROCESS_SANITIZER_LINK_FLAGS "-fsanitize=address,undefined")
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+    list(APPEND SUBPROCESS_SANITIZER_CXX_FLAGS "/fsanitize=address")
   endif()
 endif()
 
-function(add_subprocess_test test_name test_files)
-  add_executable(${test_name} ${test_files})
+# --- Helper Function for Creating Tests ---
+
+# A helper function to create test targets. It handles the logic for creating
+# standard and, on Windows, ANSI targets.
+function(add_subprocess_test_suite test_name)
+  set(sources ${ARGN})
+  set(variants "")
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    add_executable(${test_name}_ansi ${test_files})
-  endif()
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
-     OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-     OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    if(NOT MSVC)
-      target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror)
-      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        target_compile_options(${test_name}_ansi PRIVATE -Wall -Wextra -Werror)
-      endif()
-    endif()
-  endif()
-  if(MSVC)
-    target_compile_options(${test_name} PRIVATE /W4 /WX /utf-8 /EHsc)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-      target_compile_options(${test_name}_ansi PRIVATE /W4 /WX /utf-8 /EHsc)
-    endif()
+    set(variants "unicode" "ansi")
+  else()
+    set(variants "default")
   endif()
 
-  if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    target_compile_definitions(${test_name} PRIVATE UNICODE _UNICODE)
-  endif()
-  target_link_libraries(${test_name} PRIVATE subprocess::subprocess
-                                             GTest::gtest GTest::gtest_main)
-  add_test(NAME ${test_name} COMMAND ${test_name})
-  if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    target_link_libraries(
-      ${test_name}_ansi PRIVATE subprocess::subprocess GTest::gtest
-                                GTest::gtest_main)
-    add_test(NAME ${test_name}_ansi COMMAND ${test_name})
-  endif()
+  foreach(variant IN LISTS variants)
+    set(target_name ${test_name})
+    set(test_name_suffix "")
+
+    if(variant STREQUAL "ansi")
+      set(target_name "${test_name}_ansi")
+      set(test_name_suffix "_ansi")
+    endif()
+
+    # Add the executable target
+    add_executable(${target_name} ${sources})
+
+    # Set compile options
+    target_compile_options(${target_name}
+                           PRIVATE ${SUBPROCESS_COMMON_COMPILE_OPTIONS})
+    if(SUBPROCESS_SANITIZER_CXX_FLAGS)
+      target_compile_options(
+        ${target_name}
+        PRIVATE "$<$<CONFIG:Debug>:${SUBPROCESS_SANITIZER_CXX_FLAGS}>")
+    endif()
+    if(SUBPROCESS_SANITIZER_LINK_FLAGS)
+      target_link_options(
+        ${target_name} PRIVATE
+        "$<$<CONFIG:Debug>:${SUBPROCESS_SANITIZER_LINK_FLAGS}>")
+    endif()
+
+    # Set compile definitions for the UNICODE variant on Windows
+    if(variant STREQUAL "unicode")
+      target_compile_definitions(${target_name} PRIVATE UNICODE _UNICODE)
+    endif()
+
+    # Link libraries
+    target_link_libraries(${target_name} PRIVATE subprocess::subprocess
+                                                 GTest::gtest GTest::gtest_main)
+
+    # Add to CTest
+    add_test(NAME ${test_name}${test_name_suffix} COMMAND ${target_name})
+  endforeach()
 endfunction()
 
-file(GLOB test_files "*.cc")
+# --- Test Target Definitions ---
 
-foreach(test_file ${test_files})
-  get_filename_component(test_name ${test_file} NAME_WE)
-  add_subprocess_test(${test_name} ${test_name}.cc)
+# Glob all test source files.
+file(
+  GLOB test_sources
+  RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+  "*.cc")
+
+# Create a separate test executable for each source file.
+foreach(test_source IN LISTS test_sources)
+  get_filename_component(test_name ${test_source} NAME_WE)
+  add_subprocess_test_suite(${test_name} ${test_source})
 endforeach()
 
-add_subprocess_test(all_test "${test_files}")
+# Create a single test executable containing all tests.
+add_subprocess_test_suite(all_tests ${test_sources})
