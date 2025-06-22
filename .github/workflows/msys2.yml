@@ -1,4 +1,4 @@
-name: CMake on MSYS2
+name: CMake on MSYS2(MSYS, UCRT64, MINGW64)
 on:
   push:
     branches: ["main"]
