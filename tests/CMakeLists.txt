@@ -1,9 +1,7 @@
-# Set the C++ standard to 20.
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Fetch and configure googletest.
+option(SUBPROCESS_ENABLE_ASAN "build asan for unittests" ON)
+
 include(FetchContent)
 FetchContent_Declare(
   googletest
@@ -28,20 +26,23 @@ endif()
 # cross-compiling.
 set(SUBPROCESS_SANITIZER_CXX_FLAGS "")
 set(SUBPROCESS_SANITIZER_LINK_FLAGS "")
-if(NOT CMAKE_CROSSCOMPILING)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-    list(
-      APPEND
-      SUBPROCESS_SANITIZER_CXX_FLAGS
-      "-fsanitize=address,undefined"
-      "-fno-omit-frame-pointer"
-      "-fno-optimize-sibling-calls"
-      "-g"
-      "-O0")
-    list(APPEND SUBPROCESS_SANITIZER_LINK_FLAGS "-fsanitize=address,undefined")
-  endif()
-  if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    list(APPEND SUBPROCESS_SANITIZER_CXX_FLAGS "/fsanitize=address")
+if(SUBPROCESS_ENABLE_ASAN)
+  if(NOT CMAKE_CROSSCOMPILING AND CMAKE_HOST_SYSTEM_NAME MATCHES "Linux|Darwin")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+      list(
+        APPEND
+        SUBPROCESS_SANITIZER_CXX_FLAGS
+        "-fsanitize=address,undefined"
+        "-fno-omit-frame-pointer"
+        "-fno-optimize-sibling-calls"
+        "-g"
+        "-O0")
+      list(APPEND SUBPROCESS_SANITIZER_LINK_FLAGS
+           "-fsanitize=address,undefined")
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+      list(APPEND SUBPROCESS_SANITIZER_CXX_FLAGS "/fsanitize=address")
+    endif()
   endif()
 endif()
 
