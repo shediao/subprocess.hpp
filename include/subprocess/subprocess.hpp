@@ -814,7 +814,7 @@ inline std::optional<std::string> get_env(std::string const &key) {
   buf.resize(static_cast<size_t>(size));
   GetEnvironmentVariableW(wkey.c_str(), buf.data(),
                           static_cast<DWORD>(buf.size()));
-  return to_string(std::wstring{buf.begin(), buf.end()});
+  return to_string(std::wstring{static_cast<const wchar_t *>(buf.data())});
 #else
   auto *env = ::getenv(key.c_str());
   if (env) {
@@ -835,7 +835,7 @@ inline std::optional<std::wstring> get_env(std::wstring const &key) {
   buf.resize(static_cast<size_t>(size));
   GetEnvironmentVariableW(key.c_str(), buf.data(),
                           static_cast<DWORD>(buf.size()));
-  return std::wstring(buf.begin(), buf.end());
+  return std::wstring(static_cast<const wchar_t *>(buf.data()));
 }
 #endif
 
