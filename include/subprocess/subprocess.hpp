@@ -814,7 +814,7 @@ inline std::optional<std::string> get_env(std::string const &key) {
   buf.resize(static_cast<size_t>(size));
   GetEnvironmentVariableW(wkey.c_str(), buf.data(),
                           static_cast<DWORD>(buf.size()));
-  return to_string(buf.data());
+  return to_string(std::wstring{buf.begin(), buf.end()});
 #else
   auto *env = ::getenv(key.c_str());
   if (env) {
@@ -823,6 +823,21 @@ inline std::optional<std::string> get_env(std::string const &key) {
   return std::nullopt;
 #endif
 }
+
+#if defined(_WIN32)
+inline std::optional<std::wstring> get_env(std::wstring const &key) {
+  auto const size =
+      GetEnvironmentVariableW(key.c_str(), nullptr, static_cast<DWORD>(0));
+  if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+    return std::nullopt;
+  }
+  std::vector<wchar_t> buf;
+  buf.resize(static_cast<size_t>(size));
+  GetEnvironmentVariableW(key.c_str(), buf.data(),
+                          static_cast<DWORD>(buf.size()));
+  return std::wstring(buf.begin(), buf.end());
+}
+#endif
 
 inline std::optional<std::string> find_command_in_path(
     std::string const &exe_file) {
@@ -2064,6 +2079,11 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 inline std::optional<std::string> getenv(const std::string &name) {
   return detail::get_env(name);
 }
+#if defined(_WIN32)
+inline std::optional<std::wstring> getenv(const std::wstring &name) {
+  return detail::get_env(name);
+}
+#endif
 
 inline std::optional<std::string> home() {
 #if defined(_WIN32)
@@ -2145,6 +2165,11 @@ inline bool chdir(std::string const &dir) {
   return -1 != ::chdir(dir.c_str());
 #endif
 }
+#if defined(_WIN32)
+inline bool chdir(std::wstring const &dir) {
+  return SetCurrentDirectoryW(dir.c_str());
+}
+#endif
 
 }  // namespace subprocess
 
