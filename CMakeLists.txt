@@ -7,7 +7,7 @@ project(
 set("PROJECT_DESCRIPTION" "A header-only lightweight subprocess for c++20")
 set("PROJECT_HOMEPAGE_URL" "https://github.com/shediao/subprocess.hpp")
 
-if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
   option(SUBPROCESS_BUILD_TESTS "Set to ON to build tests" ON)
 else()
   option(SUBPROCESS_BUILD_TESTS "Set to ON to build tests" OFF)
@@ -26,20 +26,22 @@ if(SUBPROCESS_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-install(
-  TARGETS subprocess
-  EXPORT subprocess-targets
-  INCLUDES
-  DESTINATION include)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+  install(
+    TARGETS subprocess
+    EXPORT subprocess-targets
+    INCLUDES
+    DESTINATION include)
 
-install(
-  DIRECTORY include/
-  DESTINATION include
-  FILES_MATCHING
-  PATTERN "*.hpp")
+  install(
+    DIRECTORY include/
+    DESTINATION include
+    FILES_MATCHING
+    PATTERN "*.hpp")
 
-install(
-  EXPORT subprocess-targets
-  FILE subprocess-targets.cmake
-  NAMESPACE subprocess::
-  DESTINATION lib/cmake/subprocess)
+  install(
+    EXPORT subprocess-targets
+    FILE subprocess-targets.cmake
+    NAMESPACE subprocess::
+    DESTINATION lib/cmake/subprocess)
+endif()
