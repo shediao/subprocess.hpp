@@ -103,7 +103,7 @@
 #include <vector>
 
 #if !defined(_WIN32)
-extern char **environ;
+extern char** environ;
 #endif  // !_WIN32
 
 namespace subprocess {
@@ -214,8 +214,8 @@ class buffer {
 
  public:
   buffer() = default;
-  buffer(std::string_view const &str) : buf_(str.begin(), str.end()) {}
-  auto *data() { return buf_.data(); }
+  buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
+  auto* data() { return buf_.data(); }
   auto size() { return buf_.size(); }
   auto to_string() {
 #if defined(_WIN32)
@@ -257,7 +257,7 @@ using NativeHandle = int;
 constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 
-inline void close_native_handle(NativeHandle &handle) {
+inline void close_native_handle(NativeHandle& handle) {
   if (handle != INVALID_NATIVE_HANDLE_VALUE) {
 #if defined(_WIN32)
     CloseHandle(handle);
@@ -279,9 +279,9 @@ class HandleGuard {
       : handle_(h) {
   }
   ~HandleGuard() { Close(); }
-  HandleGuard(const HandleGuard &) = delete;
-  HandleGuard &operator=(const HandleGuard &) = delete;
-  HandleGuard(HandleGuard &&other) noexcept : handle_(other.handle_) {
+  HandleGuard(const HandleGuard&) = delete;
+  HandleGuard& operator=(const HandleGuard&) = delete;
+  HandleGuard(HandleGuard&& other) noexcept : handle_(other.handle_) {
     other.handle_ =
 #if defined(_WIN32)
         INVALID_HANDLE_VALUE
@@ -290,7 +290,7 @@ class HandleGuard {
 #endif
         ;
   }
-  HandleGuard &operator=(HandleGuard &&other) noexcept {
+  HandleGuard& operator=(HandleGuard&& other) noexcept {
     if (this != &other) {
       Close();
       handle_ = other.handle_;
@@ -306,7 +306,7 @@ class HandleGuard {
   }
 
   NativeHandle get() const { return handle_; }
-  NativeHandle *p_get() { return &handle_; }
+  NativeHandle* p_get() { return &handle_; }
 
   void Close() { close_native_handle(handle_); }
 
@@ -379,7 +379,7 @@ constexpr bool has_push_front_v = has_push_front<T>::value;
 template <typename CharT, typename F, typename C>
   requires std::is_same_v<bool,
                           decltype(std::declval<F>()(std::declval<CharT>()))>
-C &split_to_if(C &to, const std::basic_string<CharT> &str, F f,
+C& split_to_if(C& to, const std::basic_string<CharT>& str, F f,
                int max_count = -1, bool is_compress_token = false) {
   auto begin = str.begin();
   auto delimiter = begin;
@@ -418,7 +418,7 @@ C &split_to_if(C &to, const std::basic_string<CharT> &str, F f,
 
 template <typename CharT>
 inline std::vector<std::basic_string<CharT>> split(
-    const std::basic_string<CharT> &s, CharT delim) {
+    const std::basic_string<CharT>& s, CharT delim) {
   std::vector<std::basic_string<CharT>> ret;
   split_to_if(ret, s, [delim](CharT c) { return c == delim; });
   return ret;
@@ -426,9 +426,9 @@ inline std::vector<std::basic_string<CharT>> split(
 
 #if defined(_WIN32)
 inline std::vector<wchar_t> create_command_string_data(
-    std::vector<std::basic_string<wchar_t>> const &cmds) {
+    std::vector<std::basic_string<wchar_t>> const& cmds) {
   std::vector<wchar_t> command;
-  for (auto const &cmd : cmds) {
+  for (auto const& cmd : cmds) {
     if (!command.empty()) {
       command.push_back(L' ');
     }
@@ -462,10 +462,10 @@ inline std::vector<wchar_t> create_command_string_data(
 }
 
 inline std::vector<wchar_t> create_environment_string_data(
-    std::map<std::basic_string<wchar_t>, std::basic_string<wchar_t>> const
-        &envs) {
+    std::map<std::basic_string<wchar_t>, std::basic_string<wchar_t>> const&
+        envs) {
   std::vector<wchar_t> env_block;
-  for (auto const &[key, value] : envs) {
+  for (auto const& [key, value] : envs) {
     env_block.insert(env_block.end(), key.begin(), key.end());
     env_block.push_back(L'=');
     env_block.insert(env_block.end(), value.begin(), value.end());
@@ -489,7 +489,7 @@ inline std::string get_last_error_msg() {
                  NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                  (LPWSTR)&errorMsg, 0, NULL);
   if (errorMsg) {
-    auto ret = to_string((wchar_t *)errorMsg);
+    auto ret = to_string((wchar_t*)errorMsg);
     LocalFree(errorMsg);
     return ret;
   } else {
@@ -498,7 +498,7 @@ inline std::string get_last_error_msg() {
   }
 #else   // _WIN32
   int error = errno;
-  auto *err_msg = strerror(error);
+  auto* err_msg = strerror(error);
   if (err_msg) {
     return std::string(err_msg);
   } else {
@@ -508,8 +508,8 @@ inline std::string get_last_error_msg() {
 #endif  // !_WIN32
 }
 
-inline void write_to_native_handle(NativeHandle &fd,
-                                   std::vector<char> &write_data) {
+inline void write_to_native_handle(NativeHandle& fd,
+                                   std::vector<char>& write_data) {
   HandleGuard auto_closed(fd);
   std::string_view write_view{write_data.data(), write_data.size()};
   while (!write_view.empty()) {
@@ -535,8 +535,8 @@ inline void write_to_native_handle(NativeHandle &fd,
   fd = INVALID_NATIVE_HANDLE_VALUE;
 }
 
-inline void read_from_native_handle(NativeHandle &fd,
-                                    std::vector<char> &out_buf) {
+inline void read_from_native_handle(NativeHandle& fd,
+                                    std::vector<char>& out_buf) {
   HandleGuard auto_closed(fd);
   char buf[1024];
 #if defined(_WIN32)
@@ -561,8 +561,8 @@ inline void read_from_native_handle(NativeHandle &fd,
 
 #if !defined(_WIN32)
 [[maybe_unused]] inline void multiplexing_use_poll(
-    NativeHandle &in, std::vector<char> &in_buf, NativeHandle &out,
-    std::vector<char> &out_buf, NativeHandle &err, std::vector<char> &err_buf) {
+    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
+    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
   struct pollfd fds[3]{{.fd = in, .events = POLLOUT, .revents = 0},
                        {.fd = out, .events = POLLIN, .revents = 0},
                        {.fd = err, .events = POLLIN, .revents = 0}};
@@ -617,7 +617,7 @@ inline void read_from_native_handle(NativeHandle &fd,
         throw std::runtime_error(get_last_error_msg());
       }
     }
-    for (auto &pfd : fds) {
+    for (auto& pfd : fds) {
       if (pfd.fd != INVALID_NATIVE_HANDLE_VALUE &&
           (pfd.revents & (POLLNVAL | POLLHUP | POLLERR))) {
         close_native_handle(pfd.fd);
@@ -634,8 +634,8 @@ inline void read_from_native_handle(NativeHandle &fd,
   err = INVALID_NATIVE_HANDLE_VALUE;
 }
 [[maybe_unused]] inline void multiplexing_use_select(
-    NativeHandle &in, std::vector<char> &in_buf, NativeHandle &out,
-    std::vector<char> &out_buf, NativeHandle &err, std::vector<char> &err_buf) {
+    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
+    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
   std::string_view stdin_str{in_buf.data(), in_buf.size()};
   char buf[1024];
 
@@ -708,8 +708,8 @@ inline void read_from_native_handle(NativeHandle &fd,
 #endif
 #if defined(__linux__)
 [[maybe_unused]] inline void multiplexing_use_epoll(
-    NativeHandle &, std::vector<char> &, NativeHandle &, std::vector<char> &,
-    NativeHandle &, std::vector<char> &) {
+    NativeHandle&, std::vector<char>&, NativeHandle&, std::vector<char>&,
+    NativeHandle&, std::vector<char>&) {
   // TODO
 }
 #endif
@@ -717,17 +717,17 @@ inline void read_from_native_handle(NativeHandle &fd,
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
     defined(__OpenBSD__)
 [[maybe_unused]] inline void multiplexing_use_kqueue(
-    NativeHandle &, std::vector<char> &, NativeHandle &, std::vector<char> &,
-    NativeHandle &, std::vector<char> &) {
+    NativeHandle&, std::vector<char>&, NativeHandle&, std::vector<char>&,
+    NativeHandle&, std::vector<char>&) {
   // TODO
 }
 #endif
 
 [[maybe_unused]]
-inline void read_write_per_thread(NativeHandle &in, std::vector<char> &in_buf,
-                                  NativeHandle &out, std::vector<char> &out_buf,
-                                  NativeHandle &err,
-                                  std::vector<char> &err_buf) {
+inline void read_write_per_thread(NativeHandle& in, std::vector<char>& in_buf,
+                                  NativeHandle& out, std::vector<char>& out_buf,
+                                  NativeHandle& err,
+                                  std::vector<char>& err_buf) {
   std::vector<std::thread> threads;
 
   if (in != INVALID_NATIVE_HANDLE_VALUE) {
@@ -743,14 +743,14 @@ inline void read_write_per_thread(NativeHandle &in, std::vector<char> &in_buf,
                          std::ref(err_buf));
   }
 
-  for (auto &thread : threads) {
+  for (auto& thread : threads) {
     thread.join();
   }
 }
 
-inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
-                             NativeHandle &out, std::vector<char> &out_buf,
-                             NativeHandle &err, std::vector<char> &err_buf) {
+inline void read_write_pipes(NativeHandle& in, std::vector<char>& in_buf,
+                             NativeHandle& out, std::vector<char>& out_buf,
+                             NativeHandle& err, std::vector<char>& err_buf) {
 #if defined(_WIN32)
   return read_write_per_thread(in, in_buf, out, out_buf, err, err_buf);
 #else
@@ -764,7 +764,7 @@ inline void read_write_pipes(NativeHandle &in, std::vector<char> &in_buf,
 }
 
 #if defined(_WIN32)
-inline std::optional<std::string> get_file_extension(std::string const &f) {
+inline std::optional<std::string> get_file_extension(std::string const& f) {
   auto const dotPos = f.rfind('.');
   if (dotPos == std::string::npos) {
     return std::nullopt;
@@ -791,7 +791,7 @@ inline std::optional<std::string> get_file_extension(std::string const &f) {
 }
 #endif  // !_WIN32
 
-inline bool is_executable(std::string const &f) {
+inline bool is_executable(std::string const& f) {
 #if defined(_WIN32)
   auto attr = GetFileAttributesW(to_wstring(f).c_str());
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
@@ -802,7 +802,7 @@ inline bool is_executable(std::string const &f) {
 #endif
 }
 
-inline std::optional<std::string> get_env(std::string const &key) {
+inline std::optional<std::string> get_env(std::string const& key) {
 #if defined(_WIN32)
   auto wkey = to_wstring(key);
   auto const size =
@@ -814,9 +814,9 @@ inline std::optional<std::string> get_env(std::string const &key) {
   buf.resize(static_cast<size_t>(size));
   GetEnvironmentVariableW(wkey.c_str(), buf.data(),
                           static_cast<DWORD>(buf.size()));
-  return to_string(std::wstring{static_cast<const wchar_t *>(buf.data())});
+  return to_string(std::wstring{static_cast<const wchar_t*>(buf.data())});
 #else
-  auto *env = ::getenv(key.c_str());
+  auto* env = ::getenv(key.c_str());
   if (env) {
     return std::string(env);
   }
@@ -825,7 +825,7 @@ inline std::optional<std::string> get_env(std::string const &key) {
 }
 
 #if defined(_WIN32)
-inline std::optional<std::wstring> get_env(std::wstring const &key) {
+inline std::optional<std::wstring> get_env(std::wstring const& key) {
   auto const size =
       GetEnvironmentVariableW(key.c_str(), nullptr, static_cast<DWORD>(0));
   if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
@@ -835,12 +835,12 @@ inline std::optional<std::wstring> get_env(std::wstring const &key) {
   buf.resize(static_cast<size_t>(size));
   GetEnvironmentVariableW(key.c_str(), buf.data(),
                           static_cast<DWORD>(buf.size()));
-  return std::wstring(static_cast<const wchar_t *>(buf.data()));
+  return std::wstring(static_cast<const wchar_t*>(buf.data()));
 }
 #endif
 
 inline std::optional<std::string> find_command_in_path(
-    std::string const &exe_file) {
+    std::string const& exe_file) {
 #ifdef _WIN32
   char separator = '\\';
   char path_env_sep = ';';
@@ -858,12 +858,12 @@ inline std::optional<std::string> find_command_in_path(
       get_env("PATHEXT").value_or(
           ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"),
       path_env_sep);
-  for (auto &ext : path_exts) {
+  for (auto& ext : path_exts) {
     std::transform(begin(ext), end(ext), ext.begin(), ::tolower);
   }
   path_exts.insert(path_exts.begin(), "");
 #endif
-  for (auto &p : paths) {
+  for (auto& p : paths) {
 #ifdef _WIN32
     std::string f = p + separator + exe_file;
     if (get_file_extension(f).has_value()) {
@@ -896,12 +896,12 @@ inline std::optional<std::string> find_command_in_path(
 inline std::map<std::wstring, std::wstring> get_all_envs() {
   std::map<std::wstring, std::wstring> envs;
 
-  auto *envBlock = GetEnvironmentStringsW();
+  auto* envBlock = GetEnvironmentStringsW();
   if (envBlock == nullptr) {
     return envs;
   }
 
-  const auto *currentEnv = envBlock;
+  const auto* currentEnv = envBlock;
   while (*currentEnv != L'\0') {
     std::wstring_view envString(currentEnv);
     auto pos = envString.find(L'=');
@@ -932,7 +932,7 @@ inline std::map<std::string, std::string> get_all_envs() {
     return envs;
   }
 
-  for (char **env = environ; *env != nullptr; ++env) {
+  for (char** env = environ; *env != nullptr; ++env) {
     std::string_view envString(*env);
     auto pos = envString.find('=');
     if (pos != std::string::npos) {
@@ -953,11 +953,11 @@ class Pipe {
     close_read();
     close_write();
   }
-  NativeHandle &read() { return fds_[0]; }
-  NativeHandle &write() { return fds_[1]; }
+  NativeHandle& read() { return fds_[0]; }
+  NativeHandle& write() { return fds_[1]; }
 
  private:
-  static inline void create_native_pipe(NativeHandle *fds) {
+  static inline void create_native_pipe(NativeHandle* fds) {
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES at;
     at.bInheritHandle = true;
@@ -996,17 +996,17 @@ struct File {
       }, append_{append} {
   }
 #if defined(_WIN32)
-  explicit File(std::wstring const &p, bool append = false)
+  explicit File(std::wstring const& p, bool append = false)
       : path_{p}, append_{append} {}
 #endif
 
-  File(File &&o) noexcept
+  File(File&& o) noexcept
       : path_{std::move(o.path_)}, append_{o.append_}, fd_{o.fd_} {
     o.path_.clear();
     o.append_ = false;
     o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
   }
-  File &operator=(File &&o) noexcept {
+  File& operator=(File&& o) noexcept {
     close();
     path_ = std::move(o.path_);
     append_ = o.append_;
@@ -1079,13 +1079,13 @@ class Buffer {
   using buffer_container_type = buffer;
 
  public:
-  Buffer(buffer_container_type &buf)
+  Buffer(buffer_container_type& buf)
       : buf_{std::ref(buf)}, pipe_{Pipe::create()} {}
   Buffer() : buf_{buffer_container_type{}}, pipe_{Pipe::create()} {}
 
-  buffer &buf() {
+  buffer& buf() {
     return std::visit(
-        []<typename T>(T &value) -> buffer_container_type & {
+        []<typename T>(T& value) -> buffer_container_type& {
           if constexpr (std::is_same_v<T, buffer_container_type>) {
             return value;
           } else if constexpr (std::is_same_v<T, std::reference_wrapper<
@@ -1095,7 +1095,7 @@ class Buffer {
         },
         buf_);
   }
-  Pipe &pipe() { return pipe_; }
+  Pipe& pipe() { return pipe_; }
 
  private:
   std::variant<std::reference_wrapper<buffer_container_type>,
@@ -1110,21 +1110,21 @@ class Stdio {
 
  public:
   explicit Stdio() : redirect_(nullptr) {}
-  explicit Stdio(Pipe const &p) : redirect_(std::make_unique<value_type>(p)) {}
+  explicit Stdio(Pipe const& p) : redirect_(std::make_unique<value_type>(p)) {}
   explicit Stdio(File f)
       : redirect_(std::make_unique<value_type>(std::move(f))) {}
-  explicit Stdio(buffer &buf)
+  explicit Stdio(buffer& buf)
       : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
-  Stdio(Stdio &&) noexcept = default;
-  Stdio &operator=(Stdio &&) noexcept = default;
-  Stdio(Stdio const &) = delete;
-  Stdio &operator=(Stdio const &) = delete;
+  Stdio(Stdio&&) noexcept = default;
+  Stdio& operator=(Stdio&&) noexcept = default;
+  Stdio(Stdio const&) = delete;
+  Stdio& operator=(Stdio const&) = delete;
   virtual ~Stdio() {
     if (!redirect_) {
       return;
     }
     std::visit(
-        []<typename T>([[maybe_unused]] T &value) {
+        []<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             if (value.read() != INVALID_NATIVE_HANDLE_VALUE) {
               std::cerr << ">> pipe.read() not closed!" << '\n';
@@ -1149,7 +1149,7 @@ class Stdio {
       return;
     }
     std::visit(
-        [this]<typename T>([[maybe_unused]] T &value) {
+        [this]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
             NativeHandle non_inherit_handle =
@@ -1187,7 +1187,7 @@ class Stdio {
       return;
     }
     std::visit(
-        [this]<typename T>([[maybe_unused]] T &value) {
+        [this]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             close_native_handle(fileno() == 0 ? value.read() : value.write());
           } else if constexpr (std::is_same_v<T, File>) {
@@ -1204,7 +1204,7 @@ class Stdio {
       return;
     }
     std::visit(
-        []<typename T>([[maybe_unused]] T &value) {
+        []<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             value.close_all();
           } else if constexpr (std::is_same_v<T, File>) {
@@ -1222,7 +1222,7 @@ class Stdio {
     }
     return std::visit(
         [this]<typename T>(
-            [[maybe_unused]] T &value) -> std::optional<NativeHandle> {
+            [[maybe_unused]] T& value) -> std::optional<NativeHandle> {
           if constexpr (std::is_same_v<T, Pipe>) {
             return fileno() == 0 ? value.read() : value.write();
           } else if constexpr (std::is_same_v<T, File>) {
@@ -1239,7 +1239,7 @@ class Stdio {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>([[maybe_unused]] T &value)
+        [this]<typename T>([[maybe_unused]] T& value)
             -> std::optional<std::reference_wrapper<NativeHandle>> {
           if constexpr (std::is_same_v<T, Buffer>) {
             return std::ref(fileno() == 0 ? value.pipe().write()
@@ -1257,7 +1257,7 @@ class Stdio {
       return;
     }
     std::visit(
-        [this]<typename T>([[maybe_unused]] T &value) {
+        [this]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             dup2(fileno() == 0 ? value.read() : value.write(), fileno());
             close_native_handle(value.read());
@@ -1275,12 +1275,12 @@ class Stdio {
   }
 
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
-  void setup_stdio_for_posix_spawn(posix_spawn_file_actions_t &action) {
+  void setup_stdio_for_posix_spawn(posix_spawn_file_actions_t& action) {
     if (!redirect_) {
       return;
     }
     std::visit(
-        [this, &action]<typename T>([[maybe_unused]] T &value) {
+        [this, &action]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             posix_spawn_file_actions_adddup2(
                 &action, fileno() == 0 ? value.read() : value.write(),
@@ -1308,7 +1308,7 @@ class Stdio {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>([[maybe_unused]] T &value)
+        [this]<typename T>([[maybe_unused]] T& value)
             -> std::optional<std::reference_wrapper<NativeHandle>> {
           if constexpr (std::is_same_v<T, Buffer>) {
             return std::ref(fileno() == 0 ? value.pipe().write()
@@ -1329,59 +1329,59 @@ class Stdio {
 class Stdin : public Stdio {
  public:
   using Stdio::Stdio;
-  Stdin(Stdin &&) noexcept = default;
-  Stdin &operator=(Stdin &&) noexcept = default;
-  Stdin(Stdin const &) = delete;
-  Stdin &operator=(Stdin const &) = delete;
+  Stdin(Stdin&&) noexcept = default;
+  Stdin& operator=(Stdin&&) noexcept = default;
+  Stdin(Stdin const&) = delete;
+  Stdin& operator=(Stdin const&) = delete;
   int fileno() const override { return 0; }
 };
 class Stdout : public Stdio {
  public:
   using Stdio::Stdio;
-  Stdout(Stdout &&) noexcept = default;
-  Stdout &operator=(Stdout &&) noexcept = default;
-  Stdout(Stdout const &) = delete;
-  Stdout &operator=(Stdout const &) = delete;
+  Stdout(Stdout&&) noexcept = default;
+  Stdout& operator=(Stdout&&) noexcept = default;
+  Stdout(Stdout const&) = delete;
+  Stdout& operator=(Stdout const&) = delete;
   int fileno() const override { return 1; }
 };
 class Stderr : public Stdio {
  public:
   using Stdio::Stdio;
-  Stderr(Stderr &&) noexcept = default;
-  Stderr &operator=(Stderr &&) noexcept = default;
-  Stderr(Stderr const &) = delete;
-  Stderr &operator=(Stderr const &) = delete;
+  Stderr(Stderr&&) noexcept = default;
+  Stderr& operator=(Stderr&&) noexcept = default;
+  Stderr(Stderr const&) = delete;
+  Stderr& operator=(Stderr const&) = delete;
   int fileno() const override { return 2; }
 };
 
 struct stdin_redirector {
   Stdin operator<(Pipe p) const { return Stdin{std::move(p)}; }
-  Stdin operator<(std::string const &file) const { return Stdin{File{file}}; }
+  Stdin operator<(std::string const& file) const { return Stdin{File{file}}; }
 #if defined(_WIN32)
-  Stdin operator<(std::wstring const &file) const { return Stdin{File{file}}; }
+  Stdin operator<(std::wstring const& file) const { return Stdin{File{file}}; }
 #endif
-  Stdin operator<(buffer &buf) const { return Stdin{buf}; }
+  Stdin operator<(buffer& buf) const { return Stdin{buf}; }
 };
 
 struct stdout_redirector {
-  Stdout operator>(Pipe const &p) const { return Stdout{p}; }
-  Stdout operator>(std::string const &file) const { return Stdout{File{file}}; }
+  Stdout operator>(Pipe const& p) const { return Stdout{p}; }
+  Stdout operator>(std::string const& file) const { return Stdout{File{file}}; }
 #if defined(_WIN32)
-  Stdout operator>(std::wstring const &file) const {
+  Stdout operator>(std::wstring const& file) const {
     return Stdout{File{file}};
   }
 #endif
-  Stdout operator>(buffer &buf) const {
+  Stdout operator>(buffer& buf) const {
     buf.clear();
     return Stdout{buf};
   }
-  Stdout operator>>(buffer &buf) const { return Stdout{buf}; }
+  Stdout operator>>(buffer& buf) const { return Stdout{buf}; }
 
-  Stdout operator>>(std::string const &file) const {
+  Stdout operator>>(std::string const& file) const {
     return Stdout{File{file, true}};
   }
 #if defined(_WIN32)
-  Stdout operator>>(std::wstring const &file) const {
+  Stdout operator>>(std::wstring const& file) const {
     return Stdout{File{file, true}};
   }
 #endif
@@ -1389,22 +1389,22 @@ struct stdout_redirector {
 
 struct stderr_redirector {
   Stderr operator>(Pipe p) const { return Stderr{std::move(p)}; }
-  Stderr operator>(std::string const &file) const { return Stderr{File{file}}; }
+  Stderr operator>(std::string const& file) const { return Stderr{File{file}}; }
 #if defined(_WIN32)
-  Stderr operator>(std::wstring const &file) const {
+  Stderr operator>(std::wstring const& file) const {
     return Stderr{File{file}};
   }
 #endif
-  Stderr operator>(buffer &buf) const {
+  Stderr operator>(buffer& buf) const {
     buf.clear();
     return Stderr{buf};
   }
-  Stderr operator>>(buffer &buf) const { return Stderr{buf}; }
-  Stderr operator>>(std::string const &file) const {
+  Stderr operator>>(buffer& buf) const { return Stderr{buf}; }
+  Stderr operator>>(std::string const& file) const {
     return Stderr{File{file, true}};
   }
 #if defined(_WIN32)
-  Stderr operator>>(std::wstring const &file) const {
+  Stderr operator>>(std::wstring const& file) const {
     return Stderr{File{file, true}};
   }
 #endif
@@ -1438,7 +1438,7 @@ struct EnvAppend {
 
 // append value for special environment, for example: PATH
 struct EnvItemAppend {
-  EnvItemAppend &operator+=(std::string val) {
+  EnvItemAppend& operator+=(std::string val) {
 #if defined(_WIN32)
     std::get<1>(kv) = to_wstring(val);
 #else
@@ -1447,7 +1447,7 @@ struct EnvItemAppend {
     std::get<2>(kv) = true;
     return *this;
   }
-  EnvItemAppend &operator<<=(std::string val) {
+  EnvItemAppend& operator<<=(std::string val) {
 #if defined(_WIN32)
     std::get<1>(kv) = to_wstring(val);
 #else
@@ -1458,12 +1458,12 @@ struct EnvItemAppend {
   }
 
 #if defined(_WIN32)
-  EnvItemAppend &operator+=(std::wstring val) {
+  EnvItemAppend& operator+=(std::wstring val) {
     std::get<1>(kv) = val;
     std::get<2>(kv) = true;
     return *this;
   }
-  EnvItemAppend &operator<<=(std::wstring val) {
+  EnvItemAppend& operator<<=(std::wstring val) {
     std::get<1>(kv) = val;
     std::get<2>(kv) = false;
     return *this;
@@ -1479,7 +1479,7 @@ struct EnvItemAppend {
 };
 
 struct cwd_operator {
-  Cwd operator=(std::string const &p) const {
+  Cwd operator=(std::string const& p) const {
 #if defined(_WIN32)
     return Cwd{to_wstring(p)};
 #else
@@ -1487,14 +1487,14 @@ struct cwd_operator {
 #endif
   }
 #if defined(_WIN32)
-  Cwd operator=(std::wstring const &p) const { return Cwd{p}; }
+  Cwd operator=(std::wstring const& p) const { return Cwd{p}; }
 #endif
 };
 struct env_operator {
   Env operator=(std::map<std::string, std::string> env) const {
 #if defined(_WIN32)
     std::map<std::wstring, std::wstring> wenv;
-    for (auto const &entry : env) {
+    for (auto const& entry : env) {
       wenv[to_wstring(entry.first)] = to_wstring(entry.second);
     }
     return Env{std::move(wenv)};
@@ -1510,7 +1510,7 @@ struct env_operator {
   EnvAppend operator+=(std::map<std::string, std::string> env) const {
 #if defined(_WIN32)
     std::map<std::wstring, std::wstring> wenv;
-    for (auto const &entry : env) {
+    for (auto const& entry : env) {
       wenv[to_wstring(entry.first)] = to_wstring(entry.second);
     }
     return EnvAppend{std::move(wenv)};
@@ -1566,10 +1566,10 @@ concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
                             std::is_same_v<EnvAppend, std::decay_t<T>> ||
                             std::is_same_v<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
-concept is_string_type = std::is_same_v<char *, std::decay_t<T>> ||
-                         std::is_same_v<wchar_t *, std::decay_t<T>> ||
-                         std::is_same_v<const char *, std::decay_t<T>> ||
-                         std::is_same_v<const wchar_t *, std::decay_t<T>> ||
+concept is_string_type = std::is_same_v<char*, std::decay_t<T>> ||
+                         std::is_same_v<wchar_t*, std::decay_t<T>> ||
+                         std::is_same_v<const char*, std::decay_t<T>> ||
+                         std::is_same_v<const wchar_t*, std::decay_t<T>> ||
                          std::is_same_v<std::string, std::decay_t<T>> ||
                          std::is_same_v<std::wstring, std::decay_t<T>>;
 template <typename...>
@@ -1593,9 +1593,9 @@ class subprocess {
   template <typename... T>
     requires(is_named_argument<T> && ...)
 #if defined(_WIN32)
-  explicit subprocess(std::vector<std::wstring> cmd, T &&...args)
+  explicit subprocess(std::vector<std::wstring> cmd, T&&... args)
 #else
-  explicit subprocess(std::vector<std::string> cmd, T &&...args)
+  explicit subprocess(std::vector<std::string> cmd, T&&... args)
 #endif
       : cmd_(std::move(cmd)) {
 #if defined(_WIN32)
@@ -1607,7 +1607,7 @@ class subprocess {
     std::map<std::string, std::string> env_appends;
     std::vector<std::tuple<std::string, std::string, bool>> env_item_appends;
 #endif
-    (void)(..., ([&]<typename Arg>(Arg &&arg) {
+    (void)(..., ([&]<typename Arg>(Arg&& arg) {
              using ArgType = std::decay_t<Arg>;
              if constexpr (std::is_same_v<ArgType, Stdin>) {
                stdin_ = std::forward<Arg>(arg);
@@ -1649,7 +1649,7 @@ class subprocess {
 #else
     char path_env_sep = ':';
 #endif
-    for (auto const &[name, value, is_append] : env_item_appends) {
+    for (auto const& [name, value, is_append] : env_item_appends) {
       auto it = environments.find(name);
 #ifdef _WIN32
       if (it == environments.end()) {
@@ -1682,21 +1682,21 @@ class subprocess {
 #if defined(_WIN32)
   template <typename... T>
     requires(is_named_argument<T> && ...)
-  explicit subprocess(std::vector<std::string> cmd, T &&...args)
+  explicit subprocess(std::vector<std::string> cmd, T&&... args)
       : subprocess(
-            [](auto const &cmd) {
+            [](auto const& cmd) {
               std::vector<std::wstring> ret;
               std::transform(cmd.begin(), cmd.end(), std::back_inserter(ret),
-                             [](auto const &s) { return to_wstring(s); });
+                             [](auto const& s) { return to_wstring(s); });
               return ret;
             }(cmd),
             std::forward<T>(args)...) {}
 #endif
 
-  subprocess(subprocess &&) noexcept = default;
-  subprocess &operator=(subprocess &&) noexcept = default;
-  subprocess(const subprocess &) = delete;
-  subprocess &operator=(const subprocess &) = delete;
+  subprocess(subprocess&&) noexcept = default;
+  subprocess& operator=(subprocess&&) noexcept = default;
+  subprocess(const subprocess&) = delete;
+  subprocess& operator=(const subprocess&) = delete;
 
   void run_no_wait() {
     prepare_all_stdio_redirections();
@@ -1844,9 +1844,9 @@ class subprocess {
     stdout_.setup_stdio_in_child_process();
     stderr_.setup_stdio_in_child_process();
 
-    std::vector<char *> cmd{};
+    std::vector<char*> cmd{};
     std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
-                   [](std::string &s) { return s.data(); });
+                   [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() && (-1 == chdir(cwd_.data()))) {
       throw std::runtime_error(get_last_error_msg());
@@ -1865,11 +1865,11 @@ class subprocess {
 
       std::transform(
           env_.begin(), env_.end(), std::back_inserter(env_tmp),
-          [](auto &entry) { return entry.first + "=" + entry.second; });
+          [](auto& entry) { return entry.first + "=" + entry.second; });
 
-      std::vector<char *> envs{};
+      std::vector<char*> envs{};
       std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
-                     [](auto &s) { return s.data(); });
+                     [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
       execve(exe_to_exec.c_str(), cmd.data(), envs.data());
       std::cerr << "execve(" << exe_to_exec
@@ -1882,14 +1882,14 @@ class subprocess {
     _Exit(127);
   }
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
-  void add_posix_spawn_file_actions(posix_spawn_file_actions_t &action) {
+  void add_posix_spawn_file_actions(posix_spawn_file_actions_t& action) {
     stdin_.setup_stdio_for_posix_spawn(action);
     stdout_.setup_stdio_for_posix_spawn(action);
     stderr_.setup_stdio_for_posix_spawn(action);
 
-    std::vector<char *> cmd{};
+    std::vector<char*> cmd{};
     std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
-                   [](std::string &s) { return s.data(); });
+                   [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() &&
 #if defined(__APPLE__) && defined(__MACH__)
@@ -1909,16 +1909,16 @@ class subprocess {
       }
     }
 
-    std::vector<char *> envs{};
+    std::vector<char*> envs{};
     if (!env_.empty()) {
       std::vector<std::string> env_tmp{};
 
       std::transform(
           env_.begin(), env_.end(), std::back_inserter(env_tmp),
-          [](auto &entry) { return entry.first + "=" + entry.second; });
+          [](auto& entry) { return entry.first + "=" + entry.second; });
 
       std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
-                     [](auto &s) { return s.data(); });
+                     [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
       auto ret = posix_spawn(&pid_, exe_to_exec.c_str(), &action, nullptr,
                              cmd.data(), envs.data());
@@ -1977,14 +1977,14 @@ using detail::named_args::std_out;
 
 template <typename... T>
   requires(detail::is_named_argument<T> && ...)
-inline int run(std::vector<std::string> cmd, T &&...args) {
+inline int run(std::vector<std::string> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 #if defined(_WIN32)
 template <typename... T>
   requires(detail::is_named_argument<T> && ...)
-inline int run(std::vector<std::wstring> cmd, T &&...args) {
+inline int run(std::vector<std::wstring> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif
@@ -2016,7 +2016,7 @@ inline int run(Args... args) {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 template <typename... T>
   requires(detail::is_named_argument<T> && ...)
-inline int $(std::vector<std::string> cmd, T &&...args) {
+inline int $(std::vector<std::string> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
@@ -2024,7 +2024,7 @@ inline int $(std::vector<std::string> cmd, T &&...args) {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 template <typename... T>
   requires(detail::is_named_argument<T> && ...)
-inline int $(std::vector<std::wstring> cmd, T &&...args) {
+inline int $(std::vector<std::wstring> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif  // USE_DOLLAR_NAMED_VARIABLES
@@ -2041,10 +2041,10 @@ inline int $(Args... args) {
 template <typename... T>
   requires((detail::is_named_argument<T> && ...) && true)
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    std::vector<std::string> cmd, T &&...args) {
+    std::vector<std::string> cmd, T&&... args) {
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
-  auto &[exit_code_, std_out_, std_err_] = result;
+  auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
                    std_err > std_err_);
   return result;
@@ -2053,10 +2053,10 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 template <typename... T>
   requires((detail::is_named_argument<T> && ...) && true)
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    std::vector<std::wstring> cmd, T &&...args) {
+    std::vector<std::wstring> cmd, T&&... args) {
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
-  auto &[exit_code_, std_out_, std_err_] = result;
+  auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
                    std_err > std_err_);
   return result;
@@ -2070,17 +2070,17 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     Args... args) {
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
-  auto &[exit_code_, std_out_, std_err_] = result;
+  auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ =
       run(std::forward<Args>(args)..., std_out > std_out_, std_err > std_err_);
   return result;
 }
 
-inline std::optional<std::string> getenv(const std::string &name) {
+inline std::optional<std::string> getenv(const std::string& name) {
   return detail::get_env(name);
 }
 #if defined(_WIN32)
-inline std::optional<std::wstring> getenv(const std::wstring &name) {
+inline std::optional<std::wstring> getenv(const std::wstring& name) {
   return detail::get_env(name);
 }
 #endif
@@ -2106,7 +2106,7 @@ inline std::optional<std::string> home() {
   // If HOME is not set, fallback to getpwuid
   // This is a more reliable method for finding the home directory
   uid_t uid = getuid();
-  struct passwd *pw = getpwuid(uid);
+  struct passwd* pw = getpwuid(uid);
   if (pw != nullptr && pw->pw_dir != nullptr && pw->pw_dir[0] != '\0') {
     return std::string(pw->pw_dir);
   }
@@ -2158,7 +2158,7 @@ inline std::string getcwd() {
 #endif
 }
 
-inline bool chdir(std::string const &dir) {
+inline bool chdir(std::string const& dir) {
 #if defined(_WIN32)
   return SetCurrentDirectoryW(to_wstring(dir).c_str());
 #else
@@ -2166,7 +2166,7 @@ inline bool chdir(std::string const &dir) {
 #endif
 }
 #if defined(_WIN32)
-inline bool chdir(std::wstring const &dir) {
+inline bool chdir(std::wstring const& dir) {
   return SetCurrentDirectoryW(dir.c_str());
 }
 #endif
