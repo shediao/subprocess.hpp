@@ -425,36 +425,28 @@ inline std::vector<std::basic_string<CharT>> split(
 }
 
 #if defined(_WIN32)
-inline std::vector<wchar_t> create_command_string_data(
+inline std::vector<wchar_t> argv_to_command_line_string(
     std::vector<std::basic_string<wchar_t>> const& cmds) {
   std::vector<wchar_t> command;
   for (auto const& cmd : cmds) {
     if (!command.empty()) {
       command.push_back(L' ');
     }
-    if (cmd.empty()) {
-      command.push_back(L'"');
-      command.push_back(L'"');
-      continue;
-    }
-    auto need_quota = std::any_of(cmd.begin(), cmd.end(), [](wchar_t c) {
-      return c <= L' ' || c == L'"';
-    });
+    auto need_quota =
+        cmd.empty() || std::any_of(cmd.begin(), cmd.end(), [](wchar_t c) {
+          return c <= L' ' || c == L'"';
+        });
     if (need_quota) {
       command.push_back(L'"');
-    }
-    if (need_quota) {
       for (auto c : cmd) {
         if (c == L'"') {
           command.push_back(L'\\');
         }
         command.push_back(c);
       }
+      command.push_back(L'"');
     } else {
       command.insert(command.end(), cmd.begin(), cmd.end());
-    }
-    if (need_quota) {
-      command.push_back(L'"');
     }
   }
   command.push_back(L'\0');
@@ -1713,7 +1705,7 @@ class subprocess {
 
     startupinfo_.dwFlags |= STARTF_USESTDHANDLES;
 
-    auto command = create_command_string_data(cmd_);
+    auto command = argv_to_command_line_string(cmd_);
 
     auto env_block = create_environment_string_data(env_);
 
