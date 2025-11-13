@@ -428,26 +428,23 @@ inline std::vector<std::basic_string<CharT>> split(
 inline std::vector<wchar_t> argv_to_command_line_string(
     std::vector<std::basic_string<wchar_t>> const& cmds) {
   std::vector<wchar_t> command;
-  for (auto const& cmd : cmds) {
-    if (!command.empty()) {
-      command.push_back(L' ');
-    }
-    auto need_quota =
-        cmd.empty() || std::any_of(cmd.begin(), cmd.end(), [](wchar_t c) {
-          return c <= L' ' || c == L'"';
-        });
-    if (need_quota) {
-      command.push_back(L'"');
-      for (auto c : cmd) {
-        if (c == L'"') {
-          command.push_back(L'\\');
-        }
-        command.push_back(c);
-      }
-      command.push_back(L'"');
+  if (cmds.empty()) {
+    return command;
+  }
+  if (std::find(cmds[0].begin(), cmds[0].end(), L' ') != cmds[0].end()) {
+    if ((cmds[0].front() == L'"') && (cmds[0].back() == L'"')) {
+      command.insert(command.end(), cmds[0].begin(), cmds[0].end());
     } else {
-      command.insert(command.end(), cmd.begin(), cmd.end());
+      command.push_back(L'"');
+      command.insert(command.end(), cmds[0].begin(), cmds[0].end());
+      command.push_back(L'"');
     }
+  } else {
+    command.insert(command.end(), cmds[0].begin(), cmds[0].end());
+  }
+  for (auto it = std::next(cmds.begin()); it != cmds.end(); ++it) {
+    command.push_back(L' ');
+    command.insert(command.end(), it->begin(), it->end());
   }
   command.push_back(L'\0');
   return command;
