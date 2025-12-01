@@ -37,6 +37,7 @@
 /.vscode
 /.idea
 /.vim
+/.zed
 *.o
 *.swp
 /compile_commands.json
