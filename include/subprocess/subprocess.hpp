@@ -1044,11 +1044,11 @@ struct File {
     }
 #else
     fd_ = (type == OpenType::ReadOnly)
-              ? open(path_.c_str(), O_RDONLY)
+              ? open(path_.c_str(), O_RDONLY | O_CLOEXEC)
               : open(path_.c_str(),
                      (type == OpenType::WriteAppend)
-                         ? (O_WRONLY | O_CREAT | O_APPEND)
-                         : (O_WRONLY | O_CREAT | O_TRUNC),
+                         ? (O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC)
+                         : (O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC),
                      0644);
     if (fd_ == -1) {
       throw std::runtime_error{"open failed: " + path_};
