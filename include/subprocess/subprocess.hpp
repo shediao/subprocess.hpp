@@ -161,10 +161,10 @@ constexpr bool is_posix =
 
 namespace detail {
 class subprocess;
-class Stdio;
-class Stdin;
-class Stdout;
-class Stderr;
+class Redirector;
+class StdinRedirector;
+class StdoutRedirector;
+class StderrRedirector;
 }  // namespace detail
 
 #if defined(_WIN32)
@@ -207,10 +207,10 @@ inline std::string to_string(const std::wstring_view wstr,
 
 class buffer {
   friend class detail::subprocess;
-  friend class detail::Stdio;
-  friend class detail::Stdin;
-  friend class detail::Stdout;
-  friend class detail::Stderr;
+  friend class detail::Redirector;
+  friend class detail::StdinRedirector;
+  friend class detail::StdoutRedirector;
+  friend class detail::StderrRedirector;
 
  public:
   buffer() = default;
@@ -1093,22 +1093,23 @@ class Buffer {
   Pipe pipe_;
 };
 
-class Stdio {
+class Redirector {
   friend class subprocess;
   using value_type = std::variant<Pipe, File, Buffer>;
 
  public:
-  explicit Stdio() : redirect_(nullptr) {}
-  explicit Stdio(Pipe const& p) : redirect_(std::make_unique<value_type>(p)) {}
-  explicit Stdio(File f)
+  explicit Redirector() : redirect_(nullptr) {}
+  explicit Redirector(Pipe const& p)
+      : redirect_(std::make_unique<value_type>(p)) {}
+  explicit Redirector(File f)
       : redirect_(std::make_unique<value_type>(std::move(f))) {}
-  explicit Stdio(buffer& buf)
+  explicit Redirector(buffer& buf)
       : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
-  Stdio(Stdio&&) noexcept = default;
-  Stdio& operator=(Stdio&&) noexcept = default;
-  Stdio(Stdio const&) = delete;
-  Stdio& operator=(Stdio const&) = delete;
-  virtual ~Stdio() {
+  Redirector(Redirector&&) noexcept = default;
+  Redirector& operator=(Redirector&&) noexcept = default;
+  Redirector(Redirector const&) = delete;
+  Redirector& operator=(Redirector const&) = delete;
+  virtual ~Redirector() {
     if (!redirect_) {
       return;
     }
@@ -1315,86 +1316,104 @@ class Stdio {
   std::unique_ptr<value_type> redirect_{nullptr};
 };
 
-class Stdin : public Stdio {
+class StdinRedirector : public Redirector {
  public:
-  using Stdio::Stdio;
-  Stdin(Stdin&&) noexcept = default;
-  Stdin& operator=(Stdin&&) noexcept = default;
-  Stdin(Stdin const&) = delete;
-  Stdin& operator=(Stdin const&) = delete;
+  using Redirector::Redirector;
+  StdinRedirector(StdinRedirector&&) noexcept = default;
+  StdinRedirector& operator=(StdinRedirector&&) noexcept = default;
+  StdinRedirector(StdinRedirector const&) = delete;
+  StdinRedirector& operator=(StdinRedirector const&) = delete;
   int fileno() const override { return 0; }
 };
-class Stdout : public Stdio {
+class StdoutRedirector : public Redirector {
  public:
-  using Stdio::Stdio;
-  Stdout(Stdout&&) noexcept = default;
-  Stdout& operator=(Stdout&&) noexcept = default;
-  Stdout(Stdout const&) = delete;
-  Stdout& operator=(Stdout const&) = delete;
+  using Redirector::Redirector;
+  StdoutRedirector(StdoutRedirector&&) noexcept = default;
+  StdoutRedirector& operator=(StdoutRedirector&&) noexcept = default;
+  StdoutRedirector(StdoutRedirector const&) = delete;
+  StdoutRedirector& operator=(StdoutRedirector const&) = delete;
   int fileno() const override { return 1; }
 };
-class Stderr : public Stdio {
+class StderrRedirector : public Redirector {
  public:
-  using Stdio::Stdio;
-  Stderr(Stderr&&) noexcept = default;
-  Stderr& operator=(Stderr&&) noexcept = default;
-  Stderr(Stderr const&) = delete;
-  Stderr& operator=(Stderr const&) = delete;
+  using Redirector::Redirector;
+  StderrRedirector(StderrRedirector&&) noexcept = default;
+  StderrRedirector& operator=(StderrRedirector&&) noexcept = default;
+  StderrRedirector(StderrRedirector const&) = delete;
+  StderrRedirector& operator=(StderrRedirector const&) = delete;
   int fileno() const override { return 2; }
 };
 
 struct stdin_redirector {
-  Stdin operator<(Pipe p) const { return Stdin{std::move(p)}; }
-  Stdin operator<(std::string const& file) const { return Stdin{File{file}}; }
+  StdinRedirector operator<(Pipe p) const {
+    return StdinRedirector{std::move(p)};
+  }
+  StdinRedirector operator<(std::string const& file) const {
+    return StdinRedirector{File{file}};
+  }
 #if defined(_WIN32)
-  Stdin operator<(std::wstring const& file) const { return Stdin{File{file}}; }
+  StdinRedirector operator<(std::wstring const& file) const {
+    return StdinRedirector{File{file}};
+  }
 #endif
-  Stdin operator<(buffer& buf) const { return Stdin{buf}; }
+  StdinRedirector operator<(buffer& buf) const { return StdinRedirector{buf}; }
 };
 
 struct stdout_redirector {
-  Stdout operator>(Pipe const& p) const { return Stdout{p}; }
-  Stdout operator>(std::string const& file) const { return Stdout{File{file}}; }
+  StdoutRedirector operator>(Pipe const& p) const {
+    return StdoutRedirector{p};
+  }
+  StdoutRedirector operator>(std::string const& file) const {
+    return StdoutRedirector{File{file}};
+  }
 #if defined(_WIN32)
-  Stdout operator>(std::wstring const& file) const {
-    return Stdout{File{file}};
+  StdoutRedirector operator>(std::wstring const& file) const {
+    return StdoutRedirector{File{file}};
   }
 #endif
-  Stdout operator>(buffer& buf) const {
+  StdoutRedirector operator>(buffer& buf) const {
     buf.clear();
-    return Stdout{buf};
+    return StdoutRedirector{buf};
   }
-  Stdout operator>>(buffer& buf) const { return Stdout{buf}; }
+  StdoutRedirector operator>>(buffer& buf) const {
+    return StdoutRedirector{buf};
+  }
 
-  Stdout operator>>(std::string const& file) const {
-    return Stdout{File{file, true}};
+  StdoutRedirector operator>>(std::string const& file) const {
+    return StdoutRedirector{File{file, true}};
   }
 #if defined(_WIN32)
-  Stdout operator>>(std::wstring const& file) const {
-    return Stdout{File{file, true}};
+  StdoutRedirector operator>>(std::wstring const& file) const {
+    return StdoutRedirector{File{file, true}};
   }
 #endif
 };
 
 struct stderr_redirector {
-  Stderr operator>(Pipe p) const { return Stderr{std::move(p)}; }
-  Stderr operator>(std::string const& file) const { return Stderr{File{file}}; }
+  StderrRedirector operator>(Pipe p) const {
+    return StderrRedirector{std::move(p)};
+  }
+  StderrRedirector operator>(std::string const& file) const {
+    return StderrRedirector{File{file}};
+  }
 #if defined(_WIN32)
-  Stderr operator>(std::wstring const& file) const {
-    return Stderr{File{file}};
+  StderrRedirector operator>(std::wstring const& file) const {
+    return StderrRedirector{File{file}};
   }
 #endif
-  Stderr operator>(buffer& buf) const {
+  StderrRedirector operator>(buffer& buf) const {
     buf.clear();
-    return Stderr{buf};
+    return StderrRedirector{buf};
   }
-  Stderr operator>>(buffer& buf) const { return Stderr{buf}; }
-  Stderr operator>>(std::string const& file) const {
-    return Stderr{File{file, true}};
+  StderrRedirector operator>>(buffer& buf) const {
+    return StderrRedirector{buf};
+  }
+  StderrRedirector operator>>(std::string const& file) const {
+    return StderrRedirector{File{file, true}};
   }
 #if defined(_WIN32)
-  Stderr operator>>(std::wstring const& file) const {
-    return Stderr{File{file, true}};
+  StderrRedirector operator>>(std::wstring const& file) const {
+    return StderrRedirector{File{file, true}};
   }
 #endif
 };
@@ -1548,9 +1567,9 @@ namespace named_args {
 }  // namespace named_args
 template <typename T>
 concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
-                            std::is_same_v<Stdin, std::decay_t<T>> ||
-                            std::is_same_v<Stdout, std::decay_t<T>> ||
-                            std::is_same_v<Stderr, std::decay_t<T>> ||
+                            std::is_same_v<StdinRedirector, std::decay_t<T>> ||
+                            std::is_same_v<StdoutRedirector, std::decay_t<T>> ||
+                            std::is_same_v<StderrRedirector, std::decay_t<T>> ||
                             std::is_same_v<Cwd, std::decay_t<T>> ||
                             std::is_same_v<EnvAppend, std::decay_t<T>> ||
                             std::is_same_v<EnvItemAppend, std::decay_t<T>>;
@@ -1598,13 +1617,13 @@ class subprocess {
 #endif
     (void)(..., ([&]<typename Arg>(Arg&& arg) {
              using ArgType = std::decay_t<Arg>;
-             if constexpr (std::is_same_v<ArgType, Stdin>) {
+             if constexpr (std::is_same_v<ArgType, StdinRedirector>) {
                stdin_ = std::forward<Arg>(arg);
              }
-             if constexpr (std::is_same_v<ArgType, Stdout>) {
+             if constexpr (std::is_same_v<ArgType, StdoutRedirector>) {
                stdout_ = std::forward<Arg>(arg);
              }
-             if constexpr (std::is_same_v<ArgType, Stderr>) {
+             if constexpr (std::is_same_v<ArgType, StderrRedirector>) {
                stderr_ = std::forward<Arg>(arg);
              }
              if constexpr (std::is_same_v<ArgType, Env>) {
@@ -1619,14 +1638,15 @@ class subprocess {
              if constexpr (std::is_same_v<ArgType, Cwd>) {
                cwd_ = arg.cwd;
              }
-             static_assert(std::is_same_v<Env, std::decay_t<T>> ||
-                               std::is_same_v<Stdin, std::decay_t<T>> ||
-                               std::is_same_v<Stdout, std::decay_t<T>> ||
-                               std::is_same_v<Stderr, std::decay_t<T>> ||
-                               std::is_same_v<Cwd, std::decay_t<T>> ||
-                               std::is_same_v<EnvAppend, std::decay_t<T>> ||
-                               std::is_same_v<EnvItemAppend, std::decay_t<T>>,
-                           "Invalid argument type passed to run function.");
+             static_assert(
+                 std::is_same_v<Env, std::decay_t<T>> ||
+                     std::is_same_v<StdinRedirector, std::decay_t<T>> ||
+                     std::is_same_v<StdoutRedirector, std::decay_t<T>> ||
+                     std::is_same_v<StderrRedirector, std::decay_t<T>> ||
+                     std::is_same_v<Cwd, std::decay_t<T>> ||
+                     std::is_same_v<EnvAppend, std::decay_t<T>> ||
+                     std::is_same_v<EnvItemAppend, std::decay_t<T>>,
+                 "Invalid argument type passed to run function.");
            }(std::forward<T>(args))));
     if ((!env_item_appends.empty() || !env_appends.empty()) &&
         environments.empty()) {
@@ -1935,9 +1955,9 @@ class subprocess {
   std::string cwd_{};
   std::map<std::string, std::string> env_;
 #endif
-  Stdin stdin_;
-  Stdout stdout_;
-  Stderr stderr_;
+  StdinRedirector stdin_;
+  StdoutRedirector stdout_;
+  StderrRedirector stderr_;
 #if defined(_WIN32)
   PROCESS_INFORMATION process_information_;
   STARTUPINFOW startupinfo_;
