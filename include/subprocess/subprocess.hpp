@@ -593,6 +593,9 @@ inline void read_from_native_handle(NativeHandle& fd,
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
       }
+    } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
+               (fds[1].revents & (POLLHUP | POLLERR))) {
+      close_native_handle(fds[1].fd);
     }
     if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
       auto read_count = read(fds[2].fd, buf, std::size(buf));
@@ -605,6 +608,9 @@ inline void read_from_native_handle(NativeHandle& fd,
       if (read_count == -1) {
         throw std::runtime_error(get_last_error_msg());
       }
+    } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
+               (fds[2].revents & (POLLHUP | POLLERR))) {
+      close_native_handle(fds[2].fd);
     }
     for (auto& pfd : fds) {
       if (pfd.fd != INVALID_NATIVE_HANDLE_VALUE &&
