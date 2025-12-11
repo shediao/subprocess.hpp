@@ -80,4 +80,11 @@ TEST(SubprocessTest, CaptureOutputs2) {
     ASSERT_FALSE(err.empty());
     ASSERT_EQ("123", std::string_view(err.data(), err.size()));
   }
+#if !defined(_WIN32)
+  {
+    auto [exit_code, out, err] =
+        capture_run("dd", "if=/dev/zero", "bs=4M", "count=100");
+    ASSERT_EQ(out.size(), (100 * 4 * 1024 * 1024));
+  }
+#endif
 }
