@@ -549,9 +549,25 @@ inline void read_from_native_handle(NativeHandle& fd,
 }
 
 #if !defined(_WIN32)
+[[maybe_unused]] inline void set_nonblocking(int fd) {
+  if (fd == INVALID_NATIVE_HANDLE_VALUE) {
+    return;
+  }
+  auto const flags = fcntl(fd, F_GETFL, 0);
+  if (flags == -1) {
+    throw std::runtime_error("fcntl F_GETFL error");
+  }
+  if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
+    throw std::runtime_error("fcntl F_SETFL error");
+  }
+}
+
 [[maybe_unused]] inline void multiplexing_use_poll(
     NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
     std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
+  set_nonblocking(in);
+  set_nonblocking(out);
+  set_nonblocking(err);
   struct pollfd fds[3]{{.fd = in, .events = POLLOUT, .revents = 0},
                        {.fd = out, .events = POLLIN, .revents = 0},
                        {.fd = err, .events = POLLIN, .revents = 0}};
@@ -571,12 +587,17 @@ inline void read_from_native_handle(NativeHandle& fd,
     }
     if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
         (fds[0].revents & POLLOUT)) {
-      auto write_count = write(fds[0].fd, stdin_str.data(), stdin_str.size());
-      if (write_count > 0) {
-        stdin_str.remove_prefix(static_cast<size_t>(write_count));
+      auto it = stdin_str.begin();
+      auto write_count = write(fds[0].fd, it, stdin_str.end() - it);
+      while (write_count > 0) {
+        it = it + write_count;
+        write_count = write(fds[0].fd, it, stdin_str.end() - it);
       }
+      stdin_str.remove_prefix(it - stdin_str.begin());
       if (write_count == -1) {
-        throw std::runtime_error("write error: " + std::to_string(errno));
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          throw std::runtime_error("write error: " + std::to_string(errno));
+        }
       }
       if (stdin_str.empty()) {
         close_native_handle(fds[0].fd);
@@ -584,14 +605,17 @@ inline void read_from_native_handle(NativeHandle& fd,
     }
     if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
       auto read_count = read(fds[1].fd, buf, std::size(buf));
-      if (read_count > 0) {
+      while (read_count > 0) {
         out_buf.insert(out_buf.end(), buf, buf + read_count);
+        read_count = read(fds[1].fd, buf, std::size(buf));
       }
       if (read_count == 0) {
         close_native_handle(fds[1].fd);
       }
       if (read_count == -1) {
-        throw std::runtime_error(get_last_error_msg());
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          throw std::runtime_error(get_last_error_msg());
+        }
       }
     } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
                (fds[1].revents & (POLLHUP | POLLERR))) {
@@ -599,14 +623,17 @@ inline void read_from_native_handle(NativeHandle& fd,
     }
     if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
       auto read_count = read(fds[2].fd, buf, std::size(buf));
-      if (read_count > 0) {
+      while (read_count > 0) {
         err_buf.insert(err_buf.end(), buf, buf + read_count);
+        read_count = read(fds[2].fd, buf, std::size(buf));
       }
       if (read_count == 0) {
         close_native_handle(fds[2].fd);
       }
       if (read_count == -1) {
-        throw std::runtime_error(get_last_error_msg());
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          throw std::runtime_error(get_last_error_msg());
+        }
       }
     } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
                (fds[2].revents & (POLLHUP | POLLERR))) {
@@ -663,12 +690,17 @@ inline void read_from_native_handle(NativeHandle& fd,
       throw std::runtime_error(get_last_error_msg());
     }
     if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
-      auto write_count = write(in, stdin_str.data(), stdin_str.size());
-      if (write_count > 0) {
-        stdin_str.remove_prefix(static_cast<size_t>(write_count));
+      auto it = stdin_str.begin();
+      auto write_count = write(in, it, stdin_str.end() - it);
+      while (write_count > 0) {
+        it = it + write_count;
+        write_count = write(in, it, stdin_str.end() - it);
       }
+      stdin_str.remove_prefix(it - stdin_str.begin());
       if (write_count == -1) {
-        throw std::runtime_error("write error: " + std::to_string(errno));
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          throw std::runtime_error("write error: " + std::to_string(errno));
+        }
       }
       if (stdin_str.empty()) {
         close_native_handle(in);
@@ -676,26 +708,32 @@ inline void read_from_native_handle(NativeHandle& fd,
     }
     if (out != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(out, &read_fds)) {
       auto read_count = read(out, buf, std::size(buf));
-      if (read_count > 0) {
+      while (read_count > 0) {
         out_buf.insert(out_buf.end(), buf, buf + read_count);
+        read_count = read(out, buf, std::size(buf));
       }
       if (read_count == 0) {
         close_native_handle(out);
       }
       if (read_count == -1) {
-        throw std::runtime_error(get_last_error_msg());
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          throw std::runtime_error(get_last_error_msg());
+        }
       }
     }
     if (err != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(err, &read_fds)) {
       auto read_count = read(err, buf, std::size(buf));
-      if (read_count > 0) {
+      while (read_count > 0) {
         err_buf.insert(err_buf.end(), buf, buf + read_count);
+        read_count = read(err, buf, std::size(buf));
       }
       if (read_count == 0) {
         close_native_handle(err);
       }
       if (read_count == -1) {
-        throw std::runtime_error(get_last_error_msg());
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          throw std::runtime_error(get_last_error_msg());
+        }
       }
     }
   }
