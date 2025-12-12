@@ -86,5 +86,10 @@ TEST(SubprocessTest, CaptureOutputs2) {
         capture_run("dd", "if=/dev/zero", "bs=4M", "count=100");
     ASSERT_EQ(out.size(), (100 * 4 * 1024 * 1024));
   }
+#else
+  {
+    auto [exit_code, out, err] = capture_run("powershell", "-c", "'A'*400M");
+    ASSERT_EQ(out.size(), (400 * 1024 * 1024 + 2));  // \r\n
+  }
 #endif
 }
