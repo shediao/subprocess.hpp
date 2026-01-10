@@ -105,7 +105,7 @@ TEST_F(RunFunctionTest, CaptureStderrBasic) {
           TEXT("cmd.exe"), TEXT("/c"),
           TEXT("<nul set /p=Hello Stderr>&2&exit /b 0")
 #else
-          "/bin/bash", "-c", "echo -n 'Hello Stderr' >&2"
+          "bash", "-c", "echo -n 'Hello Stderr' >&2"
 #endif
       },
       std_err > stderr_buf);
@@ -123,7 +123,7 @@ TEST_F(RunFunctionTest, CaptureBothStdoutAndStderr) {
           TEXT("cmd.exe"), TEXT("/c"),
           TEXT("<nul set /p=Out& <nul set /p=Err>&2&exit /b 0")
 #else
-          "/bin/bash", "-c", "echo -n Out; echo -n Err >&2"
+          "bash", "-c", "echo -n Out; echo -n Err >&2"
 #endif
       },
       std_out > stdout_buf, std_err > stderr_buf);
@@ -189,7 +189,7 @@ TEST_F(RunFunctionTest, RedirectStderrToFileOverwrite) {
           TEXT("cmd.exe"), TEXT("/c"),
           TEXT("<nul set /p=Error Overwrite>&2&exit /b 0")
 #else
-          "/bin/bash", "-c", "echo -n 'Error Overwrite' >&2"
+          "bash", "-c", "echo -n 'Error Overwrite' >&2"
 #endif
       },
       std_err > temp_file.path());
@@ -224,7 +224,7 @@ TEST_F(RunFunctionTest, RedirectStderrToFileAppend) {
           TEXT("cmd.exe"), TEXT("/c"),
           TEXT("<nul set /p=AppendedError>&2&exit /b 0")
 #else
-          "/bin/bash", "-c", "echo -n 'AppendedError' >&2"
+          "bash", "-c", "echo -n 'AppendedError' >&2"
 #endif
       },
       std_err >> temp_file.path());
@@ -241,7 +241,7 @@ TEST_F(RunFunctionTest, EnvOverrideCheckValue) {
       TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=%MY_TEST_VAR%&exit /b 0"),
       env = {{TEXT("MY_TEST_VAR"), TEXT("is_set")}}, std_out > stdout_buf);
 #else
-  int exit_code = run("/bin/bash", "-c", "echo -n $MY_TEST_VAR",
+  int exit_code = run("bash", "-c", "echo -n $MY_TEST_VAR",
                       env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
@@ -262,7 +262,7 @@ TEST_F(RunFunctionTest, EnvAppendCheckValueAndPath) {
           env += {{"MY_APPEND_VAR", "appended"}}, std_out > stdout_buf);
 #else
   int exit_code =
-      run({"/bin/bash", "-c",
+      run({"bash", "-c",
            "echo -n $MY_APPEND_VAR; if [ -n \"$PATH\" ]; then echo -n "
            "_haspath; fi"},
           env += {{"MY_APPEND_VAR", "appended"}}, std_out > stdout_buf);
@@ -281,7 +281,7 @@ TEST_F(RunFunctionTest, EnvOverrideClearsPath) {
        R"(if "%ONLY_VAR%"=="visible" (<nul set /p=isolated& exit /b 0) else (<nul set /p=not_isolated& exit /b 0))"},
       env = {{"ONLY_VAR", "visible"}}, std_out > stdout_buf);
 #else
-  int exit_code = run({"/bin/bash", "-c",
+  int exit_code = run({"bash", "-c",
                        R"(
 if [ "$ONLY_VAR" = "visible" ]; then
   echo -n isolated;
@@ -424,7 +424,7 @@ TEST_F(RunFunctionTest, RunShellScriptFull) {
   const std::string script_path = "/tmp/test_run_script.sh";
   removeFile(script_path);  // Ensure clean state
   ASSERT_TRUE(writeFileContents(script_path,
-                                "#!/bin/bash\n"
+                                "#!/usr/bin/env bash\n"
                                 "echo -n 'script_out'\n"
                                 "echo -n 'script_err' >&2\n"
                                 "exit 5"));

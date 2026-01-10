@@ -33,7 +33,7 @@ TEST(SubprocessTest, WinFilePathWithSpace) {
 #else
   TempFile temp_file("", "file with space script.sh");
   ASSERT_TRUE(
-      temp_file.write("#!/bin/bash\n"
+      temp_file.write("#!/usr/bin/env bash\n"
                       "echo -n 'script_out'\n"
                       "echo -n 'script_err' >&2\n"
                       "exit 5"s));

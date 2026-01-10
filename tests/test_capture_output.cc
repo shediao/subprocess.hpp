@@ -11,7 +11,7 @@ TEST(SubprocessTest, CaptureOutputs) {
   subprocess::buffer err;
 
 #if !defined(_WIN32)
-  run("/bin/bash", "-c", "echo -n 123; echo -n '345' >&2", std_out > out,
+  run("bash", "-c", "echo -n 123; echo -n '345' >&2", std_out > out,
       std_err > err);
 #else
   run(TEXT("cmd.exe"), TEXT("/c"),
@@ -24,7 +24,7 @@ TEST(SubprocessTest, CaptureOutputs) {
   out.clear();
   err.clear();
 #if !defined(_WIN32)
-  run("/bin/bash", "-c", "echo -n 123", std_out > out, std_err > err);
+  run("bash", "-c", "echo -n 123", std_out > out, std_err > err);
 #else
   run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=123"), std_out > out,
       std_err > err);
@@ -35,7 +35,7 @@ TEST(SubprocessTest, CaptureOutputs) {
   out.clear();
   err.clear();
 #if !defined(_WIN32)
-  run("/bin/bash", "-c", "echo -n '123' >&2", std_out > out, std_err > err);
+  run("bash", "-c", "echo -n '123' >&2", std_out > out, std_err > err);
 #else
   run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=123>&2"), std_out > out,
       std_err > err);
@@ -49,7 +49,7 @@ TEST(SubprocessTest, CaptureOutputs2) {
   {
     auto [exit_code, out, err] =
 #if !defined(_WIN32)
-        capture_run("/bin/bash", "-c", "echo -n 123; echo -n '345' >&2");
+        capture_run("bash", "-c", "echo -n 123; echo -n '345' >&2");
 #else
         capture_run(TEXT("cmd.exe"), TEXT("/c"),
                     TEXT("<nul set /p=123& <nul set /p=345>&2\r\n"));
@@ -61,7 +61,7 @@ TEST(SubprocessTest, CaptureOutputs2) {
   {
     auto [exit_code, out, err] =
 #if !defined(_WIN32)
-        capture_run("/bin/bash", "-c", "echo -n 123");
+        capture_run("bash", "-c", "echo -n 123");
 #else
         capture_run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=123"));
 #endif
@@ -72,7 +72,7 @@ TEST(SubprocessTest, CaptureOutputs2) {
   {
     auto [exit_code, out, err] =
 #if !defined(_WIN32)
-        capture_run("/bin/bash", "-c", "echo -n '123' >&2");
+        capture_run("bash", "-c", "echo -n '123' >&2");
 #else
         capture_run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=123>&2"));
 #endif

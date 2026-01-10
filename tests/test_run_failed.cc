@@ -27,7 +27,7 @@ exit /b 0
   temp.write(content);
   ASSERT_EQ(127, run(temp.path()));
 #else
-  std::string content = R"(#!/bin/bash
+  std::string content = R"(#!/usr/bin/env bash
 exit 0
 )";
   temp.write(content);
