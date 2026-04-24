@@ -128,7 +128,7 @@ run("some_command", $stdout > $devnull, $stderr > $devnull);
 
 ### 4. Piping
 
-You can create process pipelines using `subprocess::Pipe` objects.
+You can create process pipelines using `subprocess::detail::Pipe` objects.
 
 ```cpp
 TODO:
@@ -175,16 +175,18 @@ Named arguments are used to control various aspects of process execution.
 - **`$stdin < source`**: Redirect standard input from `source`.
   - `source` can be:
     - `std::string`: A file path.
-    - `subprocess::buffer`: An in-memory buffer.
-    - `subprocess::Pipe`: Pipe output from another process.
+    - `std::wstring`: A file path (Windows only).
+    - `subprocess::buffer&`: A reference to an in-memory buffer.
+    - `subprocess::detail::Pipe`: Pipe output from another process.
     - `$devnull`: The system's null device.
 
 - **`$stdout > target` / `$stderr > target`**: Redirect standard output/error to `target` (truncate mode).
 - **`$stdout >> target` / `$stderr >> target`**: Redirect standard output/error to `target` (append mode).
   - `target` can be:
     - `std::string`: A file path.
+    - `std::wstring`: A file path (Windows only).
     - `subprocess::buffer&`: A reference to an in-memory buffer.
-    - `subprocess::Pipe`: For pipeline connections.
+    - `subprocess::detail::Pipe`: For pipeline connections.
     - `$devnull`: The system's null device.
 
 - **`$cwd = path`**: Execute the command in the specified `path` (of type `std::string` or `std::wstring`).
@@ -207,6 +209,7 @@ A simple buffer class for exchanging data with subprocesses.
 - `to_string()`: Converts buffer content to a `std::string`.
 - `data()`: Gets the raw `char*` data.
 - `size()`: Gets the buffer size.
+- `empty()`: Checks if the buffer is empty.
 - `clear()`: Clears the buffer.
 
 ### Helper Functions
@@ -214,7 +217,7 @@ A simple buffer class for exchanging data with subprocesses.
 The `subprocess` namespace also provides several useful cross-platform helper functions, which are aliased under the `process` namespace for convenience.
 
 - `process::getenv(name)`: Gets an environment variable.
-- `process::environs()`: Gets all environment variables.
+- `process::environ()`: Gets all environment variables.
 - `process::getcwd()`: Gets the current working directory.
 - `process::chdir(path)`: Changes the current working directory.
 - `process::home()`: Gets the user's home directory.

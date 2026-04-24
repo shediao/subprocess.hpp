@@ -129,7 +129,7 @@ run("some_command", $stdout > $devnull, $stderr > $devnull);
 
 ### 4. 管道 (Piping)
 
-你可以通过 `subprocess::Pipe` 对象创建进程管道.
+你可以通过 `subprocess::detail::Pipe` 对象创建进程管道.
 
 ```cpp
 TODO:
@@ -176,16 +176,18 @@ run("my_program", $env["PATH"] += "/opt/my_app/bin");
 - **`$stdin < source`**: 从 `source` 重定向标准输入.
   - `source` 可以是:
     - `std::string`: 文件路径.
-    - `subprocess::buffer`: 内存中的缓冲区.
-    - `subprocess::Pipe`: 另一个进程的管道输出.
+    - `std::wstring`: 文件路径 (仅 Windows).
+    - `subprocess::buffer&`: 内存中的缓冲区引用.
+    - `subprocess::detail::Pipe`: 另一个进程的管道输出.
     - `$devnull`: 系统空设备.
 
 - **`$stdout > target` / `$stderr > target`**: 将标准输出/错误重定向到 `target` (截断模式).
 - **`$stdout >> target` / `$stderr >> target`**: 将标准输出/错误重定向到 `target` (追加模式).
   - `target` 可以是:
     - `std::string`: 文件路径.
+    - `std::wstring`: 文件路径 (仅 Windows).
     - `subprocess::buffer&`: 内存中的缓冲区引用.
-    - `subprocess::Pipe`: 用于管道连接.
+    - `subprocess::detail::Pipe`: 用于管道连接.
     - `$devnull`: 系统空设备.
 
 - **`$cwd = path`**: 在指定的 `path` (类型为 `std::string` 或 `std::wstring`) 中执行命令.
@@ -208,6 +210,7 @@ run("my_program", $env["PATH"] += "/opt/my_app/bin");
 - `to_string()`: 将缓冲区内容转换为 `std::string`.
 - `data()`: 获取原始 `char*` 数据.
 - `size()`: 获取缓冲区大小.
+- `empty()`: 检查缓冲区是否为空.
 - `clear()`: 清空缓冲区.
 
 ### 辅助函数
@@ -215,7 +218,7 @@ run("my_program", $env["PATH"] += "/opt/my_app/bin");
 `subprocess` 命名空间下还提供了一些有用的跨平台辅助函数, 它们也被别名到了 `process` 命名空间下.
 
 - `process::getenv(name)`: 获取一个环境变量.
-- `process::environs()`: 获取所有环境变量.
+- `process::environ()`: 获取所有环境变量.
 - `process::getcwd()`: 获取当前工作目录.
 - `process::chdir(path)`: 更改当前工作目录.
 - `process::home()`: 获取用户主目录.

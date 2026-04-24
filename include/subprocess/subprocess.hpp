@@ -28,9 +28,9 @@
  *   using namespace subprocess::named_arguments;
  *   using subprocess::run
  *
- *   sbuprocess::buffer inbuf{"xxxxxxxxx"};
- *   sbuprocess::buffer outbuf;
- *   sbuprocess::buffer errbuf;
+ *   subprocess::buffer inbuf{"xxxxxxxxx"};
+ *   subprocess::buffer outbuf;
+ *   subprocess::buffer errbuf;
  *
  *   auto exit_code = run("command", "arg1", "arg2",..., "argN");
  *
@@ -180,7 +180,7 @@ inline std::wstring to_wstring(const std::string_view str,
     throw std::runtime_error("MultiByteToWideChar error: " +
                              std::to_string(GetLastError()));
   }
-  std::wstring wstr(size_needed, 0);
+  std::wstring wstr(static_cast<size_t>(size_needed), 0);
   MultiByteToWideChar(from_codepage, 0, str.data(), (int)str.size(), &wstr[0],
                       size_needed);
   return wstr;
@@ -198,7 +198,7 @@ inline std::string to_string(const std::wstring_view wstr,
     throw std::runtime_error("WideCharToMultiByte error: " +
                              std::to_string(GetLastError()));
   }
-  std::string str(size_needed, 0);
+  std::string str(static_cast<size_t>(size_needed), 0);
   WideCharToMultiByte(to_codepage, 0, wstr.data(), (int)wstr.size(), &str[0],
                       size_needed, NULL, NULL);
   return str;
@@ -250,7 +250,7 @@ class buffer {
 namespace detail {
 #if defined(_WIN32)
 using NativeHandle = HANDLE;
-const static inline NativeHandle INVALID_NATIVE_HANDLE_VALUE =
+static inline const NativeHandle INVALID_NATIVE_HANDLE_VALUE =
     INVALID_HANDLE_VALUE;
 #else   // _WIN32
 using NativeHandle = int;
@@ -380,7 +380,7 @@ template <typename CharT, typename F, typename C>
   requires std::is_same_v<bool,
                           decltype(std::declval<F>()(std::declval<CharT>()))>
 C& split_to_if(C& to, const std::basic_string<CharT>& str, F f,
-               int max_count = -1, bool is_compress_token = false) {
+               int max_count = -1, bool compress_tokens = false) {
   auto begin = str.begin();
   auto delimiter = begin;
   int count = 0;
@@ -388,7 +388,7 @@ C& split_to_if(C& to, const std::basic_string<CharT>& str, F f,
   while ((max_count < 0 || count++ < max_count) &&
          (delimiter = std::find_if(begin, str.end(), f)) != str.end()) {
     to.insert(to.end(), {begin, delimiter});
-    if (is_compress_token) {
+    if (compress_tokens) {
       begin = std::find_if_not(delimiter, str.end(), f);
     } else {
       begin = std::next(delimiter);
@@ -468,18 +468,18 @@ inline std::vector<wchar_t> create_environment_string_data(
 
 #endif
 
-inline std::string get_last_error_msg() {
+inline std::string get_last_error_message() {
 #if defined(_WIN32)
   DWORD error = GetLastError();
-  LPVOID errorMsg{NULL};
+  LPVOID error_msg{NULL};
 
   FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
                      FORMAT_MESSAGE_IGNORE_INSERTS,
                  NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                 (LPWSTR)&errorMsg, 0, NULL);
-  if (errorMsg) {
-    auto ret = to_string((wchar_t*)errorMsg);
-    LocalFree(errorMsg);
+                 (LPWSTR)&error_msg, 0, NULL);
+  if (error_msg) {
+    auto ret = to_string((wchar_t*)error_msg);
+    LocalFree(error_msg);
     return ret;
   } else {
     return "Unknown error or FormatMessageW failed, error code: " +
@@ -499,14 +499,14 @@ inline std::string get_last_error_msg() {
 
 inline void write_to_native_handle(NativeHandle& fd,
                                    std::vector<char>& write_data) {
-  HandleGuard auto_closed(fd);
+  HandleGuard guard(fd);
   std::string_view write_view{write_data.data(), write_data.size()};
   while (!write_view.empty()) {
 #if defined(_WIN32)
     DWORD write_count{0};
     if (!WriteFile(fd, write_view.data(), static_cast<DWORD>(write_view.size()),
                    &write_count, 0)) {
-      throw std::runtime_error("WriteFile error: " + get_last_error_msg());
+      throw std::runtime_error("WriteFile error: " + get_last_error_message());
     }
     if (write_count > 0) {
       write_view.remove_prefix(static_cast<size_t>(write_count));
@@ -517,7 +517,7 @@ inline void write_to_native_handle(NativeHandle& fd,
       write_view.remove_prefix(static_cast<size_t>(write_count));
     }
     if (write_count == -1) {
-      throw std::runtime_error("write error: " + std::to_string(errno));
+      throw std::runtime_error("write() error: " + std::to_string(errno));
     }
 #endif
   }
@@ -526,7 +526,7 @@ inline void write_to_native_handle(NativeHandle& fd,
 
 inline void read_from_native_handle(NativeHandle& fd,
                                     std::vector<char>& out_buf) {
-  HandleGuard auto_closed(fd);
+  HandleGuard guard(fd);
   char buf[1024];
 #if defined(_WIN32)
   DWORD read_count{0};
@@ -541,7 +541,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       out_buf.insert(out_buf.end(), buf, buf + read_count);
     }
     if (read_count == -1) {
-      throw std::runtime_error(get_last_error_msg());
+      throw std::runtime_error(get_last_error_message());
     }
   } while (read_count > 0);
 #endif
@@ -555,14 +555,14 @@ inline void read_from_native_handle(NativeHandle& fd,
   }
   auto const flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) {
-    throw std::runtime_error("fcntl F_GETFL error");
+    throw std::runtime_error("fcntl(F_GETFL) failed");
   }
   if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
-    throw std::runtime_error("fcntl F_SETFL error");
+    throw std::runtime_error("fcntl(F_SETFL) failed");
   }
 }
 
-[[maybe_unused]] inline void multiplexing_use_poll(
+[[maybe_unused]] inline void multiplex_using_poll(
     NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
     std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
   set_nonblocking(in);
@@ -580,7 +580,7 @@ inline void read_from_native_handle(NativeHandle& fd,
          fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
     int poll_count = poll(fds, 3, -1);
     if (poll_count == -1) {
-      throw std::runtime_error("poll failed!");
+      throw std::runtime_error("poll() failed");
     }
     if (poll_count == 0) {
       break;
@@ -596,7 +596,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       stdin_str.remove_prefix(it - stdin_str.begin());
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error("write error: " + std::to_string(errno));
+          throw std::runtime_error("write() error: " + std::to_string(errno));
         }
       }
       if (stdin_str.empty()) {
@@ -614,7 +614,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_msg());
+          throw std::runtime_error(get_last_error_message());
         }
       }
     } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
@@ -632,7 +632,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_msg());
+          throw std::runtime_error(get_last_error_message());
         }
       }
     } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
@@ -655,7 +655,7 @@ inline void read_from_native_handle(NativeHandle& fd,
   out = INVALID_NATIVE_HANDLE_VALUE;
   err = INVALID_NATIVE_HANDLE_VALUE;
 }
-[[maybe_unused]] inline void multiplexing_use_select(
+[[maybe_unused]] inline void multiplex_using_select(
     NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
     std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
   std::string_view stdin_str{in_buf.data(), in_buf.size()};
@@ -687,7 +687,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       break;
     }
     if (ready == -1) {
-      throw std::runtime_error(get_last_error_msg());
+      throw std::runtime_error(get_last_error_message());
     }
     if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
       auto it = stdin_str.begin();
@@ -699,7 +699,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       stdin_str.remove_prefix(it - stdin_str.begin());
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error("write error: " + std::to_string(errno));
+          throw std::runtime_error("write() error: " + std::to_string(errno));
         }
       }
       if (stdin_str.empty()) {
@@ -717,7 +717,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_msg());
+          throw std::runtime_error(get_last_error_message());
         }
       }
     }
@@ -732,7 +732,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_msg());
+          throw std::runtime_error(get_last_error_message());
         }
       }
     }
@@ -740,27 +740,28 @@ inline void read_from_native_handle(NativeHandle& fd,
 }
 #endif
 #if defined(__linux__)
-[[maybe_unused]] inline void multiplexing_use_epoll(
+[[maybe_unused]] inline void multiplex_using_epoll(
     NativeHandle&, std::vector<char>&, NativeHandle&, std::vector<char>&,
     NativeHandle&, std::vector<char>&) {
-  // TODO
+  // TODO: implement epoll-based multiplexing
 }
 #endif
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
     defined(__OpenBSD__)
-[[maybe_unused]] inline void multiplexing_use_kqueue(
+[[maybe_unused]] inline void multiplex_using_kqueue(
     NativeHandle&, std::vector<char>&, NativeHandle&, std::vector<char>&,
     NativeHandle&, std::vector<char>&) {
-  // TODO
+  // TODO: implement kqueue-based multiplexing
 }
 #endif
 
 [[maybe_unused]]
-inline void read_write_per_thread(NativeHandle& in, std::vector<char>& in_buf,
-                                  NativeHandle& out, std::vector<char>& out_buf,
-                                  NativeHandle& err,
-                                  std::vector<char>& err_buf) {
+inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
+                                    NativeHandle& out,
+                                    std::vector<char>& out_buf,
+                                    NativeHandle& err,
+                                    std::vector<char>& err_buf) {
   std::vector<std::thread> threads;
 
   if (in != INVALID_NATIVE_HANDLE_VALUE) {
@@ -785,42 +786,42 @@ inline void read_write_pipes(NativeHandle& in, std::vector<char>& in_buf,
                              NativeHandle& out, std::vector<char>& out_buf,
                              NativeHandle& err, std::vector<char>& err_buf) {
 #if defined(_WIN32)
-  return read_write_per_thread(in, in_buf, out, out_buf, err, err_buf);
+  return read_write_with_threads(in, in_buf, out, out_buf, err, err_buf);
 #else
 #if defined(SUBPROCESS_MULTIPLEXING_USE_SELECT) && \
     SUBPROCESS_MULTIPLEXING_USE_SELECT
-  return multiplexing_use_select(in, in_buf, out, out_buf, err, err_buf);
+  return multiplex_using_select(in, in_buf, out, out_buf, err, err_buf);
 #else
-  return multiplexing_use_poll(in, in_buf, out, out_buf, err, err_buf);
+  return multiplex_using_poll(in, in_buf, out, out_buf, err, err_buf);
 #endif
 #endif
 }
 
 #if defined(_WIN32)
 inline std::optional<std::string> get_file_extension(std::string const& f) {
-  auto const dotPos = f.rfind('.');
-  if (dotPos == std::string::npos) {
+  auto const dot_pos = f.rfind('.');
+  if (dot_pos == std::string::npos) {
     return std::nullopt;
   }
 
-  if (dotPos == f.length() - 1) {
+  if (dot_pos == f.length() - 1) {
     return std::nullopt;
   }
 
-  auto const separatorPos = f.find_last_of("/\\");
-  if (separatorPos != std::string::npos) {
-    if (separatorPos > dotPos) {
+  auto const separator_pos = f.find_last_of("/\\");
+  if (separator_pos != std::string::npos) {
+    if (separator_pos > dot_pos) {
       return std::nullopt;
     }
-    if (dotPos == separatorPos + 1) {
+    if (dot_pos == separator_pos + 1) {
       return std::nullopt;
     }
   } else {
-    if (dotPos == 0) {
+    if (dot_pos == 0) {
       return std::nullopt;
     }
   }
-  return f.substr(dotPos + 1);
+  return f.substr(dot_pos + 1);
 }
 #endif  // !_WIN32
 
@@ -926,51 +927,51 @@ inline std::optional<std::string> find_command_in_path(
 }
 
 #if defined(_WIN32)
-inline std::map<std::wstring, std::wstring> get_all_envs() {
+inline std::map<std::wstring, std::wstring> get_all_env_vars() {
   std::map<std::wstring, std::wstring> envs;
 
-  auto* envBlock = GetEnvironmentStringsW();
-  if (envBlock == nullptr) {
+  auto* env_block = GetEnvironmentStringsW();
+  if (env_block == nullptr) {
     return envs;
   }
 
-  const auto* currentEnv = envBlock;
-  while (*currentEnv != L'\0') {
-    std::wstring_view envString(currentEnv);
-    auto pos = envString.find(L'=');
-    // Weird variables in Windows that start with '='.
+  const auto* current_env = env_block;
+  while (*current_env != L'\0') {
+    std::wstring_view env_string(current_env);
+    auto pos = env_string.find(L'=');
+    // Windows has hidden environment variables that start with '='.
     // The key is the name of a drive, like "=C:", and the value is the
     // current working directory on that drive.
     if (pos == 0) {
-      pos = envString.find(L'=', 1);
+      pos = env_string.find(L'=', 1);
     }
     if (pos != std::wstring_view::npos) {
-      auto key = std::wstring(envString.substr(0, pos));
-      auto value = std::wstring(envString.substr(pos + 1));
+      auto key = std::wstring(env_string.substr(0, pos));
+      auto value = std::wstring(env_string.substr(pos + 1));
       std::transform(key.begin(), key.end(), key.begin(),
                      [](wchar_t c) { return std::toupper(c, std::locale()); });
       envs[key] = value;
     }
-    currentEnv +=
-        envString.length() + 1;  // Move to the next environment variable
+    current_env +=
+        env_string.length() + 1;  // Move to the next environment variable
   }
 
-  FreeEnvironmentStringsW(envBlock);
+  FreeEnvironmentStringsW(env_block);
   return envs;
 }
 #else
-inline std::map<std::string, std::string> get_all_envs() {
+inline std::map<std::string, std::string> get_all_env_vars() {
   std::map<std::string, std::string> envs;
   if (environ == nullptr) {
     return envs;
   }
 
   for (char** env = environ; *env != nullptr; ++env) {
-    std::string_view envString(*env);
-    auto pos = envString.find('=');
+    std::string_view env_string(*env);
+    auto pos = env_string.find('=');
     if (pos != std::string::npos) {
-      std::string_view key = envString.substr(0, pos);
-      std::string_view value = envString.substr(pos + 1);
+      std::string_view key = env_string.substr(0, pos);
+      std::string_view value = env_string.substr(pos + 1);
       envs[std::string(key)] = std::string(value);
     }
   }
@@ -998,11 +999,11 @@ class Pipe {
     at.lpSecurityDescriptor = nullptr;
 
     if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 0)) {
-      throw std::runtime_error{get_last_error_msg()};
+      throw std::runtime_error{get_last_error_message()};
     }
 #else
     if (-1 == pipe(fds)) {
-      throw std::runtime_error{"pipe failed"};
+      throw std::runtime_error{"pipe() failed"};
     }
 #endif
   }
@@ -1161,18 +1162,18 @@ class Redirector {
         []<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             if (value.read() != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> pipe.read() not closed!" << '\n';
+              std::cerr << ">> pipe read handle not closed!" << '\n';
             }
             if (value.write() != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> pipe.write() not closed!" << '\n';
+              std::cerr << ">> pipe write handle not closed!" << '\n';
             }
 
           } else if constexpr (std::is_same_v<T, Buffer>) {
             if (value.pipe().read() != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> buffer.pipe.read() not closed!" << '\n';
+              std::cerr << ">> buffer pipe read handle not closed!" << '\n';
             }
             if (value.pipe().write() != INVALID_NATIVE_HANDLE_VALUE) {
-              std::cerr << ">> buffer.pipe.write() not closed!" << '\n';
+              std::cerr << ">> buffer pipe write handle not closed!" << '\n';
             }
           }
         },
@@ -1186,12 +1187,12 @@ class Redirector {
         [this]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
-            NativeHandle non_inherit_handle =
+            NativeHandle non_inheritable_handle =
                 fileno() == 0 ? value.write() : value.read();
-            if (non_inherit_handle != INVALID_NATIVE_HANDLE_VALUE &&
-                !SetHandleInformation(non_inherit_handle, HANDLE_FLAG_INHERIT,
-                                      0)) {
-              throw std::runtime_error("SetHandleInformation Failed: " +
+            if (non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE &&
+                !SetHandleInformation(non_inheritable_handle,
+                                      HANDLE_FLAG_INHERIT, 0)) {
+              throw std::runtime_error("SetHandleInformation failed: " +
                                        std::to_string(GetLastError()));
             }
 #endif
@@ -1203,12 +1204,12 @@ class Redirector {
             }
           } else if constexpr (std::is_same_v<T, Buffer>) {
 #if defined(_WIN32)
-            NativeHandle non_inherit_handle =
+            NativeHandle non_inheritable_handle =
                 fileno() == 0 ? value.pipe().write() : value.pipe().read();
-            if (non_inherit_handle != INVALID_NATIVE_HANDLE_VALUE &&
-                !SetHandleInformation(non_inherit_handle, HANDLE_FLAG_INHERIT,
-                                      0)) {
-              throw std::runtime_error("SetHandleInformation Failed: " +
+            if (non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE &&
+                !SetHandleInformation(non_inheritable_handle,
+                                      HANDLE_FLAG_INHERIT, 0)) {
+              throw std::runtime_error("SetHandleInformation failed: " +
                                        std::to_string(GetLastError()));
             }
 #endif
@@ -1470,7 +1471,7 @@ struct Cwd {
 #endif
 };
 
-// set envs to process environment(override)
+// Set environment variables, replacing existing ones.
 struct Env {
 #if defined(_WIN32)
   std::map<std::wstring, std::wstring> env;
@@ -1479,7 +1480,7 @@ struct Env {
 #endif
 };
 
-// append envs to process environment
+// Append environment variables to the existing environment.
 struct EnvAppend {
 #if defined(_WIN32)
   std::map<std::wstring, std::wstring> env;
@@ -1488,7 +1489,7 @@ struct EnvAppend {
 #endif
 };
 
-// append value for special environment, for example: PATH
+// Append or prepend a value to a specific environment variable, e.g., PATH.
 struct EnvItemAppend {
   EnvItemAppend& operator+=(std::string val) {
 #if defined(_WIN32)
@@ -1625,20 +1626,20 @@ concept is_string_type = std::is_same_v<char*, std::decay_t<T>> ||
                          std::is_same_v<std::string, std::decay_t<T>> ||
                          std::is_same_v<std::wstring, std::decay_t<T>>;
 template <typename...>
-struct named_arg_typelist;
+struct named_arg_type_list;
 
 template <>
-struct named_arg_typelist<> {
+struct named_arg_type_list<> {
   using type = std::tuple<>;
 };
 template <typename Head, typename... Tails>
-struct named_arg_typelist<Head, Tails...> {
+struct named_arg_type_list<Head, Tails...> {
   using type =
       std::conditional_t<is_named_argument<Head>, std::tuple<Head, Tails...>,
-                         typename named_arg_typelist<Tails...>::type>;
+                         typename named_arg_type_list<Tails...>::type>;
 };
 template <typename... T>
-using named_arg_typelist_t = typename named_arg_typelist<T...>::type;
+using named_arg_type_list_t = typename named_arg_type_list<T...>::type;
 
 class subprocess {
  public:
@@ -1690,15 +1691,15 @@ class subprocess {
                      std::is_same_v<Cwd, std::decay_t<T>> ||
                      std::is_same_v<EnvAppend, std::decay_t<T>> ||
                      std::is_same_v<EnvItemAppend, std::decay_t<T>>,
-                 "Invalid argument type passed to run function.");
+                 "Unsupported argument type passed to run().");
            }(std::forward<T>(args))));
     if ((!env_item_appends.empty() || !env_appends.empty()) &&
         environments.empty()) {
-      environments = get_all_envs();
+      environments = get_all_env_vars();
     }
     environments.insert(env_appends.begin(), env_appends.end());
 #ifdef _WIN32
-    char path_env_sep = ';';
+    wchar_t path_env_sep = L';';
 #else
     char path_env_sep = ':';
 #endif
@@ -1727,8 +1728,8 @@ class subprocess {
     env_ = environments;
 #if defined(_WIN32)
     ZeroMemory(&process_information_, sizeof(process_information_));
-    ZeroMemory(&startupinfo_, sizeof(startupinfo_));
-    startupinfo_.cb = sizeof(startupinfo_);
+    ZeroMemory(&startup_info_, sizeof(startup_info_));
+    startup_info_.cb = sizeof(startup_info_);
 #endif
   }
 
@@ -1755,16 +1756,16 @@ class subprocess {
     prepare_all_stdio_redirections();
 #if defined(_WIN32)
     auto in = stdin_.get_child_process_stdio_handle();
-    startupinfo_.hStdInput =
+    startup_info_.hStdInput =
         in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
     auto out = stdout_.get_child_process_stdio_handle();
-    startupinfo_.hStdOutput =
+    startup_info_.hStdOutput =
         out.has_value() ? out.value() : GetStdHandle(STD_OUTPUT_HANDLE);
     auto err = stderr_.get_child_process_stdio_handle();
-    startupinfo_.hStdError =
+    startup_info_.hStdError =
         err.has_value() ? err.value() : GetStdHandle(STD_ERROR_HANDLE);
 
-    startupinfo_.dwFlags |= STARTF_USESTDHANDLES;
+    startup_info_.dwFlags |= STARTF_USESTDHANDLES;
 
     auto command = argv_to_command_line_string(cmd_);
 
@@ -1773,13 +1774,13 @@ class subprocess {
     auto success = CreateProcessW(
         nullptr, command.data(), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT,
         env_block.empty() ? nullptr : env_block.data(),
-        cwd_.empty() ? nullptr : cwd_.data(), &startupinfo_,
+        cwd_.empty() ? nullptr : cwd_.data(), &startup_info_,
         &process_information_);
 
     if (success) {
       manage_pipe_io();
     } else {
-      std::wcerr << to_wstring(get_last_error_msg()) << L'\n';
+      std::wcerr << to_wstring(get_last_error_message()) << L'\n';
       process_information_.hProcess = INVALID_NATIVE_HANDLE_VALUE;
       stdin_.close_all();
       stdout_.close_all();
@@ -1790,7 +1791,7 @@ class subprocess {
     posix_spawn_file_actions_t action;
     if (0 != posix_spawn_file_actions_init(&action)) {
       std::runtime_error("posix_spawn_file_actions_init failed: " +
-                         get_last_error_msg());
+                         get_last_error_message());
     }
     add_posix_spawn_file_actions(action);
     posix_spawn_file_actions_destroy(&action);
@@ -1798,7 +1799,7 @@ class subprocess {
 #else   // SUBPROCESS_USE_POSIX_SPAWN
     auto pid = fork();
     if (pid < 0) {
-      throw std::runtime_error("fork failed");
+      throw std::runtime_error("fork() failed");
     } else if (pid == 0) {
       execute_command_in_child();
     } else {
@@ -1902,14 +1903,14 @@ class subprocess {
                    [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() && (-1 == chdir(cwd_.data()))) {
-      throw std::runtime_error(get_last_error_msg());
+      throw std::runtime_error(get_last_error_message());
     }
 
-    std::string exe_to_exec = cmd_[0];
-    if (exe_to_exec.find('/') == std::string::npos) {
-      auto resolved_path = find_command_in_path(exe_to_exec);
+    std::string executable_path = cmd_[0];
+    if (executable_path.find('/') == std::string::npos) {
+      auto resolved_path = find_command_in_path(executable_path);
       if (resolved_path.has_value()) {
-        exe_to_exec = resolved_path.value();
+        executable_path = resolved_path.value();
       }
     }
 
@@ -1924,13 +1925,13 @@ class subprocess {
       std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
                      [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
-      execve(exe_to_exec.c_str(), cmd.data(), envs.data());
-      std::cerr << "execve(" << exe_to_exec
-                << ") failed: " << get_last_error_msg() << '\n';
+      execve(executable_path.c_str(), cmd.data(), envs.data());
+      std::cerr << "execve(" << executable_path
+                << ") failed: " << get_last_error_message() << '\n';
     } else {
-      execv(exe_to_exec.c_str(), cmd.data());
-      std::cerr << "execv(" << exe_to_exec
-                << ") failed: " << get_last_error_msg() << '\n';
+      execv(executable_path.c_str(), cmd.data());
+      std::cerr << "execv(" << executable_path
+                << ") failed: " << get_last_error_message() << '\n';
     }
     _Exit(127);
   }
@@ -1947,18 +1948,18 @@ class subprocess {
     if (!cwd_.empty() &&
 #if defined(__APPLE__) && defined(__MACH__)
         (-1 == posix_spawn_file_actions_addchdir_np(&action, cwd_.data()))) {
-      throw std::runtime_error(get_last_error_msg());
+      throw std::runtime_error(get_last_error_message());
 #else  // other POSIX systems, try the standard version
         (-1 == posix_spawn_file_actions_addchdir(&action, cwd_.data()))) {
-      throw std::runtime_error(get_last_error_msg());
+      throw std::runtime_error(get_last_error_message());
 #endif
     }
 
-    std::string exe_to_exec = cmd_[0];
-    if (exe_to_exec.find('/') == std::string::npos) {
-      auto resolved_path = find_command_in_path(exe_to_exec);
+    std::string executable_path = cmd_[0];
+    if (executable_path.find('/') == std::string::npos) {
+      auto resolved_path = find_command_in_path(executable_path);
       if (resolved_path.has_value()) {
-        exe_to_exec = resolved_path.value();
+        executable_path = resolved_path.value();
       }
     }
 
@@ -1973,13 +1974,13 @@ class subprocess {
       std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
                      [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
-      auto ret = posix_spawn(&pid_, exe_to_exec.c_str(), &action, nullptr,
+      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, nullptr,
                              cmd.data(), envs.data());
       if (ret != 0) {
         pid_ = INVALID_NATIVE_HANDLE_VALUE;
       }
     } else {
-      auto ret = posix_spawn(&pid_, exe_to_exec.c_str(), &action, nullptr,
+      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, nullptr,
                              cmd.data(), nullptr);
       if (ret != 0) {
         pid_ = INVALID_NATIVE_HANDLE_VALUE;
@@ -2004,7 +2005,7 @@ class subprocess {
   StderrRedirector stderr_;
 #if defined(_WIN32)
   PROCESS_INFORMATION process_information_;
-  STARTUPINFOW startupinfo_;
+  STARTUPINFOW startup_info_;
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
 #endif
@@ -2048,22 +2049,22 @@ template <typename... Args>
 inline int run(Args... args) {
   std::tuple<Args...> args_tuple{std::move(args)...};
   using ArgsTuple = std::tuple<Args...>;
-  using NamedArgTypelist =
-      typename detail::named_arg_typelist_t<std::decay_t<Args>...>;
+  using NamedArgTypeList =
+      typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
   return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
                                                  std::index_sequence<N...>) {
     static_assert(
         ((detail::is_string_type<std::tuple_element_t<I, ArgsTuple>>) && ...));
     static_assert(((detail::is_named_argument<
-                       std::tuple_element_t<N, NamedArgTypelist>>) &&
+                       std::tuple_element_t<N, NamedArgTypeList>>) &&
                    ...));
     return run({std::move(std::get<I>(args_tuple))...},
                std::move(std::get<std::tuple_size_v<std::tuple<Args...>> -
-                                  std::tuple_size_v<NamedArgTypelist> + N>(
+                                  std::tuple_size_v<NamedArgTypeList> + N>(
                    args_tuple))...);
   }(std::make_index_sequence<std::tuple_size_v<std::tuple<Args...>> -
-                             std::tuple_size_v<NamedArgTypelist>>{},
-         std::make_index_sequence<std::tuple_size_v<NamedArgTypelist>>{});
+                             std::tuple_size_v<NamedArgTypeList>>{},
+         std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
 }
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
@@ -2156,8 +2157,8 @@ inline std::optional<std::string> home() {
     return home_dir;
   }
 
-  // If HOME is not set, fallback to getpwuid
-  // This is a more reliable method for finding the home directory
+  // If HOME is not set, fall back to getpwuid.
+  // This is a more reliable method for finding the home directory.
   uid_t uid = getuid();
   struct passwd* pw = getpwuid(uid);
   if (pw != nullptr && pw->pw_dir != nullptr && pw->pw_dir[0] != '\0') {
@@ -2174,7 +2175,7 @@ inline
     std::map<std::string, std::string>
 #endif
     environs() {
-  return detail::get_all_envs();
+  return detail::get_all_env_vars();
 }
 
 #if defined(_WIN32)
