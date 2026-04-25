@@ -91,6 +91,10 @@
 #if defined(__linux__)
 #include <sys/epoll.h>
 #endif
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
+    defined(__OpenBSD__)
+#include <sys/event.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -745,8 +749,7 @@ inline void read_from_native_handle(NativeHandle& fd,
 #if defined(__linux__)
 [[maybe_unused]] inline void multiplex_using_epoll(
     NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
-    std::vector<char>& out_buf, NativeHandle& err,
-    std::vector<char>& err_buf) {
+    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
   set_nonblocking(in);
   set_nonblocking(out);
   set_nonblocking(err);
@@ -882,10 +885,147 @@ inline void read_from_native_handle(NativeHandle& fd,
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
     defined(__OpenBSD__)
+
 [[maybe_unused]] inline void multiplex_using_kqueue(
-    NativeHandle&, std::vector<char>&, NativeHandle&, std::vector<char>&,
-    NativeHandle&, std::vector<char>&) {
-  // TODO: implement kqueue-based multiplexing
+    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
+    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
+  set_nonblocking(in);
+  set_nonblocking(out);
+  set_nonblocking(err);
+
+  int kq = kqueue();
+  if (kq == -1) {
+    throw std::runtime_error("kqueue() failed: " + get_last_error_message());
+  }
+  HandleGuard kq_guard(kq);
+
+  struct kevent changes[3];
+  int nchanges = 0;
+
+  if (in != INVALID_NATIVE_HANDLE_VALUE) {
+    EV_SET(&changes[nchanges++], in, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0,
+           nullptr);
+  }
+  if (out != INVALID_NATIVE_HANDLE_VALUE) {
+    EV_SET(&changes[nchanges++], out, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0,
+           nullptr);
+  }
+  if (err != INVALID_NATIVE_HANDLE_VALUE) {
+    EV_SET(&changes[nchanges++], err, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0,
+           nullptr);
+  }
+
+  if (nchanges > 0) {
+    if (kevent(kq, changes, nchanges, nullptr, 0, nullptr) == -1) {
+      throw std::runtime_error("kevent() register failed: " +
+                               get_last_error_message());
+    }
+  }
+
+  std::string_view stdin_str{in_buf.data(), in_buf.size()};
+  char buf[1024];
+
+  struct kevent events[3];
+
+  while (in != INVALID_NATIVE_HANDLE_VALUE ||
+         out != INVALID_NATIVE_HANDLE_VALUE ||
+         err != INVALID_NATIVE_HANDLE_VALUE) {
+    int nev = kevent(kq, nullptr, 0, events, 3, nullptr);
+    if (nev == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      throw std::runtime_error("kevent() failed: " + get_last_error_message());
+    }
+
+    for (int i = 0; i < nev; ++i) {
+      int fd = static_cast<int>(events[i].ident);
+      int16_t filter = events[i].filter;
+      uint16_t flags = events[i].flags;
+
+      if (flags & EV_ERROR) {
+        struct kevent ch;
+        EV_SET(&ch, fd, filter, EV_DELETE, 0, 0, nullptr);
+        kevent(kq, &ch, 1, nullptr, 0, nullptr);
+        if (fd == in) {
+          close_native_handle(in);
+        } else if (fd == out) {
+          close_native_handle(out);
+        } else if (fd == err) {
+          close_native_handle(err);
+        }
+        continue;
+      }
+
+      if (fd == in) {
+        if (filter == EVFILT_WRITE) {
+          auto write_count = write(fd, stdin_str.data(), stdin_str.size());
+          while (write_count > 0) {
+            stdin_str.remove_prefix(static_cast<size_t>(write_count));
+            write_count = write(fd, stdin_str.data(), stdin_str.size());
+          }
+          if (write_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              throw std::runtime_error("write() error: " +
+                                       std::to_string(errno));
+            }
+          }
+          if (stdin_str.empty()) {
+            struct kevent ch;
+            EV_SET(&ch, in, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+            kevent(kq, &ch, 1, nullptr, 0, nullptr);
+            close_native_handle(in);
+          }
+        }
+        if (flags & EV_EOF) {
+          struct kevent ch;
+          EV_SET(&ch, in, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+          kevent(kq, &ch, 1, nullptr, 0, nullptr);
+          close_native_handle(in);
+        }
+      } else if (fd == out) {
+        if (filter == EVFILT_READ) {
+          auto read_count = read(fd, buf, std::size(buf));
+          while (read_count > 0) {
+            out_buf.insert(out_buf.end(), buf, buf + read_count);
+            read_count = read(fd, buf, std::size(buf));
+          }
+          if (read_count == 0) {
+            struct kevent ch;
+            EV_SET(&ch, out, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+            kevent(kq, &ch, 1, nullptr, 0, nullptr);
+            close_native_handle(out);
+          } else if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              throw std::runtime_error(get_last_error_message());
+            }
+          }
+        }
+      } else if (fd == err) {
+        if (filter == EVFILT_READ) {
+          auto read_count = read(fd, buf, std::size(buf));
+          while (read_count > 0) {
+            err_buf.insert(err_buf.end(), buf, buf + read_count);
+            read_count = read(fd, buf, std::size(buf));
+          }
+          if (read_count == 0) {
+            struct kevent ch;
+            EV_SET(&ch, err, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+            kevent(kq, &ch, 1, nullptr, 0, nullptr);
+            close_native_handle(err);
+          } else if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              throw std::runtime_error(get_last_error_message());
+            }
+          }
+        }
+      }
+    }
+  }
+
+  in = INVALID_NATIVE_HANDLE_VALUE;
+  out = INVALID_NATIVE_HANDLE_VALUE;
+  err = INVALID_NATIVE_HANDLE_VALUE;
 }
 #endif
 
