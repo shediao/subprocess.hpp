@@ -88,6 +88,9 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/epoll.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -741,9 +744,139 @@ inline void read_from_native_handle(NativeHandle& fd,
 #endif
 #if defined(__linux__)
 [[maybe_unused]] inline void multiplex_using_epoll(
-    NativeHandle&, std::vector<char>&, NativeHandle&, std::vector<char>&,
-    NativeHandle&, std::vector<char>&) {
-  // TODO: implement epoll-based multiplexing
+    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
+    std::vector<char>& out_buf, NativeHandle& err,
+    std::vector<char>& err_buf) {
+  set_nonblocking(in);
+  set_nonblocking(out);
+  set_nonblocking(err);
+
+  int epfd = epoll_create1(EPOLL_CLOEXEC);
+  if (epfd == -1) {
+    throw std::runtime_error("epoll_create1() failed: " +
+                             get_last_error_message());
+  }
+  HandleGuard epoll_guard(epfd);
+
+  struct epoll_event ev;
+  struct epoll_event events[3];
+
+  // Add valid file descriptors to the epoll interest list
+  if (in != INVALID_NATIVE_HANDLE_VALUE) {
+    ev.events = EPOLLOUT;
+    ev.data.fd = in;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, in, &ev) == -1) {
+      throw std::runtime_error("epoll_ctl(EPOLL_CTL_ADD, in) failed: " +
+                               get_last_error_message());
+    }
+  }
+  if (out != INVALID_NATIVE_HANDLE_VALUE) {
+    ev.events = EPOLLIN;
+    ev.data.fd = out;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, out, &ev) == -1) {
+      throw std::runtime_error("epoll_ctl(EPOLL_CTL_ADD, out) failed: " +
+                               get_last_error_message());
+    }
+  }
+  if (err != INVALID_NATIVE_HANDLE_VALUE) {
+    ev.events = EPOLLIN;
+    ev.data.fd = err;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, err, &ev) == -1) {
+      throw std::runtime_error("epoll_ctl(EPOLL_CTL_ADD, err) failed: " +
+                               get_last_error_message());
+    }
+  }
+
+  std::string_view stdin_str{in_buf.data(), in_buf.size()};
+  char buf[1024];
+
+  while (in != INVALID_NATIVE_HANDLE_VALUE ||
+         out != INVALID_NATIVE_HANDLE_VALUE ||
+         err != INVALID_NATIVE_HANDLE_VALUE) {
+    int nfds = epoll_wait(epfd, events, 3, -1);
+    if (nfds == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      throw std::runtime_error("epoll_wait() failed: " +
+                               get_last_error_message());
+    }
+
+    for (int i = 0; i < nfds; ++i) {
+      int fd = events[i].data.fd;
+      uint32_t revents = events[i].events;
+
+      if (fd == in) {
+        if (revents & EPOLLOUT) {
+          auto write_count = write(fd, stdin_str.data(), stdin_str.size());
+          while (write_count > 0) {
+            stdin_str.remove_prefix(static_cast<size_t>(write_count));
+            write_count = write(fd, stdin_str.data(), stdin_str.size());
+          }
+          if (write_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              throw std::runtime_error("write() error: " +
+                                       std::to_string(errno));
+            }
+          }
+          if (stdin_str.empty()) {
+            epoll_ctl(epfd, EPOLL_CTL_DEL, in, nullptr);
+            close_native_handle(in);
+          }
+        }
+        if (revents & (EPOLLHUP | EPOLLERR)) {
+          epoll_ctl(epfd, EPOLL_CTL_DEL, in, nullptr);
+          close_native_handle(in);
+        }
+      } else if (fd == out) {
+        if (revents & EPOLLIN) {
+          auto read_count = read(fd, buf, std::size(buf));
+          while (read_count > 0) {
+            out_buf.insert(out_buf.end(), buf, buf + read_count);
+            read_count = read(fd, buf, std::size(buf));
+          }
+          if (read_count == 0) {
+            epoll_ctl(epfd, EPOLL_CTL_DEL, out, nullptr);
+            close_native_handle(out);
+          }
+          if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              throw std::runtime_error(get_last_error_message());
+            }
+          }
+        }
+        if (revents & (EPOLLHUP | EPOLLERR)) {
+          epoll_ctl(epfd, EPOLL_CTL_DEL, out, nullptr);
+          close_native_handle(out);
+        }
+      } else if (fd == err) {
+        if (revents & EPOLLIN) {
+          auto read_count = read(fd, buf, std::size(buf));
+          while (read_count > 0) {
+            err_buf.insert(err_buf.end(), buf, buf + read_count);
+            read_count = read(fd, buf, std::size(buf));
+          }
+          if (read_count == 0) {
+            epoll_ctl(epfd, EPOLL_CTL_DEL, err, nullptr);
+            close_native_handle(err);
+          }
+          if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              throw std::runtime_error(get_last_error_message());
+            }
+          }
+        }
+        if (revents & (EPOLLHUP | EPOLLERR)) {
+          epoll_ctl(epfd, EPOLL_CTL_DEL, err, nullptr);
+          close_native_handle(err);
+        }
+      }
+    }
+  }
+
+  in = INVALID_NATIVE_HANDLE_VALUE;
+  out = INVALID_NATIVE_HANDLE_VALUE;
+  err = INVALID_NATIVE_HANDLE_VALUE;
 }
 #endif
 
