@@ -4,7 +4,28 @@
 #include "subprocess/subprocess.hpp"
 
 TEST(SubprocessTest, Pipe) {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+  subprocess::buffer out;
+  auto pipe1 = subprocess::detail::Pipe::create();
+  auto pipe2 = subprocess::detail::Pipe::create();
+
+  subprocess::detail::subprocess p1(std::vector<std::string>{"cmd.exe", "/c", "echo 123&echo 124&echo 456&exit /b 0"}, $stdout > pipe1);
+  subprocess::detail::subprocess p2(std::vector<std::string>{"findstr.exe", "2"}, $stdin<pipe1, $stdout> pipe2);
+  subprocess::detail::subprocess p3(std::vector<std::string>{"findstr.exe", "4"}, $stdin<pipe2, $stdout> out);
+
+  p1.run_no_wait();
+  p2.run_no_wait();
+  p3.run_no_wait();
+
+  auto r1 = p1.wait_for_exit();
+  auto r2 = p2.wait_for_exit();
+  auto r3 = p3.wait_for_exit();
+  ASSERT_EQ(r1, 0);
+  ASSERT_EQ(r2, 0);
+  ASSERT_EQ(r3, 0);
+  ASSERT_EQ((std::string_view{"124\r\n"}),
+            (std::string_view{out.data(), out.size()}));
+#else
   subprocess::buffer out;
   auto pipe1 = subprocess::detail::Pipe::create();
   auto pipe2 = subprocess::detail::Pipe::create();

@@ -1513,13 +1513,23 @@ class Redirector {
         [this]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
-            NativeHandle non_inheritable_handle =
-                fileno() == 0 ? value.write() : value.read();
-            if (non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE &&
-                !SetHandleInformation(non_inheritable_handle,
-                                      HANDLE_FLAG_INHERIT, 0)) {
-              throw std::runtime_error("SetHandleInformation failed: " +
-                                       std::to_string(GetLastError()));
+            if (NativeHandle non_inheritable_handle =
+                    fileno() == 0 ? value.write() : value.read();
+                non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
+              if (!SetHandleInformation(non_inheritable_handle,
+                                        HANDLE_FLAG_INHERIT, 0)) {
+                throw std::runtime_error("SetHandleInformation failed: " +
+                                         std::to_string(GetLastError()));
+              }
+            }
+            if (NativeHandle inheritable_handle =
+                    fileno() == 0 ? value.read() : value.write();
+                inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
+              if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
+                                        HANDLE_FLAG_INHERIT)) {
+                throw std::runtime_error("SetHandleInformation failed: " +
+                                         std::to_string(GetLastError()));
+              }
             }
 #endif
           } else if constexpr (std::is_same_v<T, File>) {
@@ -1530,13 +1540,23 @@ class Redirector {
             }
           } else if constexpr (std::is_same_v<T, Buffer>) {
 #if defined(_WIN32)
-            NativeHandle non_inheritable_handle =
-                fileno() == 0 ? value.pipe().write() : value.pipe().read();
-            if (non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE &&
-                !SetHandleInformation(non_inheritable_handle,
-                                      HANDLE_FLAG_INHERIT, 0)) {
-              throw std::runtime_error("SetHandleInformation failed: " +
-                                       std::to_string(GetLastError()));
+            if (NativeHandle non_inheritable_handle =
+                    fileno() == 0 ? value.pipe().write() : value.pipe().read();
+                non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
+              if (!SetHandleInformation(non_inheritable_handle,
+                                        HANDLE_FLAG_INHERIT, 0)) {
+                throw std::runtime_error("SetHandleInformation failed: " +
+                                         std::to_string(GetLastError()));
+              }
+            }
+            if (NativeHandle inheritable_handle =
+                    fileno() == 0 ? value.pipe().read() : value.pipe().write();
+                inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
+              if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
+                                        HANDLE_FLAG_INHERIT)) {
+                throw std::runtime_error("SetHandleInformation failed: " +
+                                         std::to_string(GetLastError()));
+              }
             }
 #endif
           }
@@ -2352,14 +2372,18 @@ class subprocess_array {
   }
 
   int run() {
-    if (subs_.empty()) {
-      return 0;
-    }
+    std::vector<Pipe> pipes;
     if (subs_.size() > 1) {
       for (auto it = subs_.begin(); it != subs_.end() - 1; ++it) {
-        Pipe pipe = Pipe::create();
-        it->stdout_ = (named_args::std_out > pipe);
-        (it + 1)->stdin_ = (named_args::std_in < pipe);
+        pipes.push_back(Pipe::create());
+#if defined(_WIN32)
+        SetHandleInformation(pipes.back().read(), HANDLE_FLAG_INHERIT,
+                             HANDLE_FLAG_INHERIT);
+        SetHandleInformation(pipes.back().write(), HANDLE_FLAG_INHERIT,
+                             HANDLE_FLAG_INHERIT);
+#endif
+        it->stdout_ = (named_args::std_out > pipes.back());
+        (it + 1)->stdin_ = (named_args::std_in < pipes.back());
       }
     }
     for (auto& sub : subs_) {
