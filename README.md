@@ -126,16 +126,7 @@ run("ls", "-l", "/non_existent_dir", $stderr >> "errors.log");
 run("some_command", $stdout > $devnull, $stderr > $devnull);
 ```
 
-### 4. Piping
-
-You can create process pipelines using `subprocess::detail::Pipe` objects.
-
-```cpp
-TODO:
-
-```
-
-### 5. Setting the Working Directory
+### 4. Setting the Working Directory
 
 Use the `$cwd` argument to specify the current working directory for the subprocess.
 
@@ -144,7 +135,7 @@ Use the `$cwd` argument to specify the current working directory for the subproc
 auto [code, out, err] = capture_run("ls", $cwd = "/tmp");
 ```
 
-### 6. Managing Environment Variables
+### 5. Managing Environment Variables
 
 Use the `$env` argument to flexibly manage the subprocess's environment variables.
 
@@ -177,7 +168,6 @@ Named arguments are used to control various aspects of process execution.
     - `std::string`: A file path.
     - `std::wstring`: A file path (Windows only).
     - `subprocess::buffer&`: A reference to an in-memory buffer.
-    - `subprocess::detail::Pipe`: Pipe output from another process.
     - `$devnull`: The system's null device.
 
 - **`$stdout > target` / `$stderr > target`**: Redirect standard output/error to `target` (truncate mode).
@@ -186,7 +176,6 @@ Named arguments are used to control various aspects of process execution.
     - `std::string`: A file path.
     - `std::wstring`: A file path (Windows only).
     - `subprocess::buffer&`: A reference to an in-memory buffer.
-    - `subprocess::detail::Pipe`: For pipeline connections.
     - `$devnull`: The system's null device.
 
 - **`$cwd = path`**: Execute the command in the specified `path` (of type `std::string` or `std::wstring`).
@@ -198,7 +187,6 @@ Named arguments are used to control various aspects of process execution.
 
 - **`$env["VAR"] += value`**: Append `value` to the end of the environment variable named `VAR` (useful for `PATH`, etc.).
 - **`$env["VAR"] <<= value`**: Prepend `value` to the beginning of the environment variable named `VAR`.
-
 
 ### The `subprocess::buffer` Type
 
@@ -226,4 +214,5 @@ The `subprocess` namespace also provides several useful cross-platform helper fu
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shediao/subprocess.hpp)
 
 ---
+
 Happy Coding!

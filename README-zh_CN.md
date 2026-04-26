@@ -127,16 +127,7 @@ run("ls", "-l", "/non_existent_dir", $stderr >> "errors.log");
 run("some_command", $stdout > $devnull, $stderr > $devnull);
 ```
 
-### 4. 管道 (Piping)
-
-你可以通过 `subprocess::detail::Pipe` 对象创建进程管道.
-
-```cpp
-TODO:
-
-```
-
-### 5. 设置工作目录
+### 4. 设置工作目录
 
 使用 `$cwd` 参数来指定子进程的当前工作目录.
 
@@ -145,7 +136,7 @@ TODO:
 auto [code, out, err] = capture_run("ls", $cwd = "/tmp");
 ```
 
-### 6. 管理环境变量
+### 5. 管理环境变量
 
 使用 `$env` 参数来灵活地管理子进程的环境变量.
 
@@ -178,7 +169,6 @@ run("my_program", $env["PATH"] += "/opt/my_app/bin");
     - `std::string`: 文件路径.
     - `std::wstring`: 文件路径 (仅 Windows).
     - `subprocess::buffer&`: 内存中的缓冲区引用.
-    - `subprocess::detail::Pipe`: 另一个进程的管道输出.
     - `$devnull`: 系统空设备.
 
 - **`$stdout > target` / `$stderr > target`**: 将标准输出/错误重定向到 `target` (截断模式).
@@ -187,7 +177,6 @@ run("my_program", $env["PATH"] += "/opt/my_app/bin");
     - `std::string`: 文件路径.
     - `std::wstring`: 文件路径 (仅 Windows).
     - `subprocess::buffer&`: 内存中的缓冲区引用.
-    - `subprocess::detail::Pipe`: 用于管道连接.
     - `$devnull`: 系统空设备.
 
 - **`$cwd = path`**: 在指定的 `path` (类型为 `std::string` 或 `std::wstring`) 中执行命令.
@@ -199,7 +188,6 @@ run("my_program", $env["PATH"] += "/opt/my_app/bin");
 
 - **`$env["VAR"] += value`**: 将 `value` 追加到名为 `VAR` 的环境变量的末尾 (主要用于 `PATH` 等).
 - **`$env["VAR"] <<= value`**: 将 `value` 前插到名为 `VAR` 的环境变量的开头.
-
 
 ### `subprocess::buffer` 类型
 
@@ -224,10 +212,8 @@ run("my_program", $env["PATH"] += "/opt/my_app/bin");
 - `process::home()`: 获取用户主目录.
 - `process::pid()`: 获取当前进程 ID.
 
-
-
-
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shediao/subprocess.hpp)
 
 ---
+
 Happy Coding!
