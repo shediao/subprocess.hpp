@@ -1968,6 +1968,8 @@ template <typename... T>
 using named_arg_type_list_t = typename named_arg_type_list<T...>::type;
 
 class subprocess {
+  friend class subprocess_array;
+
  public:
   template <typename... T>
     requires(is_named_argument<T> && ...)
@@ -2336,6 +2338,57 @@ class subprocess {
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
 #endif
 };
+
+class subprocess_array {
+ public:
+  subprocess_array(subprocess&& sub) { subs_.push_back(std::move(sub)); }
+  subprocess_array(subprocess_array&&) = default;
+  subprocess_array& operator=(subprocess_array&&) = default;
+  subprocess_array(subprocess_array const&) = delete;
+  subprocess_array& operator=(subprocess_array const&) = delete;
+  subprocess_array& append(subprocess&& sub) {
+    subs_.push_back(std::move(sub));
+    return *this;
+  }
+
+  int run() {
+    if (subs_.empty()) {
+      return 0;
+    }
+    if (subs_.size() > 1) {
+      for (auto it = subs_.begin(); it != subs_.end() - 1; ++it) {
+        Pipe pipe = Pipe::create();
+        it->stdout_ = (named_args::std_out > pipe);
+        (it + 1)->stdin_ = (named_args::std_in < pipe);
+      }
+    }
+    for (auto& sub : subs_) {
+      sub.run_no_wait();
+    }
+    for (auto& sub : subs_) {
+      exit_codes_.push_back(sub.wait_for_exit());
+    }
+    return exit_codes_.back();
+  }
+
+  int exit_code() const { return exit_codes_.back(); }
+  std::vector<int> exit_codes() const { return exit_codes_; }
+
+ private:
+  std::vector<subprocess> subs_;
+  std::vector<int> exit_codes_;
+};
+
+inline subprocess_array operator|(subprocess&& lhs, subprocess&& rhs) {
+  subprocess_array subs(std::move(lhs));
+  subs.append(std::move(rhs));
+  return subs;
+}
+
+inline subprocess_array operator|(subprocess_array lhs, subprocess&& rhs) {
+  lhs.append(std::move(rhs));
+  return lhs;
+}
 }  // namespace detail
 
 namespace named_arguments {
