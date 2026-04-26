@@ -102,7 +102,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -276,38 +278,19 @@ inline void close_native_handle(NativeHandle& handle) {
 }
 class HandleGuard {
  public:
-  explicit HandleGuard(NativeHandle h =
-#if defined(_WIN32)
-                           INVALID_HANDLE_VALUE
-#else
-                           -1
-#endif
-                       )
-      : handle_(h) {
-  }
+  explicit HandleGuard(NativeHandle h = INVALID_NATIVE_HANDLE_VALUE)
+      : handle_(h) {}
   ~HandleGuard() { Close(); }
   HandleGuard(const HandleGuard&) = delete;
   HandleGuard& operator=(const HandleGuard&) = delete;
   HandleGuard(HandleGuard&& other) noexcept : handle_(other.handle_) {
-    other.handle_ =
-#if defined(_WIN32)
-        INVALID_HANDLE_VALUE
-#else
-        -1
-#endif
-        ;
+    other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
   }
   HandleGuard& operator=(HandleGuard&& other) noexcept {
     if (this != &other) {
       Close();
       handle_ = other.handle_;
-      other.handle_ =
-#if defined(_WIN32)
-          INVALID_HANDLE_VALUE
-#else
-          -1
-#endif
-          ;
+      other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
     }
     return *this;
   }
@@ -317,13 +300,7 @@ class HandleGuard {
 
   void Close() { close_native_handle(handle_); }
 
-  bool IsValid() const {
-#if defined(_WIN32)
-    return handle_ != INVALID_HANDLE_VALUE;
-#else
-    return handle_ != -1;
-#endif
-  }
+  bool IsValid() const { return handle_ != INVALID_NATIVE_HANDLE_VALUE; }
 
  private:
   NativeHandle handle_;
@@ -432,26 +409,64 @@ inline std::vector<std::basic_string<CharT>> split(
 }
 
 #if defined(_WIN32)
+
+// Escape and quote a single argument according to Windows command-line rules.
+// Rules (from MSDN):
+//  - Arguments with whitespace or quotes are wrapped in double quotes.
+//  - Backslashes preceding a double quote are doubled.
+//  - Backslashes at the end of the argument (before the closing quote) are
+//    doubled to prevent them from escaping the closing quote.
+inline void append_windows_arg(std::vector<wchar_t>& cmd,
+                               std::wstring const& arg) {
+  bool needs_quoting =
+      arg.empty() || arg.find_first_of(L" \t\n\v\"") != std::wstring::npos;
+  if (!needs_quoting) {
+    cmd.insert(cmd.end(), arg.begin(), arg.end());
+    return;
+  }
+  cmd.push_back(L'"');
+  // Count backslashes and handle escaped quotes
+  for (auto it = arg.begin(); it != arg.end(); ++it) {
+    if (*it == L'\\') {
+      // Count consecutive backslashes
+      auto start = it;
+      while (it != arg.end() && *it == L'\\') {
+        ++it;
+      }
+      size_t backslash_count = static_cast<size_t>(it - start);
+      if (it == arg.end() || *it == L'"') {
+        // Backslashes before a quote or at end: double them
+        backslash_count *= 2;
+      }
+      cmd.insert(cmd.end(), backslash_count, L'\\');
+      if (it == arg.end()) {
+        break;
+      }
+      // Now handle the non-backslash character
+      if (*it == L'"') {
+        cmd.push_back(L'\\');
+      }
+      cmd.push_back(*it);
+    } else if (*it == L'"') {
+      cmd.push_back(L'\\');
+      cmd.push_back(L'"');
+    } else {
+      cmd.push_back(*it);
+    }
+  }
+  cmd.push_back(L'"');
+}
+
 inline std::vector<wchar_t> argv_to_command_line_string(
     std::vector<std::basic_string<wchar_t>> const& cmds) {
   std::vector<wchar_t> command;
   if (cmds.empty()) {
     return command;
   }
-  if (std::find(cmds[0].begin(), cmds[0].end(), L' ') != cmds[0].end()) {
-    if ((cmds[0].front() == L'"') && (cmds[0].back() == L'"')) {
-      command.insert(command.end(), cmds[0].begin(), cmds[0].end());
-    } else {
-      command.push_back(L'"');
-      command.insert(command.end(), cmds[0].begin(), cmds[0].end());
-      command.push_back(L'"');
-    }
-  } else {
-    command.insert(command.end(), cmds[0].begin(), cmds[0].end());
-  }
+  append_windows_arg(command, cmds[0]);
   for (auto it = std::next(cmds.begin()); it != cmds.end(); ++it) {
     command.push_back(L' ');
-    command.insert(command.end(), it->begin(), it->end());
+    append_windows_arg(command, *it);
   }
   command.push_back(L'\0');
   return command;
@@ -594,13 +609,11 @@ inline void read_from_native_handle(NativeHandle& fd,
     }
     if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
         (fds[0].revents & POLLOUT)) {
-      auto it = stdin_str.begin();
-      auto write_count = write(fds[0].fd, it, stdin_str.end() - it);
+      auto write_count = write(fds[0].fd, stdin_str.data(), stdin_str.size());
       while (write_count > 0) {
-        it = it + write_count;
-        write_count = write(fds[0].fd, it, stdin_str.end() - it);
+        stdin_str.remove_prefix(static_cast<size_t>(write_count));
+        write_count = write(fds[0].fd, stdin_str.data(), stdin_str.size());
       }
-      stdin_str.remove_prefix(it - stdin_str.begin());
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           throw std::runtime_error("write() error: " + std::to_string(errno));
@@ -697,13 +710,11 @@ inline void read_from_native_handle(NativeHandle& fd,
       throw std::runtime_error(get_last_error_message());
     }
     if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
-      auto it = stdin_str.begin();
-      auto write_count = write(in, it, stdin_str.end() - it);
+      auto write_count = write(in, stdin_str.data(), stdin_str.size());
       while (write_count > 0) {
-        it = it + write_count;
-        write_count = write(in, it, stdin_str.end() - it);
+        stdin_str.remove_prefix(static_cast<size_t>(write_count));
+        write_count = write(in, stdin_str.data(), stdin_str.size());
       }
-      stdin_str.remove_prefix(it - stdin_str.begin());
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           throw std::runtime_error("write() error: " + std::to_string(errno));
@@ -1036,22 +1047,64 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
                                     NativeHandle& err,
                                     std::vector<char>& err_buf) {
   std::vector<std::thread> threads;
+  std::exception_ptr exception{nullptr};
+  std::mutex exception_mutex;
 
   if (in != INVALID_NATIVE_HANDLE_VALUE) {
-    threads.emplace_back(write_to_native_handle, std::ref(in),
-                         std::ref(in_buf));
+    threads.emplace_back(
+        [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
+           std::mutex& mtx) {
+          try {
+            write_to_native_handle(fd, buf);
+          } catch (...) {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!exc) {
+              exc = std::current_exception();
+            }
+          }
+        },
+        std::ref(in), std::ref(in_buf), std::ref(exception),
+        std::ref(exception_mutex));
   }
   if (out != INVALID_NATIVE_HANDLE_VALUE) {
-    threads.emplace_back(read_from_native_handle, std::ref(out),
-                         std::ref(out_buf));
+    threads.emplace_back(
+        [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
+           std::mutex& mtx) {
+          try {
+            read_from_native_handle(fd, buf);
+          } catch (...) {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!exc) {
+              exc = std::current_exception();
+            }
+          }
+        },
+        std::ref(out), std::ref(out_buf), std::ref(exception),
+        std::ref(exception_mutex));
   }
   if (err != INVALID_NATIVE_HANDLE_VALUE) {
-    threads.emplace_back(read_from_native_handle, std::ref(err),
-                         std::ref(err_buf));
+    threads.emplace_back(
+        [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
+           std::mutex& mtx) {
+          try {
+            read_from_native_handle(fd, buf);
+          } catch (...) {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!exc) {
+              exc = std::current_exception();
+            }
+          }
+        },
+        std::ref(err), std::ref(err_buf), std::ref(exception),
+        std::ref(exception_mutex));
   }
 
   for (auto& thread : threads) {
     thread.join();
+  }
+
+  if (exception) {
+    std::rethrow_exception(exception);
   }
 }
 
@@ -1222,7 +1275,7 @@ inline std::map<std::wstring, std::wstring> get_all_env_vars() {
       auto key = std::wstring(env_string.substr(0, pos));
       auto value = std::wstring(env_string.substr(pos + 1));
       std::transform(key.begin(), key.end(), key.begin(),
-                     [](wchar_t c) { return std::toupper(c, std::locale()); });
+                     [](wchar_t c) { return ::towupper(c); });
       envs[key] = value;
     }
     current_env +=
@@ -1982,7 +2035,7 @@ class subprocess {
       if (it == environments.end()) {
         auto upper_key = name;
         std::transform(upper_key.begin(), upper_key.end(), upper_key.begin(),
-                       [](auto c) { return std::toupper(c, std::locale()); });
+                       [](wchar_t c) { return ::towupper(c); });
         it = environments.find(upper_key);
       }
 #endif
@@ -2366,7 +2419,7 @@ inline int $(Args... args) {
 #endif
 
 template <typename... T>
-  requires((detail::is_named_argument<T> && ...) && true)
+  requires(detail::is_named_argument<T> && ...)
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::string> cmd, T&&... args) {
   using namespace named_arguments;
@@ -2378,7 +2431,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 }
 #if defined(_WIN32)
 template <typename... T>
-  requires((detail::is_named_argument<T> && ...) && true)
+  requires(detail::is_named_argument<T> && ...)
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::wstring> cmd, T&&... args) {
   using namespace named_arguments;
