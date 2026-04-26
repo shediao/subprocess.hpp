@@ -13,9 +13,9 @@ TEST(SubprocessTest, Pipe) {
   subprocess::detail::subprocess p2(std::vector<std::string>{"findstr.exe", "2"}, $stdin<pipe1, $stdout> pipe2);
   subprocess::detail::subprocess p3(std::vector<std::string>{"findstr.exe", "4"}, $stdin<pipe2, $stdout> out);
 
-  p1.run_no_wait();
-  p2.run_no_wait();
-  p3.run_no_wait();
+  p1.async_run();
+  p2.async_run();
+  p3.async_run();
 
   auto r1 = p1.wait_for_exit();
   auto r2 = p2.wait_for_exit();
@@ -35,9 +35,9 @@ TEST(SubprocessTest, Pipe) {
                                     $stdin<pipe1, $stdout> pipe2);
   subprocess::detail::subprocess p3({"grep", "4"}, $stdin<pipe2, $stdout> out);
 
-  p1.run_no_wait();
-  p2.run_no_wait();
-  p3.run_no_wait();
+  p1.async_run();
+  p2.async_run();
+  p3.async_run();
 
   auto r1 = p1.wait_for_exit();
   auto r2 = p2.wait_for_exit();

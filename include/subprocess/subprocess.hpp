@@ -2100,7 +2100,7 @@ class subprocess {
   subprocess(const subprocess&) = delete;
   subprocess& operator=(const subprocess&) = delete;
 
-  void run_no_wait() {
+  void async_run() {
     prepare_all_stdio_redirections();
 #if defined(_WIN32)
     auto in = stdin_.get_child_process_stdio_handle();
@@ -2159,7 +2159,7 @@ class subprocess {
   }
 
   int run() {
-    run_no_wait();
+    async_run();
     return wait_for_exit();
   }
 
@@ -2387,7 +2387,7 @@ class subprocess_array {
       }
     }
     for (auto& sub : subs_) {
-      sub.run_no_wait();
+      sub.async_run();
     }
     for (auto& sub : subs_) {
       exit_codes_.push_back(sub.wait_for_exit());
