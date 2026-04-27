@@ -18,8 +18,8 @@ TEST(SubprocessTest, CaptureOutputs) {
       TEXT("<nul set /p=123& <nul set /p=345>&2\r\n"), std_out > out,
       std_err > err);
 #endif
-  ASSERT_EQ("123", std::string_view(out.data(), out.size()));
-  ASSERT_EQ("345", std::string_view(err.data(), err.size()));
+  ASSERT_EQ(out, "123");
+  ASSERT_EQ(err, "345");
 
   out.clear();
   err.clear();
@@ -29,7 +29,7 @@ TEST(SubprocessTest, CaptureOutputs) {
   run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=123"), std_out > out,
       std_err > err);
 #endif
-  ASSERT_EQ("123", std::string_view(out.data(), out.size()));
+  ASSERT_EQ(out, "123");
   ASSERT_TRUE(err.empty());
 
   out.clear();
@@ -42,7 +42,7 @@ TEST(SubprocessTest, CaptureOutputs) {
 #endif
   ASSERT_TRUE(out.empty());
   ASSERT_FALSE(err.empty());
-  ASSERT_EQ("123", std::string_view(err.data(), err.size()));
+  ASSERT_EQ(err, "123");
 }
 
 TEST(SubprocessTest, CaptureOutputs2) {
@@ -54,8 +54,8 @@ TEST(SubprocessTest, CaptureOutputs2) {
         capture_run(TEXT("cmd.exe"), TEXT("/c"),
                     TEXT("<nul set /p=123& <nul set /p=345>&2\r\n"));
 #endif
-    ASSERT_EQ("123", std::string_view(out.data(), out.size()));
-    ASSERT_EQ("345", std::string_view(err.data(), err.size()));
+    ASSERT_EQ(out, "123");
+    ASSERT_EQ(err, "345");
   }
 
   {
@@ -65,7 +65,7 @@ TEST(SubprocessTest, CaptureOutputs2) {
 #else
         capture_run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=123"));
 #endif
-    ASSERT_EQ("123", std::string_view(out.data(), out.size()));
+    ASSERT_EQ(out, "123");
     ASSERT_TRUE(err.empty());
   }
 
@@ -78,7 +78,7 @@ TEST(SubprocessTest, CaptureOutputs2) {
 #endif
     ASSERT_TRUE(out.empty());
     ASSERT_FALSE(err.empty());
-    ASSERT_EQ("123", std::string_view(err.data(), err.size()));
+    ASSERT_EQ(err, "123");
   }
 #if !defined(_WIN32)
   {

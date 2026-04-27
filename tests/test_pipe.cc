@@ -37,8 +37,7 @@ TEST(PipeTest, ThreeProcessManualChain) {
   ASSERT_EQ(r1, 0);
   ASSERT_EQ(r2, 0);
   ASSERT_EQ(r3, 0);
-  ASSERT_EQ((std::string_view{"124\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "124\r\n");
 #else
   subprocess::buffer out;
   auto pipe1 = subprocess::detail::Pipe::create();
@@ -59,8 +58,7 @@ TEST(PipeTest, ThreeProcessManualChain) {
   ASSERT_EQ(r1, 0);
   ASSERT_EQ(r2, 0);
   ASSERT_EQ(r3, 0);
-  ASSERT_EQ((std::string_view{"124\n456\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "124\n456\n");
 #endif
 }
 
@@ -80,8 +78,7 @@ TEST(PipeTest, TwoProcessPipeOperator) {
   ASSERT_EQ(subs.exit_codes().size(), 2u);
   EXPECT_EQ(subs.exit_codes()[0], 0);
   EXPECT_EQ(subs.exit_codes()[1], 0);
-  ASSERT_EQ((std::string_view{"World\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "World\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess({"printf"s, "Hello\\nWorld\\n"}) |
@@ -92,8 +89,7 @@ TEST(PipeTest, TwoProcessPipeOperator) {
   ASSERT_EQ(subs.exit_codes().size(), 2u);
   EXPECT_EQ(subs.exit_codes()[0], 0);
   EXPECT_EQ(subs.exit_codes()[1], 0);
-  ASSERT_EQ((std::string_view{"World\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "World\n");
 #endif
 }
 
@@ -119,8 +115,7 @@ TEST(PipeTest, FourProcessPipeOperator) {
   EXPECT_EQ(codes[1], 0);
   EXPECT_EQ(codes[2], 0);
   EXPECT_EQ(codes[3], 0);
-  ASSERT_EQ((std::string_view{"Apricot\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "Apricot\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess(
@@ -137,8 +132,7 @@ TEST(PipeTest, FourProcessPipeOperator) {
   EXPECT_EQ(codes[1], 0);
   EXPECT_EQ(codes[2], 0);
   EXPECT_EQ(codes[3], 0);
-  ASSERT_EQ((std::string_view{"Apricot\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "Apricot\n");
 #endif
 }
 
@@ -157,8 +151,7 @@ TEST(PipeTest, StdinFromBufferIntoPipeChain) {
   auto codes = subs.exit_codes();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(codes.size(), 2u);
-  ASSERT_EQ((std::string_view{"Line2\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "Line2\n");
 #else
   subprocess::buffer in{"Line1\nLine2\nLine3\n"};
   subprocess::buffer out;
@@ -169,8 +162,7 @@ TEST(PipeTest, StdinFromBufferIntoPipeChain) {
   auto codes = subs.exit_codes();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(codes.size(), 2u);
-  ASSERT_EQ((std::string_view{"Line2\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "Line2\n");
 #endif
 }
 
@@ -188,8 +180,7 @@ TEST(PipeTest, PipeChainStdoutToBuffer) {
   subs.run();
   ASSERT_EQ(subs.exit_codes()[0], 0);
   ASSERT_EQ(subs.exit_codes()[1], 0);
-  ASSERT_EQ((std::string_view{"AAA\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "AAA\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess({"printf"s, "AAA\\nBBB\\n"}) |
@@ -198,8 +189,7 @@ TEST(PipeTest, PipeChainStdoutToBuffer) {
   subs.run();
   ASSERT_EQ(subs.exit_codes()[0], 0);
   ASSERT_EQ(subs.exit_codes()[1], 0);
-  ASSERT_EQ((std::string_view{"AAA\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "AAA\n");
 #endif
 }
 
@@ -215,8 +205,7 @@ TEST(PipeTest, BufferToBufferViaPipe) {
       subprocess::detail::subprocess({"findstr.exe"s, "f"}, $stdout > out);
 
   subs.run();
-  ASSERT_EQ((std::string_view{"four\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "four\n");
 #else
   subprocess::buffer in{"one\ntwo\nthree\nfour\nfive\n"};
   subprocess::buffer out;
@@ -224,8 +213,7 @@ TEST(PipeTest, BufferToBufferViaPipe) {
               subprocess::detail::subprocess({"grep"s, "f"}, $stdout > out);
 
   subs.run();
-  ASSERT_EQ((std::string_view{"four\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "four\n");
 #endif
 }
 
@@ -250,7 +238,7 @@ TEST(PipeTest, PipeWithStderrCapture) {
   EXPECT_EQ(codes[0], 0);
   // stderr from the first process should be captured
   ASSERT_FALSE(err_out.empty());
-  std::string err_str(err_out.data(), err_out.size());
+  std::string err_str(err_out.to_string());
   EXPECT_NE(err_str.find("stderr_line_1"), std::string::npos);
   EXPECT_NE(err_str.find("stderr_line_2"), std::string::npos);
 #else
@@ -269,7 +257,7 @@ TEST(PipeTest, PipeWithStderrCapture) {
   EXPECT_EQ(codes[0], 0);
   // stderr from the first process should be captured
   ASSERT_FALSE(err_out.empty());
-  std::string err_str(err_out.data(), err_out.size());
+  auto err_str = err_out.to_string();
   EXPECT_NE(err_str.find("stderr_line_1"), std::string::npos);
   EXPECT_NE(err_str.find("stderr_line_2"), std::string::npos);
 #endif
@@ -321,7 +309,7 @@ TEST(PipeTest, LargeDataThroughPipe) {
       subprocess::detail::subprocess({"findstr.exe"s, "line_"}, $stdout > out);
 
   subs.run();
-  std::string result(out.data(), out.size());
+  std::string result = out.to_string();
   EXPECT_EQ(std::count(result.begin(), result.end(), '\n'), 5000);
 #else
   subprocess::buffer in{input_data};
@@ -330,7 +318,7 @@ TEST(PipeTest, LargeDataThroughPipe) {
               subprocess::detail::subprocess({"grep"s, "line_"}, $stdout > out);
 
   subs.run();
-  std::string result(out.data(), out.size());
+  std::string result = out.to_string();
   EXPECT_EQ(static_cast<int>(std::count(result.begin(), result.end(), '\n')),
             5000);
 #endif
@@ -351,8 +339,7 @@ TEST(PipeTest, PipeChainWithStderrToDevnull) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"keep_me\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "keep_me\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess(
@@ -362,8 +349,7 @@ TEST(PipeTest, PipeChainWithStderrToDevnull) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"keep_me\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "keep_me\n");
 #endif
 }
 
@@ -383,8 +369,7 @@ TEST(PipeTest, SingleProcessWithExplicitPipe) {
   buffer tmp;
   subprocess::detail::read_from_native_handle(pipe.read(), tmp);
   p.wait_for_exit();
-  ASSERT_EQ((std::string_view{"single_pipe_test\r\n"}),
-            (std::string_view{tmp.data(), tmp.size()}));
+  ASSERT_EQ(tmp, "single_pipe_test\r\n");
 #else
   auto pipe = subprocess::detail::Pipe::create();
 
@@ -396,8 +381,7 @@ TEST(PipeTest, SingleProcessWithExplicitPipe) {
   buffer tmp;
   subprocess::detail::read_from_native_handle(pipe.read(), tmp);
   p.wait_for_exit();
-  ASSERT_EQ((std::string_view{"single_pipe_test\n"}),
-            (std::string_view{tmp.data(), tmp.size()}));
+  ASSERT_EQ(tmp, "single_pipe_test\n");
 #endif
 }
 
@@ -414,8 +398,7 @@ TEST(PipeTest, PipeChainWithCwd) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"cwd_test_line\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "cwd_test_line\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess({"printf"s, "cwd_test_line\\n"},
@@ -424,8 +407,7 @@ TEST(PipeTest, PipeChainWithCwd) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"cwd_test_line\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "cwd_test_line\n");
 #endif
 }
 
@@ -443,8 +425,7 @@ TEST(PipeTest, PipeChainWithEnv) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"piped_env_value\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "piped_env_value\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess(
@@ -454,8 +435,7 @@ TEST(PipeTest, PipeChainWithEnv) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"piped_env_value\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "piped_env_value\n");
 #endif
 }
 
@@ -511,8 +491,7 @@ TEST(PipeTest, IdentityPipeChain) {
 
   subs.run();
   ASSERT_EQ(subs.exit_codes().size(), 2u);
-  ASSERT_EQ((std::string_view{"identity_test\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "identity_test\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess({"printf"s, "identity_test\\n"}) |
@@ -520,8 +499,7 @@ TEST(PipeTest, IdentityPipeChain) {
 
   subs.run();
   ASSERT_EQ(subs.exit_codes().size(), 2u);
-  ASSERT_EQ((std::string_view{"identity_test\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "identity_test\n");
 #endif
 }
 
@@ -541,7 +519,7 @@ TEST(PipeTest, PipeChainCaptureBothStdoutAndStderrAtEnd) {
 
   subs.run();
   ASSERT_FALSE(out.empty());
-  std::string out_str(out.data(), out.size());
+  std::string out_str = out.to_string();
   EXPECT_NE(out_str.find("to_stdout"), std::string::npos);
   // findstr outputs matching lines to stdout; stderr should be empty
   // unless findstr itself wrote errors
@@ -555,7 +533,7 @@ TEST(PipeTest, PipeChainCaptureBothStdoutAndStderrAtEnd) {
 
   subs.run();
   ASSERT_FALSE(out.empty());
-  std::string out_str(out.data(), out.size());
+  std::string out_str = out.to_string();
   EXPECT_NE(out_str.find("to_stdout"), std::string::npos);
 #endif
 }
@@ -582,10 +560,8 @@ TEST(PipeTest, MultipleIndependentPipeChains) {
   chainA.run();
   chainB.run();
 
-  ASSERT_EQ((std::string_view{"Apple\r\n"}),
-            (std::string_view{outA.data(), outA.size()}));
-  ASSERT_EQ((std::string_view{"Banana\r\n"}),
-            (std::string_view{outB.data(), outB.size()}));
+  ASSERT_EQ(outA, "Apple\r\n");
+  ASSERT_EQ(outB, "Banana\r\n");
 #else
   subprocess::buffer outA;
   auto chainA =
@@ -600,10 +576,8 @@ TEST(PipeTest, MultipleIndependentPipeChains) {
   chainA.run();
   chainB.run();
 
-  ASSERT_EQ((std::string_view{"Apple\n"}),
-            (std::string_view{outA.data(), outA.size()}));
-  ASSERT_EQ((std::string_view{"Banana\n"}),
-            (std::string_view{outB.data(), outB.size()}));
+  ASSERT_EQ(outA, "Apple\n");
+  ASSERT_EQ(outB, "Banana\n");
 #endif
 }
 
@@ -625,8 +599,7 @@ TEST(PipeTest, IncrementalPipeChainBuilding) {
                                  {"findstr.exe"s, "phase"}, $stdout > out);
 
   chain.run();
-  ASSERT_EQ((std::string_view{"first_phase\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "first_phase\r\n");
 #else
   subprocess::buffer out;
 
@@ -638,8 +611,7 @@ TEST(PipeTest, IncrementalPipeChainBuilding) {
           subprocess::detail::subprocess({"grep"s, "phase"}, $stdout > out);
 
   chain.run();
-  ASSERT_EQ((std::string_view{"first_phase\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "first_phase\n");
 #endif
 }
 
@@ -656,7 +628,7 @@ TEST(PipeTest, PipeWithLineCounting) {
                                              $stdout > out);
 
   subs.run();
-  std::string result(out.data(), out.size());
+  std::string result = out.to_string();
   // find /c /v "" outputs something like "---------- FOO.TXT: 3"
   EXPECT_NE(result.find("3"), std::string::npos);
 #else
@@ -665,7 +637,7 @@ TEST(PipeTest, PipeWithLineCounting) {
               subprocess::detail::subprocess({"wc"s, "-l"}, $stdout > out);
 
   subs.run();
-  std::string result(out.data(), out.size());
+  std::string result = out.to_string();
   // wc -l outputs something like "       3"
   EXPECT_NE(result.find("3"), std::string::npos);
 #endif
@@ -694,7 +666,7 @@ TEST(PipeTest, BinaryLikeDataThroughPipe) {
       subprocess::detail::subprocess({"findstr.exe"s, "."}, $stdout > out);
 
   subs.run();
-  std::string result(out.data(), out.size());
+  std::string result = out.to_string();
   // All printable lines should pass through both filters
   EXPECT_GT(result.size(), 0u);
 #else
@@ -704,7 +676,7 @@ TEST(PipeTest, BinaryLikeDataThroughPipe) {
               subprocess::detail::subprocess({"cat"s}, $stdout > out);
 
   subs.run();
-  std::string result(out.data(), out.size());
+  std::string result = out.to_string();
   EXPECT_EQ(result, input);
 #endif
 }
@@ -723,8 +695,7 @@ TEST(PipeTest, TopLevelRunWithPipeOperator) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"top_level\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "top_level\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess({"printf"s, "top_level\\n"}) |
@@ -732,8 +703,7 @@ TEST(PipeTest, TopLevelRunWithPipeOperator) {
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
-  ASSERT_EQ((std::string_view{"top_level\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "top_level\n");
 #endif
 }
 
@@ -753,8 +723,7 @@ TEST(PipeTest, OnlyStdoutGoesThroughPipe) {
                                      $stdout > out);
 
   subs.run();
-  ASSERT_EQ((std::string_view{"goes_to_pipe\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "goes_to_pipe\r\n");
 #else
   subprocess::buffer out;
   auto subs =
@@ -764,8 +733,7 @@ TEST(PipeTest, OnlyStdoutGoesThroughPipe) {
       subprocess::detail::subprocess({"grep"s, "goes_to_pipe"}, $stdout > out);
 
   subs.run();
-  ASSERT_EQ((std::string_view{"goes_to_pipe\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "goes_to_pipe\n");
 #endif
 }
 
@@ -789,11 +757,9 @@ TEST(PipeTest, ExplicitPipeClosedAfterUse) {
     // pipe goes out of scope here; destructor should not complain
   }
 #if defined(_WIN32)
-  ASSERT_EQ((std::string_view{"pipe_raii\r\n"}),
-            (std::string_view{captured.data(), captured.size()}));
+  ASSERT_EQ(captured, "pipe_raii\r\n");
 #else
-  ASSERT_EQ((std::string_view{"pipe_raii\n"}),
-            (std::string_view{captured.data(), captured.size()}));
+  ASSERT_EQ(captured, "pipe_raii\n");
 #endif
 }
 
@@ -808,12 +774,10 @@ TEST(PipeTest, PipeChainEquivalentToCaptureRun) {
   auto [exit_code, out, err] =
       capture_run("cmd.exe", "/c", "echo captured_pipe&exit /b 0");
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ((std::string_view{"captured_pipe\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "captured_pipe\r\n");
 #else
   auto [exit_code, out, err] = capture_run("printf", "captured_pipe\\n");
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ((std::string_view{"captured_pipe\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "captured_pipe\n");
 #endif
 }

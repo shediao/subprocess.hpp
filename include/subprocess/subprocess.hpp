@@ -105,6 +105,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <thread>
 #include <variant>
@@ -178,7 +179,6 @@ class Redirector;
 class StdinRedirector;
 class StdoutRedirector;
 class StderrRedirector;
-class buffer;
 
 inline void die(std::string const& msg) {
 #if SUBPROCESS_HAS_EXCEPTIONS
@@ -258,10 +258,10 @@ class buffer {
       : buf_(first, last) {}
   auto* data() const { return buf_.data(); }
   auto size() const { return buf_.size(); }
-  std::string_view view() const {
-    return std::string_view(buf_.data(), buf_.size());
+  auto span() const { return std::span(buf_.data(), buf_.size()); }
+  auto to_string() const {
+    return std::string(buf_.data(), buf_.data() + buf_.size());
   }
-  auto to_string() const { return std::string(buf_.data(), buf_.size()); }
   auto empty() const { return buf_.empty(); }
   auto clear() { return buf_.clear(); }
 
@@ -272,8 +272,17 @@ class buffer {
     buf_.insert(buf_.end(), data, data + size);
   }
 
+  // operator== for test
+  bool operator==(const buffer& other) const { return buf_ == other.buf_; }
+  bool operator==(std::string_view other) const {
+    return std::equal(buf_.begin(), buf_.end(), other.begin(), other.end());
+  }
+  bool operator==(const char* other) const {
+    return this->operator==(std::string_view(other));
+  }
+
  private:
-  std::vector<char> buf_;
+  std::vector<unsigned char> buf_;
 };
 
 class HandleGuard {
@@ -521,22 +530,21 @@ inline std::string get_last_error_message() {
 
 inline void write_to_native_handle(NativeHandle& fd, buffer const& write_data) {
   HandleGuard guard(fd);
-  std::string_view write_view = write_data.view();
-  ;
-  while (!write_view.empty()) {
+  auto write_span = write_data.span();
+  while (!write_span.empty()) {
 #if defined(_WIN32)
     DWORD write_count{0};
-    if (!WriteFile(fd, write_view.data(), static_cast<DWORD>(write_view.size()),
+    if (!WriteFile(fd, write_span.data(), static_cast<DWORD>(write_span.size()),
                    &write_count, 0)) {
       die("WriteFile error: " + get_last_error_message());
     }
     if (write_count > 0) {
-      write_view.remove_prefix(static_cast<size_t>(write_count));
+      write_span = write_span.subspan(static_cast<size_t>(write_count));
     }
 #else
-    auto write_count = write(fd, write_view.data(), write_view.size());
+    auto write_count = write(fd, write_data.data(), write_data.size());
     if (write_count > 0) {
-      write_view.remove_prefix(static_cast<size_t>(write_count));
+      write_span = write_span.subspan(static_cast<size_t>(write_count));
     }
     if (write_count == -1) {
       die("write() error: " + std::to_string(errno));
@@ -593,7 +601,7 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
                        {.fd = out, .events = POLLIN, .revents = 0},
                        {.fd = err, .events = POLLIN, .revents = 0}};
 
-  std::string_view stdin_str = in_buf.view();
+  auto in_data_span = in_buf.span();
 
   char buf[1024];
   while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
@@ -608,17 +616,19 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
     }
     if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
         (fds[0].revents & POLLOUT)) {
-      auto write_count = write(fds[0].fd, stdin_str.data(), stdin_str.size());
+      auto write_count =
+          write(fds[0].fd, in_data_span.data(), in_data_span.size());
       while (write_count > 0) {
-        stdin_str.remove_prefix(static_cast<size_t>(write_count));
-        write_count = write(fds[0].fd, stdin_str.data(), stdin_str.size());
+        in_data_span = in_data_span.subspan(static_cast<size_t>(write_count));
+        write_count =
+            write(fds[0].fd, in_data_span.data(), in_data_span.size());
       }
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           die("write() error: " + std::to_string(errno));
         }
       }
-      if (stdin_str.empty()) {
+      if (in_data_span.empty()) {
         close_native_handle(fds[0].fd);
       }
     }
@@ -678,7 +688,7 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
 [[maybe_unused]] inline void multiplex_using_select(
     NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
     NativeHandle& err, buffer& err_buf) {
-  std::string_view stdin_str = in_buf.view();
+  auto in_data_span = in_buf.span();
   char buf[1024];
 
   fd_set read_fds;
@@ -710,17 +720,17 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
       die(get_last_error_message());
     }
     if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
-      auto write_count = write(in, stdin_str.data(), stdin_str.size());
+      auto write_count = write(in, in_data_span.data(), in_data_span.size());
       while (write_count > 0) {
-        stdin_str.remove_prefix(static_cast<size_t>(write_count));
-        write_count = write(in, stdin_str.data(), stdin_str.size());
+        in_data_span = in_data_span.subspan(static_cast<size_t>(write_count));
+        write_count = write(in, in_data_span.data(), in_data_span.size());
       }
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           die("write() error: " + std::to_string(errno));
         }
       }
-      if (stdin_str.empty()) {
+      if (in_data_span.empty()) {
         close_native_handle(in);
       }
     }
@@ -797,7 +807,7 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
     }
   }
 
-  std::string_view stdin_str = in_buf.view();
+  auto in_data_span = in_buf.span();
   char buf[1024];
 
   while (in != INVALID_NATIVE_HANDLE_VALUE ||
@@ -817,17 +827,19 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
 
       if (fd == in) {
         if (revents & EPOLLOUT) {
-          auto write_count = write(fd, stdin_str.data(), stdin_str.size());
+          auto write_count =
+              write(fd, in_data_span.data(), in_data_span.size());
           while (write_count > 0) {
-            stdin_str.remove_prefix(static_cast<size_t>(write_count));
-            write_count = write(fd, stdin_str.data(), stdin_str.size());
+            in_data_span =
+                in_data_span.subspan(static_cast<size_t>(write_count));
+            write_count = write(fd, in_data_span.data(), in_data_span.size());
           }
           if (write_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
               die("write() error: " + std::to_string(errno));
             }
           }
-          if (stdin_str.empty()) {
+          if (in_data_span.empty()) {
             epoll_ctl(epfd, EPOLL_CTL_DEL, in, nullptr);
             close_native_handle(in);
           }
@@ -926,7 +938,7 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
     }
   }
 
-  std::string_view stdin_str = in_buf.view();
+  auto in_data_span = in_buf.span();
   char buf[1024];
 
   struct kevent events[3];
@@ -963,17 +975,19 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
 
       if (fd == in) {
         if (filter == EVFILT_WRITE) {
-          auto write_count = write(fd, stdin_str.data(), stdin_str.size());
+          auto write_count =
+              write(fd, in_data_span.data(), in_data_span.size());
           while (write_count > 0) {
-            stdin_str.remove_prefix(static_cast<size_t>(write_count));
-            write_count = write(fd, stdin_str.data(), stdin_str.size());
+            in_data_span =
+                in_data_span.subspan(static_cast<size_t>(write_count));
+            write_count = write(fd, in_data_span.data(), in_data_span.size());
           }
           if (write_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
               die("write() error: " + std::to_string(errno));
             }
           }
-          if (stdin_str.empty()) {
+          if (in_data_span.empty()) {
             struct kevent ch;
             EV_SET(&ch, in, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
             kevent(kq, &ch, 1, nullptr, 0, nullptr);

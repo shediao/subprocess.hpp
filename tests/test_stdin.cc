@@ -9,17 +9,17 @@ TEST(SubprocessTest, Stdin) {
   subprocess::buffer out;
 #if !defined(_WIN32)
   run("/bin/cat", "-", std_in<in, std_out> out);
-  ASSERT_EQ(std::string_view(in.data(), in.size()),
-            std::string_view(out.data(), out.size()));
+  ASSERT_EQ(in, out);
 #else
   run(TEXT("more.com"), std_in<in, std_out> out);
-  auto out_view = std::string_view(out.data(), out.size());
-  out_view = out_view.substr(0, std::find_if(
-                                    out_view.rbegin(), out_view.rend(),
-                                    [](char c) {
-                                      return c != '\r' && c != '\n';
-                                    }).base() -
-                                    out_view.begin());
-  ASSERT_EQ(std::string_view(in.data(), in.size()), out_view);
+  auto out_span = out.span();
+  auto it = std::find_if(out_span.rbegin(), out_span.rend(),
+                         [](char c) { return c != '\r' && c != '\n'; });
+  if (it != out_span.rend()) {
+    out_span = out_span.subspan(0, it.base() - out_span.begin());
+  }
+  ASSERT_TRUE(
+      std::equal(in.begin(), in.end(), out_span.begin(), out_span.end()));
+
 #endif
 }

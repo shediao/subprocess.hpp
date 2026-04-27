@@ -19,8 +19,7 @@ TEST(SubprocessArrayTest, Test1) {
   EXPECT_EQ(exit_codes[0], 0);
   EXPECT_EQ(exit_codes[1], 0);
   EXPECT_EQ(exit_codes[2], 0);
-  ASSERT_EQ((std::string_view{"124\r\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "124\r\n");
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess({"echo"s, "123\n456"}) |
@@ -33,7 +32,6 @@ TEST(SubprocessArrayTest, Test1) {
   EXPECT_EQ(exit_codes[0], 0);
   EXPECT_EQ(exit_codes[1], 0);
   EXPECT_EQ(exit_codes[2], 0);
-  ASSERT_EQ((std::string_view{"124\n456\n"}),
-            (std::string_view{out.data(), out.size()}));
+  ASSERT_EQ(out, "124\n456\n");
 #endif
 }

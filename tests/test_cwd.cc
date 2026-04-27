@@ -22,12 +22,15 @@ TEST(SubprocessTest, CWD) {
 
   ASSERT_FALSE(out.empty());
 
-  auto out_view = std::string_view(out.data(), out.size());
-  auto it = std::find_if(rbegin(out_view), rend(out_view),
+  auto out_span = out.span();
+  auto it = std::find_if(rbegin(out_span), rend(out_span),
                          [](char c) { return c != '\n' && c != '\r'; });
-  out_view = out_view.substr(0, it.base() - out_view.begin());
+  if (it != rend(out_span)) {
+    out_span = out_span.subspan(0, it.base() - out_span.begin());
+  }
 
-  ASSERT_EQ(out_view, home_dir.value());
+  ASSERT_TRUE(std::equal(out_span.begin(), out_span.end(), home_dir->begin(),
+                         home_dir->end()));
 }
 
 TEST(SubprocessTest, CWD2) {
@@ -44,10 +47,13 @@ TEST(SubprocessTest, CWD2) {
 
   ASSERT_FALSE(out.empty());
 
-  auto out_view = std::string_view(out.data(), out.size());
-  auto it = std::find_if(rbegin(out_view), rend(out_view),
+  auto out_span = out.span();
+  auto it = std::find_if(rbegin(out_span), rend(out_span),
                          [](char c) { return c != '\n' && c != '\r'; });
-  out_view = out_view.substr(0, it.base() - out_view.begin());
+  if (it != rend(out_span)) {
+    out_span = out_span.subspan(0, it.base() - out_span.begin());
+  }
 
-  ASSERT_EQ(out_view, home_dir.value());
+  ASSERT_TRUE(std::equal(out_span.begin(), out_span.end(), home_dir->begin(),
+                         home_dir->end()));
 }
