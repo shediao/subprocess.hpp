@@ -274,13 +274,15 @@ class buffer {
 
   // operator== for test
   bool operator==(const buffer& other) const {
-    return std::equal(buf_.begin(), buf_.end(), other.buf_.begin(),
-                      other.buf_.end());
+    return buf_ == other.buf_;
   }
   template <typename T>
+    requires(!std::is_same_v<T, char> && !std::is_same_v<T, wchar_t> &&
+             !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
+             !std::is_same_v<T, char32_t>)
   bool operator==(std::span<T> other) const {
     std::span<const unsigned char> other_span{
-        reinterpret_cast<unsigned char const*>(other.data()),
+        reinterpret_cast<const unsigned char*>(other.data()),
         other.size() * sizeof(T)};
     return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
                       other_span.end());
@@ -288,15 +290,15 @@ class buffer {
   template <typename CharT>
   bool operator==(std::basic_string_view<CharT> other) const {
     std::span<const unsigned char> other_span{
-        reinterpret_cast<unsigned char const*>(other.data()),
+        reinterpret_cast<const unsigned char*>(other.data()),
         other.size() * sizeof(CharT)};
     return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
                       other_span.end());
   }
   template <typename CharT>
-  bool operator==(std::basic_string<CharT> other) const {
+  bool operator==(const std::basic_string<CharT>& other) const {
     std::span<const unsigned char> other_span{
-        reinterpret_cast<unsigned char const*>(other.data()),
+        reinterpret_cast<const unsigned char*>(other.data()),
         other.size() * sizeof(CharT)};
     return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
                       other_span.end());
@@ -306,6 +308,15 @@ class buffer {
   }
   bool operator==(const wchar_t* other) const {
     return this->operator==(std::wstring_view(other));
+  }
+  bool operator==(const char8_t* other) const {
+    return this->operator==(std::u8string_view(other));
+  }
+  bool operator==(const char16_t* other) const {
+    return this->operator==(std::u16string_view(other));
+  }
+  bool operator==(const char32_t* other) const {
+    return this->operator==(std::u32string_view(other));
   }
 
  private:
