@@ -7,6 +7,7 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
+using std::string_literals::operator""s;
 
 // ===========================================================================
 // 1. Basic explicit-Pipe chaining (the original test, kept as-is in spirit)
@@ -18,14 +19,12 @@ TEST(PipeTest, ThreeProcessManualChain) {
   auto pipe2 = subprocess::detail::Pipe::create();
 
   subprocess::detail::subprocess p1(
-      std::vector<std::string>{"cmd.exe", "/c",
-                               "echo 123&echo 124&echo 456&exit /b 0"},
+      {"cmd.exe"s, "/c", "echo 123&echo 124&echo 456&exit /b 0"},
       $stdout > pipe1);
-  subprocess::detail::subprocess p2(
-      std::vector<std::string>{"findstr.exe", "2"},
-      $stdin<pipe1, $stdout> pipe2);
-  subprocess::detail::subprocess p3(
-      std::vector<std::string>{"findstr.exe", "4"}, $stdin<pipe2, $stdout> out);
+  subprocess::detail::subprocess p2({"findstr.exe"s, "2"},
+                                    $stdin<pipe1, $stdout> pipe2);
+  subprocess::detail::subprocess p3({"findstr.exe"s, "4"},
+                                    $stdin<pipe2, $stdout> out);
 
   p1.async_run();
   p2.async_run();
@@ -71,10 +70,9 @@ TEST(PipeTest, TwoProcessPipeOperator) {
 #if defined(_WIN32)
   subprocess::buffer out;
   auto subs =
-      subprocess::detail::subprocess(std::vector<std::string>{
-          "cmd.exe", "/c", "echo Hello&echo World&exit /b 0"}) |
       subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "Wor"}, $stdout > out);
+          {"cmd.exe"s, "/c", "echo Hello&echo World&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "Wor"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -85,10 +83,8 @@ TEST(PipeTest, TwoProcessPipeOperator) {
             (std::string_view{out.data(), out.size()}));
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"printf", "Hello\\nWorld\\n"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "Wor"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"printf"s, "Hello\\nWorld\\n"}) |
+              subprocess::detail::subprocess({"grep"s, "Wor"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -106,16 +102,13 @@ TEST(PipeTest, TwoProcessPipeOperator) {
 TEST(PipeTest, FourProcessPipeOperator) {
 #if defined(_WIN32)
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"cmd.exe", "/c",
-                                           "echo Apple&echo Banana&echo "
-                                           "Apricot&echo Cherry&exit /b 0"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "A"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "p"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "r"}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess({"cmd.exe"s, "/c",
+                                      "echo Apple&echo Banana&echo "
+                                      "Apricot&echo Cherry&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "A"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "p"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "r"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -129,13 +122,11 @@ TEST(PipeTest, FourProcessPipeOperator) {
             (std::string_view{out.data(), out.size()}));
 #else
   subprocess::buffer out;
-  auto subs =
-      subprocess::detail::subprocess(std::vector<std::string>{
-          "printf", "Apple\\nBanana\\nApricot\\nCherry\\n"}) |
-      subprocess::detail::subprocess(std::vector<std::string>{"grep", "A"}) |
-      subprocess::detail::subprocess(std::vector<std::string>{"grep", "p"}) |
-      subprocess::detail::subprocess(std::vector<std::string>{"grep", "r"},
-                                     $stdout > out);
+  auto subs = subprocess::detail::subprocess(
+                  {"printf"s, "Apple\\nBanana\\nApricot\\nCherry\\n"}) |
+              subprocess::detail::subprocess({"grep"s, "A"}) |
+              subprocess::detail::subprocess({"grep"s, "p"}) |
+              subprocess::detail::subprocess({"grep"s, "r"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -158,10 +149,8 @@ TEST(PipeTest, StdinFromBufferIntoPipeChain) {
   subprocess::buffer in{"Line1\nLine2\nLine3\n"};
   subprocess::buffer out;
   auto subs =
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "2"}, $stdin < in) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "Line"}, $stdout > out);
+      subprocess::detail::subprocess({"findstr.exe"s, "2"}, $stdin < in) |
+      subprocess::detail::subprocess({"findstr.exe"s, "Line"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -172,10 +161,8 @@ TEST(PipeTest, StdinFromBufferIntoPipeChain) {
 #else
   subprocess::buffer in{"Line1\nLine2\nLine3\n"};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "2"}, $stdin < in) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "Line"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"grep"s, "2"}, $stdin < in) |
+              subprocess::detail::subprocess({"grep"s, "Line"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -192,10 +179,10 @@ TEST(PipeTest, StdinFromBufferIntoPipeChain) {
 TEST(PipeTest, PipeChainStdoutToBuffer) {
 #if defined(_WIN32)
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(std::vector<std::string>{
-                  "cmd.exe", "/c", "echo AAA&echo BBB&exit /b 0"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "A"}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess(
+          {"cmd.exe"s, "/c", "echo AAA&echo BBB&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "A"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes()[0], 0);
@@ -204,10 +191,8 @@ TEST(PipeTest, PipeChainStdoutToBuffer) {
             (std::string_view{out.data(), out.size()}));
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"printf", "AAA\\nBBB\\n"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "A"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"printf"s, "AAA\\nBBB\\n"}) |
+              subprocess::detail::subprocess({"grep"s, "A"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes()[0], 0);
@@ -224,10 +209,9 @@ TEST(PipeTest, BufferToBufferViaPipe) {
 #if defined(_WIN32)
   subprocess::buffer in{"one\ntwo\nthree\nfour\nfive\n"};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "o"}, $stdin < in) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "f"}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess({"findstr.exe"s, "o"}, $stdin < in) |
+      subprocess::detail::subprocess({"findstr.exe"s, "f"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ((std::string_view{"four\n"}),
@@ -235,10 +219,8 @@ TEST(PipeTest, BufferToBufferViaPipe) {
 #else
   subprocess::buffer in{"one\ntwo\nthree\nfour\nfive\n"};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "o"}, $stdin < in) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "f"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"grep"s, "o"}, $stdin < in) |
+              subprocess::detail::subprocess({"grep"s, "f"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ((std::string_view{"four\n"}),
@@ -254,13 +236,11 @@ TEST(PipeTest, PipeWithStderrCapture) {
   // cmd: write to stdout and stderr, pipe through findstr
   subprocess::buffer err_out;
   auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{
-                      "cmd.exe", "/c",
-                      "(echo stdout_line_1 & echo stderr_line_1>&2 & echo "
-                      "stdout_line_2 & echo stderr_line_2>&2) & exit /b 0"},
+                  {"cmd.exe"s, "/c",
+                   "(echo stdout_line_1 & echo stderr_line_1>&2 & echo "
+                   "stdout_line_2 & echo stderr_line_2>&2) & exit /b 0"},
                   $stderr > err_out) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "stdout"});
+              subprocess::detail::subprocess({"findstr.exe"s, "stdout"});
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -275,13 +255,11 @@ TEST(PipeTest, PipeWithStderrCapture) {
 #else
   subprocess::buffer err_out;
   auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{
-                      "bash", "-c",
-                      "echo stdout_line_1; echo stderr_line_1>&2; echo "
-                      "stdout_line_2; echo stderr_line_2>&2"},
+                  {"bash"s, "-c",
+                   "echo stdout_line_1; echo stderr_line_1>&2; echo "
+                   "stdout_line_2; echo stderr_line_2>&2"},
                   $stderr > err_out) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "stdout"});
+              subprocess::detail::subprocess({"grep"s, "stdout"});
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -303,10 +281,9 @@ TEST(PipeTest, EmptyInputThroughPipe) {
 #if defined(_WIN32)
   subprocess::buffer in{};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "x"}, $stdin < in) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "y"}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess({"findstr.exe"s, "x"}, $stdin < in) |
+      subprocess::detail::subprocess({"findstr.exe"s, "y"}, $stdout > out);
 
   subs.run();
   // With empty input, findstr/grep will find nothing, exit 1
@@ -315,10 +292,8 @@ TEST(PipeTest, EmptyInputThroughPipe) {
 #else
   subprocess::buffer in{};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "x"}, $stdin < in) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "y"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"grep"s, "x"}, $stdin < in) |
+              subprocess::detail::subprocess({"grep"s, "y"}, $stdout > out);
 
   subs.run();
   EXPECT_TRUE(out.empty());
@@ -341,10 +316,8 @@ TEST(PipeTest, LargeDataThroughPipe) {
   subprocess::buffer in{input_data};
   subprocess::buffer out;
   auto subs =
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "line_"}, $stdin < in) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "line_"}, $stdout > out);
+      subprocess::detail::subprocess({"findstr.exe"s, "line_"}, $stdin < in) |
+      subprocess::detail::subprocess({"findstr.exe"s, "line_"}, $stdout > out);
 
   subs.run();
   std::string result(out.data(), out.size());
@@ -352,10 +325,8 @@ TEST(PipeTest, LargeDataThroughPipe) {
 #else
   subprocess::buffer in{input_data};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "line_"}, $stdin < in) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "line_"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"grep"s, "line_"}, $stdin < in) |
+              subprocess::detail::subprocess({"grep"s, "line_"}, $stdout > out);
 
   subs.run();
   std::string result(out.data(), out.size());
@@ -371,13 +342,11 @@ TEST(PipeTest, PipeChainWithStderrToDevnull) {
 #if defined(_WIN32)
   subprocess::buffer out;
   auto subs =
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"cmd.exe", "/c",
-                                   "echo keep_me&echo ignore_me>&2&exit "
-                                   "/b 0"},
-          $stderr > $devnull) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "keep"}, $stdout > out);
+      subprocess::detail::subprocess({"cmd.exe"s, "/c",
+                                      "echo keep_me&echo ignore_me>&2&exit "
+                                      "/b 0"},
+                                     $stderr > $devnull) |
+      subprocess::detail::subprocess({"findstr.exe"s, "keep"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -386,11 +355,9 @@ TEST(PipeTest, PipeChainWithStderrToDevnull) {
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"bash", "-c",
-                                           "echo keep_me; echo ignore_me>&2"},
+                  {"bash"s, "-c", "echo keep_me; echo ignore_me>&2"},
                   $stderr > $devnull) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "keep"}, $stdout > out);
+              subprocess::detail::subprocess({"grep"s, "keep"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -408,9 +375,7 @@ TEST(PipeTest, SingleProcessWithExplicitPipe) {
   auto pipe = subprocess::detail::Pipe::create();
 
   subprocess::detail::subprocess p(
-      std::vector<std::string>{"cmd.exe", "/c",
-                               "echo single_pipe_test&exit /b 0"},
-      $stdout > pipe);
+      {"cmd.exe"s, "/c", "echo single_pipe_test&exit /b 0"}, $stdout > pipe);
 
   // The subprocess writes to the pipe write end; we read from the read end.
   p.async_run();
@@ -443,11 +408,8 @@ TEST(PipeTest, PipeChainWithCwd) {
   subprocess::buffer out;
   auto subs =
       subprocess::detail::subprocess(
-          std::vector<std::string>{"cmd.exe", "/c",
-                                   "echo cwd_test_line&exit /b 0"},
-          $cwd = "C:\\") |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "cwd"}, $stdout > out);
+          {"cmd.exe"s, "/c", "echo cwd_test_line&exit /b 0"}, $cwd = "C:\\") |
+      subprocess::detail::subprocess({"findstr.exe"s, "cwd"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -455,11 +417,9 @@ TEST(PipeTest, PipeChainWithCwd) {
             (std::string_view{out.data(), out.size()}));
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"printf", "cwd_test_line\\n"},
-                  $cwd = "/tmp") |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "cwd"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"printf"s, "cwd_test_line\\n"},
+                                             $cwd = "/tmp") |
+              subprocess::detail::subprocess({"grep"s, "cwd"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -476,11 +436,9 @@ TEST(PipeTest, PipeChainWithEnv) {
   subprocess::buffer out;
   auto subs =
       subprocess::detail::subprocess(
-          std::vector<std::string>{"cmd.exe", "/c",
-                                   "echo %MY_PIPE_VAR%&exit /b 0"},
+          {"cmd.exe"s, "/c", "echo %MY_PIPE_VAR%&exit /b 0"},
           $env = {{"MY_PIPE_VAR", "piped_env_value"}}) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "piped"}, $stdout > out);
+      subprocess::detail::subprocess({"findstr.exe"s, "piped"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -489,10 +447,9 @@ TEST(PipeTest, PipeChainWithEnv) {
 #else
   subprocess::buffer out;
   auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"bash", "-c", "echo $MY_PIPE_VAR"},
+                  {"bash"s, "-c", "echo $MY_PIPE_VAR"},
                   $env = {{"MY_PIPE_VAR", "piped_env_value"}}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "piped"}, $stdout > out);
+              subprocess::detail::subprocess({"grep"s, "piped"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -508,12 +465,11 @@ TEST(PipeTest, NonZeroExitInMiddleOfChain) {
 #if defined(_WIN32)
   subprocess::buffer out;
   // "findstr nothing" will exit with code 1 on no match
-  auto subs = subprocess::detail::subprocess(std::vector<std::string>{
-                  "cmd.exe", "/c", "echo data_line&exit /b 0"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "no_such_string"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "."}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess(
+          {"cmd.exe"s, "/c", "echo data_line&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "no_such_string"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "."}, $stdout > out);
 
   [[maybe_unused]] int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -525,12 +481,9 @@ TEST(PipeTest, NonZeroExitInMiddleOfChain) {
   EXPECT_TRUE(out.empty());
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"printf", "data_line\\n"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "no_such_string"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "."}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"printf"s, "data_line\\n"}) |
+              subprocess::detail::subprocess({"grep"s, "no_such_string"}) |
+              subprocess::detail::subprocess({"grep"s, "."}, $stdout > out);
 
   [[maybe_unused]] int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -550,10 +503,10 @@ TEST(PipeTest, IdentityPipeChain) {
 #if defined(_WIN32)
   subprocess::buffer out;
   // more.com passes through, findstr "." matches any non-empty line
-  auto subs = subprocess::detail::subprocess(std::vector<std::string>{
-                  "cmd.exe", "/c", "echo identity_test&exit /b 0"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "."}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess(
+          {"cmd.exe"s, "/c", "echo identity_test&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "."}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes().size(), 2u);
@@ -561,10 +514,8 @@ TEST(PipeTest, IdentityPipeChain) {
             (std::string_view{out.data(), out.size()}));
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"printf", "identity_test\\n"}) |
-              subprocess::detail::subprocess(std::vector<std::string>{"cat"},
-                                             $stdout > out);
+  auto subs = subprocess::detail::subprocess({"printf"s, "identity_test\\n"}) |
+              subprocess::detail::subprocess({"cat"s}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes().size(), 2u);
@@ -580,13 +531,12 @@ TEST(PipeTest, PipeChainCaptureBothStdoutAndStderrAtEnd) {
 #if defined(_WIN32)
   subprocess::buffer out;
   subprocess::buffer err;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"cmd.exe", "/c",
-                                           "echo to_stdout&echo to_stderr>&2&"
-                                           "exit /b 0"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "to_"}, $stdout > out,
-                  $stderr > err);
+  auto subs =
+      subprocess::detail::subprocess({"cmd.exe"s, "/c",
+                                      "echo to_stdout&echo to_stderr>&2&"
+                                      "exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "to_"}, $stdout > out,
+                                     $stderr > err);
 
   subs.run();
   ASSERT_FALSE(out.empty());
@@ -597,11 +547,10 @@ TEST(PipeTest, PipeChainCaptureBothStdoutAndStderrAtEnd) {
 #else
   subprocess::buffer out;
   subprocess::buffer err;
-  auto subs =
-      subprocess::detail::subprocess(std::vector<std::string>{
-          "bash", "-c", "echo to_stdout; echo to_stderr>&2"}) |
-      subprocess::detail::subprocess(std::vector<std::string>{"grep", "to_"},
-                                     $stdout > out, $stderr > err);
+  auto subs = subprocess::detail::subprocess(
+                  {"bash"s, "-c", "echo to_stdout; echo to_stderr>&2"}) |
+              subprocess::detail::subprocess({"grep"s, "to_"}, $stdout > out,
+                                             $stderr > err);
 
   subs.run();
   ASSERT_FALSE(out.empty());
@@ -619,17 +568,15 @@ TEST(PipeTest, MultipleIndependentPipeChains) {
   subprocess::buffer outA;
   auto chainA =
       subprocess::detail::subprocess(
-          std::vector<std::string>{"cmd.exe", "/c", "echo Apple&exit /b 0"}) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "App"}, $stdout > outA);
+          {"cmd.exe"s, "/c", "echo Apple&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "App"}, $stdout > outA);
 
   // Chain B
   subprocess::buffer outB;
   auto chainB =
       subprocess::detail::subprocess(
-          std::vector<std::string>{"cmd.exe", "/c", "echo Banana&exit /b 0"}) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "Ban"}, $stdout > outB);
+          {"cmd.exe"s, "/c", "echo Banana&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "Ban"}, $stdout > outB);
 
   chainA.run();
   chainB.run();
@@ -640,16 +587,14 @@ TEST(PipeTest, MultipleIndependentPipeChains) {
             (std::string_view{outB.data(), outB.size()}));
 #else
   subprocess::buffer outA;
-  auto chainA = subprocess::detail::subprocess(
-                    std::vector<std::string>{"printf", "Apple\\n"}) |
-                subprocess::detail::subprocess(
-                    std::vector<std::string>{"grep", "App"}, $stdout > outA);
+  auto chainA =
+      subprocess::detail::subprocess({"printf"s, "Apple\\n"}) |
+      subprocess::detail::subprocess({"grep"s, "App"}, $stdout > outA);
 
   subprocess::buffer outB;
-  auto chainB = subprocess::detail::subprocess(
-                    std::vector<std::string>{"printf", "Banana\\n"}) |
-                subprocess::detail::subprocess(
-                    std::vector<std::string>{"grep", "Ban"}, $stdout > outB);
+  auto chainB =
+      subprocess::detail::subprocess({"printf"s, "Banana\\n"}) |
+      subprocess::detail::subprocess({"grep"s, "Ban"}, $stdout > outB);
 
   chainA.run();
   chainB.run();
@@ -670,15 +615,13 @@ TEST(PipeTest, IncrementalPipeChainBuilding) {
   subprocess::buffer out;
 
   subprocess::detail::subprocess_array chain =
-      subprocess::detail::subprocess(std::vector<std::string>{
-          "cmd.exe", "/c", "echo first_phase&exit /b 0"}) |
       subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "first"});
+          {"cmd.exe"s, "/c", "echo first_phase&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "first"});
 
   // Append another stage
-  chain = std::move(chain) |
-          subprocess::detail::subprocess(
-              std::vector<std::string>{"findstr.exe", "phase"}, $stdout > out);
+  chain = std::move(chain) | subprocess::detail::subprocess(
+                                 {"findstr.exe"s, "phase"}, $stdout > out);
 
   chain.run();
   ASSERT_EQ((std::string_view{"first_phase\r\n"}),
@@ -687,13 +630,11 @@ TEST(PipeTest, IncrementalPipeChainBuilding) {
   subprocess::buffer out;
 
   subprocess::detail::subprocess_array chain =
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"printf", "first_phase\\n"}) |
-      subprocess::detail::subprocess(std::vector<std::string>{"grep", "first"});
+      subprocess::detail::subprocess({"printf"s, "first_phase\\n"}) |
+      subprocess::detail::subprocess({"grep"s, "first"});
 
   chain = std::move(chain) |
-          subprocess::detail::subprocess(
-              std::vector<std::string>{"grep", "phase"}, $stdout > out);
+          subprocess::detail::subprocess({"grep"s, "phase"}, $stdout > out);
 
   chain.run();
   ASSERT_EQ((std::string_view{"first_phase\n"}),
@@ -708,11 +649,10 @@ TEST(PipeTest, PipeWithLineCounting) {
 #if defined(_WIN32)
   subprocess::buffer out;
   // find /c counts lines
-  auto subs =
-      subprocess::detail::subprocess(std::vector<std::string>{
-          "cmd.exe", "/c", "echo A&echo B&echo C&exit /b 0"}) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"find.exe", "/c", "/v", ""}, $stdout > out);
+  auto subs = subprocess::detail::subprocess(
+                  {"cmd.exe"s, "/c", "echo A&echo B&echo C&exit /b 0"}) |
+              subprocess::detail::subprocess({"find.exe"s, "/c", "/v", ""},
+                                             $stdout > out);
 
   subs.run();
   std::string result(out.data(), out.size());
@@ -720,10 +660,8 @@ TEST(PipeTest, PipeWithLineCounting) {
   EXPECT_NE(result.find("3"), std::string::npos);
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"printf", "A\\nB\\nC\\n"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"wc", "-l"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"printf"s, "A\\nB\\nC\\n"}) |
+              subprocess::detail::subprocess({"wc"s, "-l"}, $stdout > out);
 
   subs.run();
   std::string result(out.data(), out.size());
@@ -750,10 +688,9 @@ TEST(PipeTest, BinaryLikeDataThroughPipe) {
   // On Windows, use findstr "." to match any line with content
   subprocess::buffer in{input};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "."}, $stdin < in) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "."}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess({"findstr.exe"s, "."}, $stdin < in) |
+      subprocess::detail::subprocess({"findstr.exe"s, "."}, $stdout > out);
 
   subs.run();
   std::string result(out.data(), out.size());
@@ -762,10 +699,8 @@ TEST(PipeTest, BinaryLikeDataThroughPipe) {
 #else
   subprocess::buffer in{input};
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(std::vector<std::string>{"cat"},
-                                             $stdin < in) |
-              subprocess::detail::subprocess(std::vector<std::string>{"cat"},
-                                             $stdout > out);
+  auto subs = subprocess::detail::subprocess({"cat"s}, $stdin < in) |
+              subprocess::detail::subprocess({"cat"s}, $stdout > out);
 
   subs.run();
   std::string result(out.data(), out.size());
@@ -781,10 +716,9 @@ TEST(PipeTest, TopLevelRunWithPipeOperator) {
 #if defined(_WIN32)
   subprocess::buffer out;
   auto subs =
-      subprocess::detail::subprocess(std::vector<std::string>{
-          "cmd.exe", "/c", "echo top_level&exit /b 0"}) |
       subprocess::detail::subprocess(
-          std::vector<std::string>{"findstr.exe", "top"}, $stdout > out);
+          {"cmd.exe"s, "/c", "echo top_level&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "top"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -792,10 +726,8 @@ TEST(PipeTest, TopLevelRunWithPipeOperator) {
             (std::string_view{out.data(), out.size()}));
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"printf", "top_level\\n"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "top"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"printf"s, "top_level\\n"}) |
+              subprocess::detail::subprocess({"grep"s, "top"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -811,14 +743,13 @@ TEST(PipeTest, TopLevelRunWithPipeOperator) {
 TEST(PipeTest, OnlyStdoutGoesThroughPipe) {
 #if defined(_WIN32)
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"cmd.exe", "/c",
-                                           "echo goes_to_pipe&echo "
-                                           "goes_to_stderr_only>&2&exit /b 0"},
-                  $stderr > $devnull) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "goes_to_pipe"},
-                  $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess({"cmd.exe"s, "/c",
+                                      "echo goes_to_pipe&echo "
+                                      "goes_to_stderr_only>&2&exit /b 0"},
+                                     $stderr > $devnull) |
+      subprocess::detail::subprocess({"findstr.exe"s, "goes_to_pipe"},
+                                     $stdout > out);
 
   subs.run();
   ASSERT_EQ((std::string_view{"goes_to_pipe\r\n"}),
@@ -827,11 +758,9 @@ TEST(PipeTest, OnlyStdoutGoesThroughPipe) {
   subprocess::buffer out;
   auto subs =
       subprocess::detail::subprocess(
-          std::vector<std::string>{
-              "bash", "-c", "echo goes_to_pipe; echo goes_to_stderr_only>&2"},
+          {"bash"s, "-c", "echo goes_to_pipe; echo goes_to_stderr_only>&2"},
           $stderr > $devnull) |
-      subprocess::detail::subprocess(
-          std::vector<std::string>{"grep", "goes_to_pipe"}, $stdout > out);
+      subprocess::detail::subprocess({"grep"s, "goes_to_pipe"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ((std::string_view{"goes_to_pipe\n"}),
@@ -848,8 +777,7 @@ TEST(PipeTest, ExplicitPipeClosedAfterUse) {
     auto pipe = subprocess::detail::Pipe::create();
 #if defined(_WIN32)
     subprocess::detail::subprocess p(
-        std::vector<std::string>{"cmd.exe", "/c", "echo pipe_raii&exit /b 0"},
-        $stdout > pipe);
+        {"cmd.exe"s, "/c", "echo pipe_raii&exit /b 0"}, $stdout > pipe);
 #else
     subprocess::detail::subprocess p({"printf", "pipe_raii\\n"},
                                      $stdout > pipe);

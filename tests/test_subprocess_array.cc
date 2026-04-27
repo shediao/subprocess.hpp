@@ -2,15 +2,16 @@
 
 #include "subprocess/subprocess.hpp"
 
+using std::literals::string_literals::operator""s;
+
 TEST(SubprocessArrayTest, Test1) {
 #if defined(_WIN32)
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"cmd.exe", "/c", "echo 123&echo 124&echo 456&exit /b 0"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "2"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"findstr.exe", "4"}, $stdout > out);
+  auto subs =
+      subprocess::detail::subprocess(
+          {"cmd.exe"s, "/c", "echo 123&echo 124&echo 456&exit /b 0"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "2"}) |
+      subprocess::detail::subprocess({"findstr.exe"s, "4"}, $stdout > out);
 
   subs.run();
   auto exit_codes = subs.exit_codes();
@@ -22,12 +23,9 @@ TEST(SubprocessArrayTest, Test1) {
             (std::string_view{out.data(), out.size()}));
 #else
   subprocess::buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  std::vector<std::string>{"echo", "123\n456"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"sed", "-e", "s/3/4/g"}) |
-              subprocess::detail::subprocess(
-                  std::vector<std::string>{"grep", "4"}, $stdout > out);
+  auto subs = subprocess::detail::subprocess({"echo"s, "123\n456"}) |
+              subprocess::detail::subprocess({"sed"s, "-e", "s/3/4/g"}) |
+              subprocess::detail::subprocess({"grep"s, "4"}, $stdout > out);
 
   subs.run();
   auto exit_codes = subs.exit_codes();
