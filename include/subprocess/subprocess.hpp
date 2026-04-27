@@ -234,7 +234,7 @@ inline void die(std::string const& msg) {
     (void)WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg.c_str(),
                     static_cast<DWORD>(msg.size()), NULL, NULL);
 #else
-    (void)write(STDERR_FILENO, msg.c_str(), msg.size());
+    [[maybe_unused]] auto ret = write(STDERR_FILENO, msg.c_str(), msg.size());
 #endif
   }
   abort();
