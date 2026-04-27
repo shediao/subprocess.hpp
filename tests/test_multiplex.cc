@@ -28,7 +28,7 @@ struct PipePair {
   static PipePair create() {
     int fds[2];
     if (::pipe(fds) != 0) {
-      throw std::runtime_error("pipe() failed");
+      subprocess::detail::die("pipe() failed");
     }
     return {fds[0], fds[1]};
   }

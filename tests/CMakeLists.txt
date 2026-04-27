@@ -62,18 +62,16 @@ function(add_subprocess_test_suite test_name)
   set(sources ${ARGN})
   set(variants "")
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(variants "unicode" "ansi")
+    set(variants "default" "ansi" "noexception")
   else()
-    set(variants "default")
+    set(variants "default" "noexception")
   endif()
 
   foreach(variant IN LISTS variants)
     set(target_name ${test_name})
-    set(test_name_suffix "")
 
-    if(variant STREQUAL "ansi")
-      set(target_name "${test_name}_ansi")
-      set(test_name_suffix "_ansi")
+    if(NOT variant STREQUAL "default")
+      set(target_name "${test_name}_${variant}")
     endif()
 
     # Add the executable target
@@ -82,6 +80,16 @@ function(add_subprocess_test_suite test_name)
     # Set compile options
     target_compile_options(${target_name}
                            PRIVATE ${SUBPROCESS_COMMON_COMPILE_OPTIONS})
+
+    if(variant STREQUAL "noexception")
+      if(MSVC)
+        target_compile_options(${target_name} PRIVATE /EHs-c-)
+        target_compile_definitions(${target_name} PRIVATE _HAS_EXCEPTIONS=0)
+      else()
+        target_compile_options(${target_name} PRIVATE -fno-exceptions)
+      endif()
+    endif()
+
     if(SUBPROCESS_SANITIZER_CXX_FLAGS)
       target_compile_options(
         ${target_name}
@@ -94,7 +102,7 @@ function(add_subprocess_test_suite test_name)
     endif()
 
     # Set compile definitions for the UNICODE variant on Windows
-    if(variant STREQUAL "unicode")
+    if(NOT variant STREQUAL "ansi")
       target_compile_definitions(${target_name} PRIVATE UNICODE _UNICODE)
     endif()
 
@@ -103,7 +111,7 @@ function(add_subprocess_test_suite test_name)
                                                  GTest::gtest GTest::gtest_main)
 
     # Add to CTest
-    add_test(NAME ${test_name}${test_name_suffix} COMMAND ${target_name})
+    add_test(NAME ${target_name} COMMAND ${target_name})
   endforeach()
 endfunction()
 

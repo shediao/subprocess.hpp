@@ -55,7 +55,6 @@
 
 #include <functional>
 #include <memory>
-#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -164,6 +163,58 @@ constexpr bool is_bsd = is_freebsd || is_openbsd || is_netbsd;
 constexpr bool is_posix =
     is_macos || is_linux || is_android || is_cygwin || is_bsd;
 
+#ifndef SUBPROCESS_HAS_EXCEPTIONS
+#if defined(_MSC_VER) && defined(_CPPUNWIND)
+// MSVC defines _CPPUNWIND to 1 if and only if exceptions are enabled.
+#define SUBPROCESS_HAS_EXCEPTIONS 1
+#elif defined(__BORLANDC__)
+// C++Builder's implementation of the STL uses the _HAS_EXCEPTIONS
+// macro to enable exceptions, so we'll do the same.
+// Assumes that exceptions are enabled by default.
+#ifndef _HAS_EXCEPTIONS
+#define _HAS_EXCEPTIONS 1
+#endif  // _HAS_EXCEPTIONS
+#define SUBPROCESS_HAS_EXCEPTIONS _HAS_EXCEPTIONS
+#elif defined(__clang__)
+// clang defines __EXCEPTIONS if and only if exceptions are enabled before clang
+// 220714, but if and only if cleanups are enabled after that. In Obj-C++ files,
+// there can be cleanups for ObjC exceptions which also need cleanups, even if
+// C++ exceptions are disabled. clang has __has_feature(cxx_exceptions) which
+// checks for C++ exceptions starting at clang r206352, but which checked for
+// cleanups prior to that. To reliably check for C++ exception availability with
+// clang, check for
+// __EXCEPTIONS && __has_feature(cxx_exceptions).
+#if defined(__EXCEPTIONS) && __EXCEPTIONS && __has_feature(cxx_exceptions)
+#define SUBPROCESS_HAS_EXCEPTIONS 1
+#else
+#define SUBPROCESS_HAS_EXCEPTIONS 0
+#endif
+#elif defined(__GNUC__) && defined(__EXCEPTIONS) && __EXCEPTIONS
+// gcc defines __EXCEPTIONS to 1 if and only if exceptions are enabled.
+#define SUBPROCESS_HAS_EXCEPTIONS 1
+#elif defined(__SUNPRO_CC)
+// Sun Pro CC supports exceptions.  However, there is no compile-time way of
+// detecting whether they are enabled or not.  Therefore, we assume that
+// they are enabled unless the user tells us otherwise.
+#define SUBPROCESS_HAS_EXCEPTIONS 1
+#elif defined(__IBMCPP__) && defined(__EXCEPTIONS) && __EXCEPTIONS
+// xlC defines __EXCEPTIONS to 1 if and only if exceptions are enabled.
+#define SUBPROCESS_HAS_EXCEPTIONS 1
+#elif defined(__HP_aCC)
+// Exception handling is in effect by default in HP aCC compiler. It has to
+// be turned of by +noeh compiler option if desired.
+#define SUBPROCESS_HAS_EXCEPTIONS 1
+#else
+// For other compilers, we assume exceptions are disabled to be
+// conservative.
+#define SUBPROCESS_HAS_EXCEPTIONS 0
+#endif  // defined(_MSC_VER) || defined(__BORLANDC__)
+#endif  // SUBPROCESS_HAS_EXCEPTIONS
+
+#if SUBPROCESS_HAS_EXCEPTIONS
+#include <stdexcept>
+#endif
+
 #ifndef USE_DOLLAR_NAMED_VARIABLES
 #define USE_DOLLAR_NAMED_VARIABLES 1
 #endif
@@ -174,6 +225,21 @@ class Redirector;
 class StdinRedirector;
 class StdoutRedirector;
 class StderrRedirector;
+inline void die(std::string const& msg) {
+#if SUBPROCESS_HAS_EXCEPTIONS
+  throw std::runtime_error(msg);
+#else
+  if (!msg.empty()) {
+#if defined(_WIN32)
+    WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg.c_str(), msg.size(), NULL,
+              NULL);
+#else
+    write(STDERR_FILENO, msg.c_str(), msg.size());
+#endif
+  }
+  abort();
+#endif
+}
 }  // namespace detail
 
 #if defined(_WIN32)
@@ -186,8 +252,7 @@ inline std::wstring to_wstring(const std::string_view str,
   int size_needed = MultiByteToWideChar(from_codepage, 0, str.data(),
                                         (int)str.size(), NULL, 0);
   if (size_needed <= 0) {
-    throw std::runtime_error("MultiByteToWideChar error: " +
-                             std::to_string(GetLastError()));
+    detail::die("MultiByteToWideChar error: " + std::to_string(GetLastError()));
   }
   std::wstring wstr(static_cast<size_t>(size_needed), 0);
   MultiByteToWideChar(from_codepage, 0, str.data(), (int)str.size(), &wstr[0],
@@ -204,8 +269,7 @@ inline std::string to_string(const std::wstring_view wstr,
   int size_needed = WideCharToMultiByte(to_codepage, 0, wstr.data(),
                                         (int)wstr.size(), NULL, 0, NULL, NULL);
   if (size_needed <= 0) {
-    throw std::runtime_error("WideCharToMultiByte error: " +
-                             std::to_string(GetLastError()));
+    detail::die("WideCharToMultiByte error: " + std::to_string(GetLastError()));
   }
   std::string str(static_cast<size_t>(size_needed), 0);
   WideCharToMultiByte(to_codepage, 0, wstr.data(), (int)wstr.size(), &str[0],
@@ -528,7 +592,7 @@ inline void write_to_native_handle(NativeHandle& fd,
     DWORD write_count{0};
     if (!WriteFile(fd, write_view.data(), static_cast<DWORD>(write_view.size()),
                    &write_count, 0)) {
-      throw std::runtime_error("WriteFile error: " + get_last_error_message());
+      die("WriteFile error: " + get_last_error_message());
     }
     if (write_count > 0) {
       write_view.remove_prefix(static_cast<size_t>(write_count));
@@ -539,7 +603,7 @@ inline void write_to_native_handle(NativeHandle& fd,
       write_view.remove_prefix(static_cast<size_t>(write_count));
     }
     if (write_count == -1) {
-      throw std::runtime_error("write() error: " + std::to_string(errno));
+      die("write() error: " + std::to_string(errno));
     }
 #endif
   }
@@ -563,7 +627,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       out_buf.insert(out_buf.end(), buf, buf + read_count);
     }
     if (read_count == -1) {
-      throw std::runtime_error(get_last_error_message());
+      die(get_last_error_message());
     }
   } while (read_count > 0);
 #endif
@@ -577,10 +641,10 @@ inline void read_from_native_handle(NativeHandle& fd,
   }
   auto const flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) {
-    throw std::runtime_error("fcntl(F_GETFL) failed");
+    die("fcntl(F_GETFL) failed");
   }
   if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
-    throw std::runtime_error("fcntl(F_SETFL) failed");
+    die("fcntl(F_SETFL) failed");
   }
 }
 
@@ -602,7 +666,7 @@ inline void read_from_native_handle(NativeHandle& fd,
          fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
     int poll_count = poll(fds, 3, -1);
     if (poll_count == -1) {
-      throw std::runtime_error("poll() failed");
+      die("poll() failed");
     }
     if (poll_count == 0) {
       break;
@@ -616,7 +680,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error("write() error: " + std::to_string(errno));
+          die("write() error: " + std::to_string(errno));
         }
       }
       if (stdin_str.empty()) {
@@ -634,7 +698,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_message());
+          die(get_last_error_message());
         }
       }
     } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
@@ -652,7 +716,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_message());
+          die(get_last_error_message());
         }
       }
     } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
@@ -707,7 +771,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       break;
     }
     if (ready == -1) {
-      throw std::runtime_error(get_last_error_message());
+      die(get_last_error_message());
     }
     if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
       auto write_count = write(in, stdin_str.data(), stdin_str.size());
@@ -717,7 +781,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error("write() error: " + std::to_string(errno));
+          die("write() error: " + std::to_string(errno));
         }
       }
       if (stdin_str.empty()) {
@@ -735,7 +799,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_message());
+          die(get_last_error_message());
         }
       }
     }
@@ -750,7 +814,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          throw std::runtime_error(get_last_error_message());
+          die(get_last_error_message());
         }
       }
     }
@@ -767,8 +831,7 @@ inline void read_from_native_handle(NativeHandle& fd,
 
   int epfd = epoll_create1(EPOLL_CLOEXEC);
   if (epfd == -1) {
-    throw std::runtime_error("epoll_create1() failed: " +
-                             get_last_error_message());
+    die("epoll_create1() failed: " + get_last_error_message());
   }
   HandleGuard epoll_guard(epfd);
 
@@ -780,24 +843,21 @@ inline void read_from_native_handle(NativeHandle& fd,
     ev.events = EPOLLOUT;
     ev.data.fd = in;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, in, &ev) == -1) {
-      throw std::runtime_error("epoll_ctl(EPOLL_CTL_ADD, in) failed: " +
-                               get_last_error_message());
+      die("epoll_ctl(EPOLL_CTL_ADD, in) failed: " + get_last_error_message());
     }
   }
   if (out != INVALID_NATIVE_HANDLE_VALUE) {
     ev.events = EPOLLIN;
     ev.data.fd = out;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, out, &ev) == -1) {
-      throw std::runtime_error("epoll_ctl(EPOLL_CTL_ADD, out) failed: " +
-                               get_last_error_message());
+      die("epoll_ctl(EPOLL_CTL_ADD, out) failed: " + get_last_error_message());
     }
   }
   if (err != INVALID_NATIVE_HANDLE_VALUE) {
     ev.events = EPOLLIN;
     ev.data.fd = err;
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, err, &ev) == -1) {
-      throw std::runtime_error("epoll_ctl(EPOLL_CTL_ADD, err) failed: " +
-                               get_last_error_message());
+      die("epoll_ctl(EPOLL_CTL_ADD, err) failed: " + get_last_error_message());
     }
   }
 
@@ -812,8 +872,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       if (errno == EINTR) {
         continue;
       }
-      throw std::runtime_error("epoll_wait() failed: " +
-                               get_last_error_message());
+      die("epoll_wait() failed: " + get_last_error_message());
     }
 
     for (int i = 0; i < nfds; ++i) {
@@ -829,8 +888,7 @@ inline void read_from_native_handle(NativeHandle& fd,
           }
           if (write_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              throw std::runtime_error("write() error: " +
-                                       std::to_string(errno));
+              die("write() error: " + std::to_string(errno));
             }
           }
           if (stdin_str.empty()) {
@@ -855,7 +913,7 @@ inline void read_from_native_handle(NativeHandle& fd,
           }
           if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              throw std::runtime_error(get_last_error_message());
+              die(get_last_error_message());
             }
           }
         }
@@ -876,7 +934,7 @@ inline void read_from_native_handle(NativeHandle& fd,
           }
           if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              throw std::runtime_error(get_last_error_message());
+              die(get_last_error_message());
             }
           }
         }
@@ -906,7 +964,7 @@ inline void read_from_native_handle(NativeHandle& fd,
 
   int kq = kqueue();
   if (kq == -1) {
-    throw std::runtime_error("kqueue() failed: " + get_last_error_message());
+    die("kqueue() failed: " + get_last_error_message());
   }
   HandleGuard kq_guard(kq);
 
@@ -928,8 +986,7 @@ inline void read_from_native_handle(NativeHandle& fd,
 
   if (nchanges > 0) {
     if (kevent(kq, changes, nchanges, nullptr, 0, nullptr) == -1) {
-      throw std::runtime_error("kevent() register failed: " +
-                               get_last_error_message());
+      die("kevent() register failed: " + get_last_error_message());
     }
   }
 
@@ -946,7 +1003,7 @@ inline void read_from_native_handle(NativeHandle& fd,
       if (errno == EINTR) {
         continue;
       }
-      throw std::runtime_error("kevent() failed: " + get_last_error_message());
+      die("kevent() failed: " + get_last_error_message());
     }
 
     for (int i = 0; i < nev; ++i) {
@@ -977,8 +1034,7 @@ inline void read_from_native_handle(NativeHandle& fd,
           }
           if (write_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              throw std::runtime_error("write() error: " +
-                                       std::to_string(errno));
+              die("write() error: " + std::to_string(errno));
             }
           }
           if (stdin_str.empty()) {
@@ -1008,7 +1064,7 @@ inline void read_from_native_handle(NativeHandle& fd,
             close_native_handle(out);
           } else if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              throw std::runtime_error(get_last_error_message());
+              die(get_last_error_message());
             }
           }
         }
@@ -1026,7 +1082,7 @@ inline void read_from_native_handle(NativeHandle& fd,
             close_native_handle(err);
           } else if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              throw std::runtime_error(get_last_error_message());
+              die(get_last_error_message());
             }
           }
         }
@@ -1047,10 +1103,13 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
                                     NativeHandle& err,
                                     std::vector<char>& err_buf) {
   std::vector<std::thread> threads;
+#if SUBPROCESS_HAS_EXCEPTIONS
   std::exception_ptr exception{nullptr};
   std::mutex exception_mutex;
+#endif
 
   if (in != INVALID_NATIVE_HANDLE_VALUE) {
+#if SUBPROCESS_HAS_EXCEPTIONS
     threads.emplace_back(
         [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
            std::mutex& mtx) {
@@ -1065,8 +1124,13 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
         },
         std::ref(in), std::ref(in_buf), std::ref(exception),
         std::ref(exception_mutex));
+#else
+    threads.emplace_back(write_to_native_handle, std::ref(in),
+                         std::ref(in_buf));
+#endif
   }
   if (out != INVALID_NATIVE_HANDLE_VALUE) {
+#if SUBPROCESS_HAS_EXCEPTIONS
     threads.emplace_back(
         [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
            std::mutex& mtx) {
@@ -1081,8 +1145,13 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
         },
         std::ref(out), std::ref(out_buf), std::ref(exception),
         std::ref(exception_mutex));
+#else
+    threads.emplace_back(read_from_native_handle, std::ref(out),
+                         std::ref(out_buf));
+#endif
   }
   if (err != INVALID_NATIVE_HANDLE_VALUE) {
+#if SUBPROCESS_HAS_EXCEPTIONS
     threads.emplace_back(
         [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
            std::mutex& mtx) {
@@ -1097,15 +1166,21 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
         },
         std::ref(err), std::ref(err_buf), std::ref(exception),
         std::ref(exception_mutex));
+#else
+    threads.emplace_back(read_from_native_handle, std::ref(err),
+                         std::ref(err_buf));
+#endif
   }
 
   for (auto& thread : threads) {
     thread.join();
   }
 
+#if SUBPROCESS_HAS_EXCEPTIONS
   if (exception) {
     std::rethrow_exception(exception);
   }
+#endif
 }
 
 inline void read_write_pipes(NativeHandle& in, std::vector<char>& in_buf,
@@ -1325,11 +1400,11 @@ class Pipe {
     at.lpSecurityDescriptor = nullptr;
 
     if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 0)) {
-      throw std::runtime_error{get_last_error_message()};
+      die(get_last_error_message());
     }
 #else
     if (-1 == pipe(fds)) {
-      throw std::runtime_error{"pipe() failed"};
+      die("pipe() failed");
     }
 #endif
   }
@@ -1410,8 +1485,8 @@ struct File {
             : (type == OpenType::WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
         FILE_ATTRIBUTE_NORMAL, nullptr);
     if (fd_ == INVALID_HANDLE_VALUE) {
-      throw std::runtime_error{"open failed: " + to_string(path_) +
-                               ", error: " + std::to_string(GetLastError())};
+      die("open failed: " + to_string(path_) +
+          ", error: " + std::to_string(GetLastError()));
     }
 #else
     fd_ = (type == OpenType::ReadOnly)
@@ -1422,7 +1497,7 @@ struct File {
                          : (O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC),
                      0644);
     if (fd_ == -1) {
-      throw std::runtime_error{"open failed: " + path_};
+      die("open failed: " + path_);
     }
 #endif
   }
@@ -1518,8 +1593,8 @@ class Redirector {
                 non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(non_inheritable_handle,
                                         HANDLE_FLAG_INHERIT, 0)) {
-                throw std::runtime_error("SetHandleInformation failed: " +
-                                         std::to_string(GetLastError()));
+                die("SetHandleInformation failed: " +
+                    std::to_string(GetLastError()));
               }
             }
             if (NativeHandle inheritable_handle =
@@ -1527,8 +1602,8 @@ class Redirector {
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
-                throw std::runtime_error("SetHandleInformation failed: " +
-                                         std::to_string(GetLastError()));
+                die("SetHandleInformation failed: " +
+                    std::to_string(GetLastError()));
               }
             }
 #endif
@@ -1545,8 +1620,8 @@ class Redirector {
                 non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(non_inheritable_handle,
                                         HANDLE_FLAG_INHERIT, 0)) {
-                throw std::runtime_error("SetHandleInformation failed: " +
-                                         std::to_string(GetLastError()));
+                die("SetHandleInformation failed: " +
+                    std::to_string(GetLastError()));
               }
             }
             if (NativeHandle inheritable_handle =
@@ -1554,8 +1629,8 @@ class Redirector {
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
-                throw std::runtime_error("SetHandleInformation failed: " +
-                                         std::to_string(GetLastError()));
+                die("SetHandleInformation failed: " +
+                    std::to_string(GetLastError()));
               }
             }
 #endif
@@ -2147,7 +2222,7 @@ class subprocess {
 #else   // SUBPROCESS_USE_POSIX_SPAWN
     auto pid = fork();
     if (pid < 0) {
-      throw std::runtime_error("fork() failed");
+      die("fork() failed");
     } else if (pid == 0) {
       execute_command_in_child();
     } else {
@@ -2251,7 +2326,7 @@ class subprocess {
                    [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() && (-1 == chdir(cwd_.data()))) {
-      throw std::runtime_error(get_last_error_message());
+      die(get_last_error_message());
     }
 
     std::string executable_path = cmd_[0];
@@ -2295,12 +2370,12 @@ class subprocess {
     cmd.push_back(nullptr);
     if (!cwd_.empty() &&
 #if defined(__APPLE__) && defined(__MACH__)
-        (-1 == posix_spawn_file_actions_addchdir_np(&action, cwd_.data()))) {
-      throw std::runtime_error(get_last_error_message());
+        (-1 == posix_spawn_file_actions_addchdir_np(&action, cwd_.data()))
 #else  // other POSIX systems, try the standard version
-        (-1 == posix_spawn_file_actions_addchdir(&action, cwd_.data()))) {
-      throw std::runtime_error(get_last_error_message());
+        (-1 == posix_spawn_file_actions_addchdir(&action, cwd_.data()))
 #endif
+    ) {
+      die(get_last_error_message());
     }
 
     std::string executable_path = cmd_[0];

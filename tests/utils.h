@@ -10,6 +10,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 
 inline std::string getTempFilePath(std::string const& prefix,
@@ -19,12 +20,14 @@ inline std::string getTempFilePath(std::string const& prefix,
 #ifdef _WIN32
   char temp_dir[MAX_PATH];
   if (GetTempPathA(MAX_PATH, temp_dir) == 0) {
-    throw std::runtime_error("Failed to get temporary directory.");
+    std::cerr << "Failed to get temporary directory.\n";
+    abort();
   }
 
   char temp_file[MAX_PATH];
   if (GetTempFileNameA(temp_dir, prefix.c_str(), 0, temp_file) == 0) {
-    throw std::runtime_error("Failed to create temporary file.");
+    std::cerr << "Failed to create temporary file.\n";
+    abort();
   }
   DeleteFileA(temp_file);
   temp_file_path = temp_file;
@@ -57,7 +60,8 @@ inline std::string getTempFilePath(std::string const& prefix,
   // int fd = mkstemp(template_str.data());
   int fd = mkstemps(template_str.data(), suffix_len);
   if (fd == -1) {
-    throw std::runtime_error("Failed to create temporary file.");
+    std::cerr << "Failed to create temporary file.\n";
+    abort();
   }
   close(fd);
   ::remove(template_str.c_str());
