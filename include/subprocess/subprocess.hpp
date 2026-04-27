@@ -2534,13 +2534,11 @@ inline int $(std::vector<std::string> cmd, T&&... args) {
 }
 
 #if defined(_WIN32)
-#if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 template <typename... T>
   requires(detail::is_named_argument<T> && ...)
 inline int $(std::vector<std::wstring> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
-#endif  // USE_DOLLAR_NAMED_VARIABLES
 #endif  // _WIN32
 
 template <typename... Args>
@@ -2549,7 +2547,7 @@ template <typename... Args>
 inline int $(Args... args) {
   return run(std::forward<Args>(args)...);
 }
-#endif
+#endif  // USE_DOLLAR_NAMED_VARIABLES
 
 template <typename... T>
   requires(detail::is_named_argument<T> && ...)
