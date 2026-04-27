@@ -90,7 +90,7 @@ function(add_subprocess_test_suite test_name)
       endif()
     endif()
 
-    if(SUBPROCESS_SANITIZER_CXX_FLAGS)
+    if(SUBPROCESS_SANITIZER_CXX_FLAGS AND NOT variant STREQUAL "noexception")
       target_compile_options(
         ${target_name}
         PRIVATE "$<$<CONFIG:Debug>:${SUBPROCESS_SANITIZER_CXX_FLAGS}>")
