@@ -273,9 +273,7 @@ class buffer {
   }
 
   // operator== for test
-  bool operator==(const buffer& other) const {
-    return buf_ == other.buf_;
-  }
+  bool operator==(const buffer& other) const { return buf_ == other.buf_; }
   template <typename T>
     requires(!std::is_same_v<T, char> && !std::is_same_v<T, wchar_t> &&
              !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
@@ -1407,14 +1405,15 @@ struct File {
     WriteAppend,
   };
 
-  explicit File(std::string const &p, bool append = false)
+  explicit File(std::string const& p, bool append = false)
       : path_{
 #if defined(_WIN32)
-        utf8_to_utf16(p)
+            utf8_to_utf16(p)
 #else
-          p
+            p
 #endif
-      }, append_{append} {
+        },
+        append_{append} {
   }
 #if defined(_WIN32)
   explicit File(std::wstring const& p, bool append = false)
