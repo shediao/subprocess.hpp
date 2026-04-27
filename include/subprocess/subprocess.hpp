@@ -115,53 +115,6 @@ extern char** environ;
 #endif  // !_WIN32
 
 namespace subprocess {
-#if defined(__APPLE__) && defined(__MACH__)
-constexpr bool is_macos = true;
-#else
-constexpr bool is_macos = false;
-#endif
-#if defined(_WIN32) || defined(_WIN64)
-constexpr bool is_win = true;
-#else
-constexpr bool is_win = false;
-#endif
-
-#if defined(__linux__)
-constexpr bool is_linux = true;
-#else
-constexpr bool is_linux = false;
-#endif
-#if defined(__ANDROID__)
-constexpr bool is_android = true;
-#else
-constexpr bool is_android = false;
-#endif
-
-#if defined(__CYGWIN__)
-constexpr bool is_cygwin = true;
-#else
-constexpr bool is_cygwin = false;
-#endif
-
-#if defined(__FreeBSD__)
-constexpr bool is_freebsd = true;
-#else
-constexpr bool is_freebsd = false;
-#endif
-#if defined(__NetBSD__)
-constexpr bool is_netbsd = true;
-#else
-constexpr bool is_netbsd = false;
-#endif
-#if defined(__OpenBSD__)
-constexpr bool is_openbsd = true;
-#else
-constexpr bool is_openbsd = false;
-#endif
-
-constexpr bool is_bsd = is_freebsd || is_openbsd || is_netbsd;
-constexpr bool is_posix =
-    is_macos || is_linux || is_android || is_cygwin || is_bsd;
 
 #ifndef SUBPROCESS_HAS_EXCEPTIONS
 #if defined(_MSC_VER) && defined(_CPPUNWIND)
