@@ -115,8 +115,6 @@
 extern char** environ;
 #endif  // !_WIN32
 
-namespace subprocess {
-
 #ifndef SUBPROCESS_HAS_EXCEPTIONS
 #if defined(_MSC_VER) && defined(_CPPUNWIND)
 // MSVC defines _CPPUNWIND to 1 if and only if exceptions are enabled.
@@ -172,6 +170,8 @@ namespace subprocess {
 #ifndef USE_DOLLAR_NAMED_VARIABLES
 #define USE_DOLLAR_NAMED_VARIABLES 1
 #endif
+
+namespace subprocess {
 
 namespace detail {
 class subprocess;
