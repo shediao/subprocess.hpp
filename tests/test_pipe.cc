@@ -6,6 +6,7 @@
 
 #include "subprocess/subprocess.hpp"
 
+using subprocess::buffer;
 using namespace subprocess::named_arguments;
 using std::string_literals::operator""s;
 
@@ -379,7 +380,7 @@ TEST(PipeTest, SingleProcessWithExplicitPipe) {
 
   // The subprocess writes to the pipe write end; we read from the read end.
   p.async_run();
-  std::vector<char> tmp;
+  buffer tmp;
   subprocess::detail::read_from_native_handle(pipe.read(), tmp);
   p.wait_for_exit();
   ASSERT_EQ((std::string_view{"single_pipe_test\r\n"}),
@@ -392,7 +393,7 @@ TEST(PipeTest, SingleProcessWithExplicitPipe) {
 
   // The subprocess writes to the pipe write end; we read from the read end.
   p.async_run();
-  std::vector<char> tmp;
+  buffer tmp;
   subprocess::detail::read_from_native_handle(pipe.read(), tmp);
   p.wait_for_exit();
   ASSERT_EQ((std::string_view{"single_pipe_test\n"}),
@@ -772,7 +773,7 @@ TEST(PipeTest, OnlyStdoutGoesThroughPipe) {
 // 23. Pipe: explicit Pipe object closed after use (smoke test for RAII)
 // ===========================================================================
 TEST(PipeTest, ExplicitPipeClosedAfterUse) {
-  std::vector<char> captured;
+  buffer captured;
   {
     auto pipe = subprocess::detail::Pipe::create();
 #if defined(_WIN32)

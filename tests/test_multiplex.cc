@@ -3,7 +3,6 @@
 #include <cstring>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include "subprocess/subprocess.hpp"
 
@@ -12,6 +11,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+using std::string_view_literals::operator""sv;
+using subprocess::buffer;
 using subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
 using subprocess::detail::NativeHandle;
 
@@ -97,13 +98,12 @@ class MultiplexTestBase : public ::testing::Test {
  protected:
   // Start a drain-thread that takes *ownership* of the read-end fd.
   // The thread reads until EOF, appends data to |drained|, then closes the fd.
-  static void start_stdin_drain_thread(NativeHandle read_fd,
-                                       std::vector<char>& drained) {
+  static void start_stdin_drain_thread(NativeHandle read_fd, buffer& drained) {
     std::thread([read_fd, &drained]() {
       char buf[256];
       ssize_t n;
       while ((n = ::read(read_fd, buf, sizeof(buf))) > 0) {
-        drained.insert(drained.end(), buf, buf + n);
+        drained.append(buf, n);
       }
       ::close(read_fd);
     }).detach();
@@ -112,7 +112,7 @@ class MultiplexTestBase : public ::testing::Test {
   // Start a feeder-thread that takes *ownership* of the write-end fd.
   // The thread writes |data|, then closes the fd to signal EOF.
   static void start_stdout_stderr_feeder_thread(NativeHandle write_fd,
-                                                const std::vector<char>& data) {
+                                                const buffer& data) {
     std::thread([write_fd, data]() {
       size_t written = 0;
       while (written < data.size()) {
@@ -141,9 +141,9 @@ TEST_F(MultiplexPollTest, AllHandlesInvalid) {
   NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
                                            err_buf);
@@ -162,11 +162,11 @@ TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
   NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
-  std::string input_str = "hello from stdin poll";
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  auto input_str = "hello from stdin poll"sv;
+  buffer in_buf(input_str);
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp.release_read(), drained);
 
@@ -178,7 +178,7 @@ TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
 
   // Give the drain thread a moment to finish.
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained.to_string(), input_str);
 }
 
 TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
@@ -187,11 +187,11 @@ TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
   NativeHandle out = pp.release_read();  // ownership transferred to |out|
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
-  std::string output_str = "hello from stdout poll";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  auto output_str = "hello from stdout poll"sv;
+  buffer out_data(output_str);
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
 
@@ -209,10 +209,10 @@ TEST_F(MultiplexPollTest, OnlyStderrActiveReadsData) {
   NativeHandle err = pp.release_read();  // ownership transferred to |err|
 
   std::string err_str = "hello from stderr poll";
-  std::vector<char> err_data(err_str.begin(), err_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer err_data(err_str.begin(), err_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
 
@@ -236,10 +236,10 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   std::string output_str = "stdout-data-poll";
   std::string err_str = "stderr-data-poll";
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),
@@ -269,10 +269,10 @@ TEST_F(MultiplexPollTest, EmptyStdinBuffer) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string output_str = "only-stdout";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;  // empty
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer in_buf;  // empty
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
@@ -302,10 +302,10 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
     output_str[i] = static_cast<char>('a' + (i % 26));
   }
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),
@@ -334,9 +334,9 @@ TEST_F(MultiplexSelectTest, AllHandlesInvalid) {
   NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
                                              err_buf);
@@ -353,10 +353,10 @@ TEST_F(MultiplexSelectTest, OnlyStdinActiveWritesData) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string input_str = "hello from stdin select";
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp.release_read(), drained);
 
@@ -375,10 +375,10 @@ TEST_F(MultiplexSelectTest, OnlyStdoutActiveReadsData) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string output_str = "hello from stdout select";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
 
@@ -396,10 +396,10 @@ TEST_F(MultiplexSelectTest, OnlyStderrActiveReadsData) {
   NativeHandle err = pp.release_read();
 
   std::string err_str = "hello from stderr select";
-  std::vector<char> err_data(err_str.begin(), err_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer err_data(err_str.begin(), err_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
 
@@ -423,10 +423,10 @@ TEST_F(MultiplexSelectTest, AllThreeActive) {
   std::string output_str = "stdout-select";
   std::string err_str = "stderr-select";
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),
@@ -455,10 +455,10 @@ TEST_F(MultiplexSelectTest, EmptyStdinBuffer) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string output_str = "only-stdout-select";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
@@ -486,10 +486,10 @@ TEST_F(MultiplexSelectTest, LargerDataTransfer) {
     output_str[i] = static_cast<char>('a' + (i % 26));
   }
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),
@@ -519,9 +519,9 @@ TEST_F(MultiplexEpollTest, AllHandlesInvalid) {
   NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
                                             err_buf);
@@ -540,10 +540,10 @@ TEST_F(MultiplexEpollTest, OnlyStdinActiveWritesData) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string input_str = "hello from stdin epoll";
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp.release_read(), drained);
 
@@ -562,10 +562,10 @@ TEST_F(MultiplexEpollTest, OnlyStdoutActiveReadsData) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string output_str = "hello from stdout epoll";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
 
@@ -583,10 +583,10 @@ TEST_F(MultiplexEpollTest, OnlyStderrActiveReadsData) {
   NativeHandle err = pp.release_read();
 
   std::string err_str = "hello from stderr epoll";
-  std::vector<char> err_data(err_str.begin(), err_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer err_data(err_str.begin(), err_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
 
@@ -610,10 +610,10 @@ TEST_F(MultiplexEpollTest, AllThreeActive) {
   std::string output_str = "stdout-epoll";
   std::string err_str = "stderr-epoll";
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),
@@ -642,10 +642,10 @@ TEST_F(MultiplexEpollTest, EmptyStdinBuffer) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string output_str = "only-stdout-epoll";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
@@ -673,10 +673,10 @@ TEST_F(MultiplexEpollTest, LargerDataTransfer) {
     output_str[i] = static_cast<char>('a' + (i % 26));
   }
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),
@@ -708,9 +708,9 @@ TEST_F(MultiplexKqueueTest, AllHandlesInvalid) {
   NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
                                              err_buf);
@@ -729,10 +729,10 @@ TEST_F(MultiplexKqueueTest, OnlyStdinActiveWritesData) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string input_str = "hello from stdin kqueue";
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp.release_read(), drained);
 
@@ -751,10 +751,10 @@ TEST_F(MultiplexKqueueTest, OnlyStdoutActiveReadsData) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string output_str = "hello from stdout kqueue";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
 
@@ -772,10 +772,10 @@ TEST_F(MultiplexKqueueTest, OnlyStderrActiveReadsData) {
   NativeHandle err = pp.release_read();
 
   std::string err_str = "hello from stderr kqueue";
-  std::vector<char> err_data(err_str.begin(), err_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer err_data(err_str.begin(), err_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
 
@@ -799,10 +799,10 @@ TEST_F(MultiplexKqueueTest, AllThreeActive) {
   std::string output_str = "stdout-kqueue";
   std::string err_str = "stderr-kqueue";
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),
@@ -831,10 +831,10 @@ TEST_F(MultiplexKqueueTest, EmptyStdinBuffer) {
   NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
 
   std::string output_str = "only-stdout-kqueue";
-  std::vector<char> out_data(output_str.begin(), output_str.end());
-  std::vector<char> in_buf;
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer in_buf;
+  buffer out_buf;
+  buffer err_buf;
 
   start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
@@ -862,10 +862,10 @@ TEST_F(MultiplexKqueueTest, LargerDataTransfer) {
     output_str[i] = static_cast<char>('a' + (i % 26));
   }
 
-  std::vector<char> in_buf(input_str.begin(), input_str.end());
-  std::vector<char> out_buf;
-  std::vector<char> err_buf;
-  std::vector<char> drained;
+  buffer in_buf(input_str.begin(), input_str.end());
+  buffer out_buf;
+  buffer err_buf;
+  buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
   start_stdout_stderr_feeder_thread(pp_out.release_write(),

@@ -178,6 +178,7 @@ class Redirector;
 class StdinRedirector;
 class StdoutRedirector;
 class StderrRedirector;
+class buffer;
 
 inline void die(std::string const& msg) {
 #if SUBPROCESS_HAS_EXCEPTIONS
@@ -248,6 +249,33 @@ inline void close_native_handle(NativeHandle& handle) {
     handle = INVALID_NATIVE_HANDLE_VALUE;
   }
 }
+
+class buffer {
+ public:
+  buffer() = default;
+  buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
+  buffer(std::string::iterator first, std::string::iterator last)
+      : buf_(first, last) {}
+  auto* data() const { return buf_.data(); }
+  auto size() const { return buf_.size(); }
+  std::string_view view() const {
+    return std::string_view(buf_.data(), buf_.size());
+  }
+  auto to_string() const { return std::string(buf_.data(), buf_.size()); }
+  auto empty() const { return buf_.empty(); }
+  auto clear() { return buf_.clear(); }
+
+  auto begin() const { return buf_.begin(); }
+  auto end() const { return buf_.end(); }
+
+  void append(const char* data, size_t size) {
+    buf_.insert(buf_.end(), data, data + size);
+  }
+
+ private:
+  std::vector<char> buf_;
+};
+
 class HandleGuard {
  public:
   explicit HandleGuard(NativeHandle h = INVALID_NATIVE_HANDLE_VALUE)
@@ -491,10 +519,10 @@ inline std::string get_last_error_message() {
 #endif  // !_WIN32
 }
 
-inline void write_to_native_handle(NativeHandle& fd,
-                                   std::vector<char>& write_data) {
+inline void write_to_native_handle(NativeHandle& fd, buffer const& write_data) {
   HandleGuard guard(fd);
-  std::string_view write_view{write_data.data(), write_data.size()};
+  std::string_view write_view = write_data.view();
+  ;
   while (!write_view.empty()) {
 #if defined(_WIN32)
     DWORD write_count{0};
@@ -518,21 +546,20 @@ inline void write_to_native_handle(NativeHandle& fd,
   fd = INVALID_NATIVE_HANDLE_VALUE;
 }
 
-inline void read_from_native_handle(NativeHandle& fd,
-                                    std::vector<char>& out_buf) {
+inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
   HandleGuard guard(fd);
   char buf[1024];
 #if defined(_WIN32)
   DWORD read_count{0};
   while (ReadFile(fd, buf, sizeof(buf), &read_count, 0) && read_count > 0) {
-    out_buf.insert(out_buf.end(), buf, buf + read_count);
+    reate_data.append(buf, static_cast<size_t>(read_count));
   }
 #else
   ssize_t read_count = 0;
   do {
     read_count = read(fd, buf, std::size(buf));
     if (read_count > 0) {
-      out_buf.insert(out_buf.end(), buf, buf + read_count);
+      reate_data.append(buf, static_cast<size_t>(read_count));
     }
     if (read_count == -1) {
       die(get_last_error_message());
@@ -557,8 +584,8 @@ inline void read_from_native_handle(NativeHandle& fd,
 }
 
 [[maybe_unused]] inline void multiplex_using_poll(
-    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
-    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
+    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
+    NativeHandle& err, buffer& err_buf) {
   set_nonblocking(in);
   set_nonblocking(out);
   set_nonblocking(err);
@@ -566,7 +593,7 @@ inline void read_from_native_handle(NativeHandle& fd,
                        {.fd = out, .events = POLLIN, .revents = 0},
                        {.fd = err, .events = POLLIN, .revents = 0}};
 
-  std::string_view stdin_str{in_buf.data(), in_buf.size()};
+  std::string_view stdin_str = in_buf.view();
 
   char buf[1024];
   while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
@@ -598,7 +625,7 @@ inline void read_from_native_handle(NativeHandle& fd,
     if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
       auto read_count = read(fds[1].fd, buf, std::size(buf));
       while (read_count > 0) {
-        out_buf.insert(out_buf.end(), buf, buf + read_count);
+        out_buf.append(buf, static_cast<size_t>(read_count));
         read_count = read(fds[1].fd, buf, std::size(buf));
       }
       if (read_count == 0) {
@@ -616,7 +643,7 @@ inline void read_from_native_handle(NativeHandle& fd,
     if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
       auto read_count = read(fds[2].fd, buf, std::size(buf));
       while (read_count > 0) {
-        err_buf.insert(err_buf.end(), buf, buf + read_count);
+        err_buf.append(buf, static_cast<size_t>(read_count));
         read_count = read(fds[2].fd, buf, std::size(buf));
       }
       if (read_count == 0) {
@@ -647,10 +674,11 @@ inline void read_from_native_handle(NativeHandle& fd,
   out = INVALID_NATIVE_HANDLE_VALUE;
   err = INVALID_NATIVE_HANDLE_VALUE;
 }
+
 [[maybe_unused]] inline void multiplex_using_select(
-    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
-    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
-  std::string_view stdin_str{in_buf.data(), in_buf.size()};
+    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
+    NativeHandle& err, buffer& err_buf) {
+  std::string_view stdin_str = in_buf.view();
   char buf[1024];
 
   fd_set read_fds;
@@ -699,7 +727,7 @@ inline void read_from_native_handle(NativeHandle& fd,
     if (out != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(out, &read_fds)) {
       auto read_count = read(out, buf, std::size(buf));
       while (read_count > 0) {
-        out_buf.insert(out_buf.end(), buf, buf + read_count);
+        out_buf.append(buf, static_cast<size_t>(read_count));
         read_count = read(out, buf, std::size(buf));
       }
       if (read_count == 0) {
@@ -714,7 +742,7 @@ inline void read_from_native_handle(NativeHandle& fd,
     if (err != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(err, &read_fds)) {
       auto read_count = read(err, buf, std::size(buf));
       while (read_count > 0) {
-        err_buf.insert(err_buf.end(), buf, buf + read_count);
+        err_buf.append(buf, static_cast<size_t>(read_count));
         read_count = read(err, buf, std::size(buf));
       }
       if (read_count == 0) {
@@ -731,8 +759,8 @@ inline void read_from_native_handle(NativeHandle& fd,
 #endif
 #if defined(__linux__)
 [[maybe_unused]] inline void multiplex_using_epoll(
-    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
-    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
+    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
+    NativeHandle& err, buffer& err_buf) {
   set_nonblocking(in);
   set_nonblocking(out);
   set_nonblocking(err);
@@ -769,7 +797,7 @@ inline void read_from_native_handle(NativeHandle& fd,
     }
   }
 
-  std::string_view stdin_str{in_buf.data(), in_buf.size()};
+  std::string_view stdin_str = in_buf.view();
   char buf[1024];
 
   while (in != INVALID_NATIVE_HANDLE_VALUE ||
@@ -812,7 +840,7 @@ inline void read_from_native_handle(NativeHandle& fd,
         if (revents & EPOLLIN) {
           auto read_count = read(fd, buf, std::size(buf));
           while (read_count > 0) {
-            out_buf.insert(out_buf.end(), buf, buf + read_count);
+            out_buf.append(buf, static_cast<size_t>(read_count));
             read_count = read(fd, buf, std::size(buf));
           }
           if (read_count == 0) {
@@ -833,7 +861,7 @@ inline void read_from_native_handle(NativeHandle& fd,
         if (revents & EPOLLIN) {
           auto read_count = read(fd, buf, std::size(buf));
           while (read_count > 0) {
-            err_buf.insert(err_buf.end(), buf, buf + read_count);
+            err_buf.append(buf, static_cast<size_t>(read_count));
             read_count = read(fd, buf, std::size(buf));
           }
           if (read_count == 0) {
@@ -864,8 +892,8 @@ inline void read_from_native_handle(NativeHandle& fd,
     defined(__OpenBSD__)
 
 [[maybe_unused]] inline void multiplex_using_kqueue(
-    NativeHandle& in, std::vector<char>& in_buf, NativeHandle& out,
-    std::vector<char>& out_buf, NativeHandle& err, std::vector<char>& err_buf) {
+    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
+    NativeHandle& err, buffer& err_buf) {
   set_nonblocking(in);
   set_nonblocking(out);
   set_nonblocking(err);
@@ -898,7 +926,7 @@ inline void read_from_native_handle(NativeHandle& fd,
     }
   }
 
-  std::string_view stdin_str{in_buf.data(), in_buf.size()};
+  std::string_view stdin_str = in_buf.view();
   char buf[1024];
 
   struct kevent events[3];
@@ -962,7 +990,7 @@ inline void read_from_native_handle(NativeHandle& fd,
         if (filter == EVFILT_READ) {
           auto read_count = read(fd, buf, std::size(buf));
           while (read_count > 0) {
-            out_buf.insert(out_buf.end(), buf, buf + read_count);
+            out_buf.append(buf, static_cast<size_t>(read_count));
             read_count = read(fd, buf, std::size(buf));
           }
           if (read_count == 0) {
@@ -980,7 +1008,7 @@ inline void read_from_native_handle(NativeHandle& fd,
         if (filter == EVFILT_READ) {
           auto read_count = read(fd, buf, std::size(buf));
           while (read_count > 0) {
-            err_buf.insert(err_buf.end(), buf, buf + read_count);
+            err_buf.append(buf, static_cast<size_t>(read_count));
             read_count = read(fd, buf, std::size(buf));
           }
           if (read_count == 0) {
@@ -1005,11 +1033,9 @@ inline void read_from_native_handle(NativeHandle& fd,
 #endif
 
 [[maybe_unused]]
-inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
-                                    NativeHandle& out,
-                                    std::vector<char>& out_buf,
-                                    NativeHandle& err,
-                                    std::vector<char>& err_buf) {
+inline void read_write_with_threads(NativeHandle& in, buffer const& in_buf,
+                                    NativeHandle& out, buffer& out_buf,
+                                    NativeHandle& err, buffer& err_buf) {
   std::vector<std::thread> threads;
 #if SUBPROCESS_HAS_EXCEPTIONS
   std::exception_ptr exception{nullptr};
@@ -1019,7 +1045,7 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
   if (in != INVALID_NATIVE_HANDLE_VALUE) {
 #if SUBPROCESS_HAS_EXCEPTIONS
     threads.emplace_back(
-        [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
+        [](NativeHandle& fd, buffer const& buf, std::exception_ptr& exc,
            std::mutex& mtx) {
           try {
             write_to_native_handle(fd, buf);
@@ -1040,7 +1066,7 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
   if (out != INVALID_NATIVE_HANDLE_VALUE) {
 #if SUBPROCESS_HAS_EXCEPTIONS
     threads.emplace_back(
-        [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
+        [](NativeHandle& fd, buffer& buf, std::exception_ptr& exc,
            std::mutex& mtx) {
           try {
             read_from_native_handle(fd, buf);
@@ -1061,7 +1087,7 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
   if (err != INVALID_NATIVE_HANDLE_VALUE) {
 #if SUBPROCESS_HAS_EXCEPTIONS
     threads.emplace_back(
-        [](NativeHandle& fd, std::vector<char>& buf, std::exception_ptr& exc,
+        [](NativeHandle& fd, buffer& buf, std::exception_ptr& exc,
            std::mutex& mtx) {
           try {
             read_from_native_handle(fd, buf);
@@ -1091,9 +1117,9 @@ inline void read_write_with_threads(NativeHandle& in, std::vector<char>& in_buf,
 #endif
 }
 
-inline void read_write_pipes(NativeHandle& in, std::vector<char>& in_buf,
-                             NativeHandle& out, std::vector<char>& out_buf,
-                             NativeHandle& err, std::vector<char>& err_buf) {
+inline void read_write_pipes(NativeHandle& in, buffer const& in_buf,
+                             NativeHandle& out, buffer& out_buf,
+                             NativeHandle& err, buffer& err_buf) {
 #if defined(_WIN32)
   return read_write_with_threads(in, in_buf, out, out_buf, err, err_buf);
 #else
@@ -1416,26 +1442,6 @@ struct File {
 #endif
   bool append_{false};
   NativeHandle fd_{INVALID_NATIVE_HANDLE_VALUE};
-};
-
-class buffer {
-  friend class detail::subprocess;
-  friend class detail::Redirector;
-  friend class detail::StdinRedirector;
-  friend class detail::StdoutRedirector;
-  friend class detail::StderrRedirector;
-
- public:
-  buffer() = default;
-  buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
-  auto* data() { return buf_.data(); }
-  auto size() { return buf_.size(); }
-  auto to_string() { return std::string(buf_.data(), buf_.size()); }
-  auto empty() { return buf_.empty(); }
-  auto clear() { return buf_.clear(); }
-
- private:
-  std::vector<char> buf_;
 };
 
 class Buffer {
@@ -2213,34 +2219,28 @@ class subprocess {
     auto err = stderr_.get_parent_communication_pipe_handle();
 
     NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
-    std::vector<char> tmp_buf;
+    buffer tmp_buf;
     read_write_pipes(
         in.has_value() ? in.value().get() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf().buf_
-                       : tmp_buf,
+        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
         out.has_value() ? out.value().get() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf().buf_
-                        : tmp_buf,
+        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
         err.has_value() ? err.value().get() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf().buf_
-                        : tmp_buf);
+        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
 #else
     auto in = stdin_.get_parent_pipe_fd_for_polling();
     auto out = stdout_.get_parent_pipe_fd_for_polling();
     auto err = stderr_.get_parent_pipe_fd_for_polling();
 
     NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
-    std::vector<char> tmp_buf;
+    buffer tmp_buf;
     read_write_pipes(
         in.has_value() ? in.value().get() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf().buf_
-                       : tmp_buf,
+        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
         out.has_value() ? out.value().get() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf().buf_
-                        : tmp_buf,
+        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
         err.has_value() ? err.value().get() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf().buf_
-                        : tmp_buf);
+        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
 #endif
   }
 #if !defined(_WIN32)
