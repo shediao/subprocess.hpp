@@ -273,12 +273,39 @@ class buffer {
   }
 
   // operator== for test
-  bool operator==(const buffer& other) const { return buf_ == other.buf_; }
-  bool operator==(std::string_view other) const {
-    return std::equal(buf_.begin(), buf_.end(), other.begin(), other.end());
+  bool operator==(const buffer& other) const {
+    return std::equal(buf_.begin(), buf_.end(), other.buf_.begin(),
+                      other.buf_.end());
+  }
+  template <typename T>
+  bool operator==(std::span<T> other) const {
+    std::span<const unsigned char> other_span{
+        reinterpret_cast<unsigned char const*>(other.data()),
+        other.size() * sizeof(T)};
+    return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
+                      other_span.end());
+  }
+  template <typename CharT>
+  bool operator==(std::basic_string_view<CharT> other) const {
+    std::span<const unsigned char> other_span{
+        reinterpret_cast<unsigned char const*>(other.data()),
+        other.size() * sizeof(CharT)};
+    return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
+                      other_span.end());
+  }
+  template <typename CharT>
+  bool operator==(std::basic_string<CharT> other) const {
+    std::span<const unsigned char> other_span{
+        reinterpret_cast<unsigned char const*>(other.data()),
+        other.size() * sizeof(CharT)};
+    return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
+                      other_span.end());
   }
   bool operator==(const char* other) const {
     return this->operator==(std::string_view(other));
+  }
+  bool operator==(const wchar_t* other) const {
+    return this->operator==(std::wstring_view(other));
   }
 
  private:

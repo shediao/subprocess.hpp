@@ -178,7 +178,7 @@ TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
 
   // Give the drain thread a moment to finish.
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_EQ(drained.to_string(), input_str);
+  EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
@@ -199,7 +199,7 @@ TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
                                            err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 TEST_F(MultiplexPollTest, OnlyStderrActiveReadsData) {
@@ -220,7 +220,7 @@ TEST_F(MultiplexPollTest, OnlyStderrActiveReadsData) {
                                            err_buf);
 
   EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexPollTest, AllThreeActive) {
@@ -257,9 +257,9 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   // Give background threads a brief moment to complete
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(drained, input_str);
+  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexPollTest, EmptyStdinBuffer) {
@@ -280,7 +280,7 @@ TEST_F(MultiplexPollTest, EmptyStdinBuffer) {
                                            err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
   EXPECT_TRUE(in_buf.empty());
 }
 
@@ -320,9 +320,9 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
   std::this_thread::sleep_for(std::chrono::milliseconds(30));
 
   EXPECT_EQ(drained.size(), input_str.size());
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained, input_str);
   EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 // ===========================================================================
@@ -365,7 +365,7 @@ TEST_F(MultiplexSelectTest, OnlyStdinActiveWritesData) {
 
   EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexSelectTest, OnlyStdoutActiveReadsData) {
@@ -386,7 +386,7 @@ TEST_F(MultiplexSelectTest, OnlyStdoutActiveReadsData) {
                                              err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 TEST_F(MultiplexSelectTest, OnlyStderrActiveReadsData) {
@@ -407,7 +407,7 @@ TEST_F(MultiplexSelectTest, OnlyStderrActiveReadsData) {
                                              err_buf);
 
   EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexSelectTest, AllThreeActive) {
@@ -443,9 +443,9 @@ TEST_F(MultiplexSelectTest, AllThreeActive) {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(drained, input_str);
+  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexSelectTest, EmptyStdinBuffer) {
@@ -466,7 +466,7 @@ TEST_F(MultiplexSelectTest, EmptyStdinBuffer) {
                                              err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 TEST_F(MultiplexSelectTest, LargerDataTransfer) {
@@ -504,9 +504,9 @@ TEST_F(MultiplexSelectTest, LargerDataTransfer) {
   std::this_thread::sleep_for(std::chrono::milliseconds(30));
 
   EXPECT_EQ(drained.size(), input_str.size());
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained, input_str);
   EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 // ===========================================================================
@@ -552,7 +552,7 @@ TEST_F(MultiplexEpollTest, OnlyStdinActiveWritesData) {
 
   EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexEpollTest, OnlyStdoutActiveReadsData) {
@@ -573,7 +573,7 @@ TEST_F(MultiplexEpollTest, OnlyStdoutActiveReadsData) {
                                             err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 TEST_F(MultiplexEpollTest, OnlyStderrActiveReadsData) {
@@ -594,7 +594,7 @@ TEST_F(MultiplexEpollTest, OnlyStderrActiveReadsData) {
                                             err_buf);
 
   EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexEpollTest, AllThreeActive) {
@@ -630,9 +630,9 @@ TEST_F(MultiplexEpollTest, AllThreeActive) {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(drained, input_str);
+  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexEpollTest, EmptyStdinBuffer) {
@@ -653,7 +653,7 @@ TEST_F(MultiplexEpollTest, EmptyStdinBuffer) {
                                             err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 TEST_F(MultiplexEpollTest, LargerDataTransfer) {
@@ -691,9 +691,9 @@ TEST_F(MultiplexEpollTest, LargerDataTransfer) {
   std::this_thread::sleep_for(std::chrono::milliseconds(30));
 
   EXPECT_EQ(drained.size(), input_str.size());
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained, input_str);
   EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 #endif  // defined(__linux__)
 
@@ -741,7 +741,7 @@ TEST_F(MultiplexKqueueTest, OnlyStdinActiveWritesData) {
 
   EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexKqueueTest, OnlyStdoutActiveReadsData) {
@@ -762,7 +762,7 @@ TEST_F(MultiplexKqueueTest, OnlyStdoutActiveReadsData) {
                                              err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 TEST_F(MultiplexKqueueTest, OnlyStderrActiveReadsData) {
@@ -783,7 +783,7 @@ TEST_F(MultiplexKqueueTest, OnlyStderrActiveReadsData) {
                                              err_buf);
 
   EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexKqueueTest, AllThreeActive) {
@@ -819,9 +819,9 @@ TEST_F(MultiplexKqueueTest, AllThreeActive) {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
-  EXPECT_EQ(std::string(err_buf.begin(), err_buf.end()), err_str);
+  EXPECT_EQ(drained, input_str);
+  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(err_buf, err_str);
 }
 
 TEST_F(MultiplexKqueueTest, EmptyStdinBuffer) {
@@ -842,7 +842,7 @@ TEST_F(MultiplexKqueueTest, EmptyStdinBuffer) {
                                              err_buf);
 
   EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 
 TEST_F(MultiplexKqueueTest, LargerDataTransfer) {
@@ -880,9 +880,9 @@ TEST_F(MultiplexKqueueTest, LargerDataTransfer) {
   std::this_thread::sleep_for(std::chrono::milliseconds(30));
 
   EXPECT_EQ(drained.size(), input_str.size());
-  EXPECT_EQ(std::string(drained.begin(), drained.end()), input_str);
+  EXPECT_EQ(drained, input_str);
   EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(std::string(out_buf.begin(), out_buf.end()), output_str);
+  EXPECT_EQ(out_buf, output_str);
 }
 #endif  // defined(__APPLE__) || defined(__FreeBSD__) || ...
 
