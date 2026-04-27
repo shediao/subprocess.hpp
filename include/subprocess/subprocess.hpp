@@ -178,6 +178,7 @@ class Redirector;
 class StdinRedirector;
 class StdoutRedirector;
 class StderrRedirector;
+
 inline void die(std::string const& msg) {
 #if SUBPROCESS_HAS_EXCEPTIONS
   throw std::runtime_error(msg);
@@ -193,87 +194,41 @@ inline void die(std::string const& msg) {
   abort();
 #endif
 }
-}  // namespace detail
 
 #if defined(_WIN32)
 // Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
-inline std::wstring to_wstring(const std::string_view str,
-                               const UINT from_codepage = CP_UTF8) {
+inline std::wstring utf8_to_utf16(const std::string_view str) {
   if (str.empty()) {
     return {};
   }
-  int size_needed = MultiByteToWideChar(from_codepage, 0, str.data(),
-                                        (int)str.size(), NULL, 0);
+  int size_needed =
+      MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
   if (size_needed <= 0) {
-    detail::die("MultiByteToWideChar error: " + std::to_string(GetLastError()));
+    die("MultiByteToWideChar error: " + std::to_string(GetLastError()));
   }
   std::wstring wstr(static_cast<size_t>(size_needed), 0);
-  MultiByteToWideChar(from_codepage, 0, str.data(), (int)str.size(), &wstr[0],
+  MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstr[0],
                       size_needed);
   return wstr;
 }
 
 // Helper function to convert a UTF-16 std::wstring to a UTF-8 std::string
-inline std::string to_string(const std::wstring_view wstr,
-                             const UINT to_codepage = CP_UTF8) {
+inline std::string utf16_to_utf8(const std::wstring_view wstr) {
   if (wstr.empty()) {
     return {};
   }
-  int size_needed = WideCharToMultiByte(to_codepage, 0, wstr.data(),
+  int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
                                         (int)wstr.size(), NULL, 0, NULL, NULL);
   if (size_needed <= 0) {
-    detail::die("WideCharToMultiByte error: " + std::to_string(GetLastError()));
+    die("WideCharToMultiByte error: " + std::to_string(GetLastError()));
   }
   std::string str(static_cast<size_t>(size_needed), 0);
-  WideCharToMultiByte(to_codepage, 0, wstr.data(), (int)wstr.size(), &str[0],
+  WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), &str[0],
                       size_needed, NULL, NULL);
   return str;
 }
 #endif  // _WIN32
 
-class buffer {
-  friend class detail::subprocess;
-  friend class detail::Redirector;
-  friend class detail::StdinRedirector;
-  friend class detail::StdoutRedirector;
-  friend class detail::StderrRedirector;
-
- public:
-  buffer() = default;
-  buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
-  auto* data() { return buf_.data(); }
-  auto size() { return buf_.size(); }
-  auto to_string() {
-#if defined(_WIN32)
-    if (encode_codepage_ == decode_codepage_) {
-      return std::string(buf_.data(), buf_.size());
-    } else {
-      return subprocess::to_string(
-          subprocess::to_wstring({buf_.data(), buf_.size()}, encode_codepage_),
-          decode_codepage_);
-    }
-#else
-    return std::string(buf_.data(), buf_.size());
-#endif
-  }
-  auto empty() { return buf_.empty(); }
-  auto clear() { return buf_.clear(); }
-#if defined(_WIN32)
-  UINT encode_codepage() { return encode_codepage_; };
-  UINT decode_codepage() { return decode_codepage_; };
-  void encode_codepage(UINT codepage) { encode_codepage_ = codepage; };
-  void decode_codepage(UINT codepage) { decode_codepage_ = codepage; };
-#endif
-
- private:
-#if defined(_WIN32)
-  UINT encode_codepage_{CP_UTF8};
-  UINT decode_codepage_{CP_UTF8};
-#endif
-  std::vector<char> buf_;
-};
-
-namespace detail {
 #if defined(_WIN32)
 using NativeHandle = HANDLE;
 static inline const NativeHandle INVALID_NATIVE_HANDLE_VALUE =
@@ -517,7 +472,7 @@ inline std::string get_last_error_message() {
                  NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                  (LPWSTR)&error_msg, 0, NULL);
   if (error_msg) {
-    auto ret = to_string((wchar_t*)error_msg);
+    auto ret = utf16_to_utf8((wchar_t*)error_msg);
     LocalFree(error_msg);
     return ret;
   } else {
@@ -1181,7 +1136,7 @@ inline std::optional<std::string> get_file_extension(std::string const& f) {
 
 inline bool is_executable(std::string const& f) {
 #if defined(_WIN32)
-  auto attr = GetFileAttributesW(to_wstring(f).c_str());
+  auto attr = GetFileAttributesW(utf8_to_utf16(f).c_str());
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 #else
   struct stat sb;
@@ -1192,7 +1147,7 @@ inline bool is_executable(std::string const& f) {
 
 inline std::optional<std::string> get_env(std::string const& key) {
 #if defined(_WIN32)
-  auto wkey = to_wstring(key);
+  auto wkey = utf8_to_utf16(key);
   auto const size =
       GetEnvironmentVariableW(wkey.c_str(), nullptr, static_cast<DWORD>(0));
   if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
@@ -1202,7 +1157,7 @@ inline std::optional<std::string> get_env(std::string const& key) {
   buf.resize(static_cast<size_t>(size));
   GetEnvironmentVariableW(wkey.c_str(), buf.data(),
                           static_cast<DWORD>(buf.size()));
-  return to_string(std::wstring{static_cast<const wchar_t*>(buf.data())});
+  return utf16_to_utf8(std::wstring{static_cast<const wchar_t*>(buf.data())});
 #else
   auto* env = ::getenv(key.c_str());
   if (env) {
@@ -1377,7 +1332,7 @@ struct File {
   explicit File(std::string const &p, bool append = false)
       : path_{
 #if defined(_WIN32)
-        to_wstring(p)
+        utf8_to_utf16(p)
 #else
           p
 #endif
@@ -1438,7 +1393,7 @@ struct File {
             : (type == OpenType::WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
         FILE_ATTRIBUTE_NORMAL, nullptr);
     if (fd_ == INVALID_HANDLE_VALUE) {
-      die("open failed: " + to_string(path_) +
+      die("open failed: " + utf16_to_utf8(path_) +
           ", error: " + std::to_string(GetLastError()));
     }
 #else
@@ -1461,6 +1416,26 @@ struct File {
 #endif
   bool append_{false};
   NativeHandle fd_{INVALID_NATIVE_HANDLE_VALUE};
+};
+
+class buffer {
+  friend class detail::subprocess;
+  friend class detail::Redirector;
+  friend class detail::StdinRedirector;
+  friend class detail::StdoutRedirector;
+  friend class detail::StderrRedirector;
+
+ public:
+  buffer() = default;
+  buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
+  auto* data() { return buf_.data(); }
+  auto size() { return buf_.size(); }
+  auto to_string() { return std::string(buf_.data(), buf_.size()); }
+  auto empty() { return buf_.empty(); }
+  auto clear() { return buf_.clear(); }
+
+ private:
+  std::vector<char> buf_;
 };
 
 class Buffer {
@@ -1867,7 +1842,7 @@ struct EnvAppend {
 struct EnvItemAppend {
   EnvItemAppend& operator+=(std::string val) {
 #if defined(_WIN32)
-    std::get<1>(kv) = to_wstring(val);
+    std::get<1>(kv) = utf8_to_utf16(val);
 #else
     std::get<1>(kv) = val;
 #endif
@@ -1876,7 +1851,7 @@ struct EnvItemAppend {
   }
   EnvItemAppend& operator<<=(std::string val) {
 #if defined(_WIN32)
-    std::get<1>(kv) = to_wstring(val);
+    std::get<1>(kv) = utf8_to_utf16(val);
 #else
     std::get<1>(kv) = val;
 #endif
@@ -1908,7 +1883,7 @@ struct EnvItemAppend {
 struct cwd_operator {
   Cwd operator=(std::string const& p) const {
 #if defined(_WIN32)
-    return Cwd{to_wstring(p)};
+    return Cwd{utf8_to_utf16(p)};
 #else
     return Cwd{p};
 #endif
@@ -1922,7 +1897,7 @@ struct env_operator {
 #if defined(_WIN32)
     std::map<std::wstring, std::wstring> wenv;
     for (auto const& entry : env) {
-      wenv[to_wstring(entry.first)] = to_wstring(entry.second);
+      wenv[utf8_to_utf16(entry.first)] = utf8_to_utf16(entry.second);
     }
     return Env{std::move(wenv)};
 #else
@@ -1938,7 +1913,7 @@ struct env_operator {
 #if defined(_WIN32)
     std::map<std::wstring, std::wstring> wenv;
     for (auto const& entry : env) {
-      wenv[to_wstring(entry.first)] = to_wstring(entry.second);
+      wenv[utf8_to_utf16(entry.first)] = utf8_to_utf16(entry.second);
     }
     return EnvAppend{std::move(wenv)};
 #else
@@ -1952,7 +1927,7 @@ struct env_operator {
 #endif
   EnvItemAppend operator[](std::string key) const {
 #if defined(_WIN32)
-    return EnvItemAppend{{to_wstring(key), L"", true}};
+    return EnvItemAppend{{utf8_to_utf16(key), L"", true}};
 #else
     return EnvItemAppend{{key, "", true}};
 #endif
@@ -2117,7 +2092,7 @@ class subprocess {
             [](auto const& cmd) {
               std::vector<std::wstring> ret;
               std::transform(cmd.begin(), cmd.end(), std::back_inserter(ret),
-                             [](auto const& s) { return to_wstring(s); });
+                             [](auto const& s) { return utf8_to_utf16(s); });
               return ret;
             }(cmd),
             std::forward<T>(args)...) {}
@@ -2156,7 +2131,7 @@ class subprocess {
     if (success) {
       manage_pipe_io();
     } else {
-      std::wcerr << to_wstring(get_last_error_message()) << L'\n';
+      std::wcerr << utf8_to_utf16(get_last_error_message()) << L'\n';
       process_information_.hProcess = INVALID_NATIVE_HANDLE_VALUE;
       stdin_.close_all();
       stdout_.close_all();
@@ -2443,6 +2418,8 @@ inline subprocess_array operator|(subprocess_array lhs, subprocess&& rhs) {
 }
 }  // namespace detail
 
+using detail::buffer;
+
 namespace named_arguments {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 using detail::named_args::$cwd;
@@ -2632,7 +2609,7 @@ inline std::string getcwd() {
   if (GetCurrentDirectoryW(size, buffer.data()) == 0) {
     return "";
   }
-  return to_string(buffer.data());
+  return detail::utf16_to_utf8(buffer.data());
 #else
   std::unique_ptr<char, decltype(&::free)> ret(::getcwd(nullptr, 0), &::free);
   if (ret) {
@@ -2645,7 +2622,7 @@ inline std::string getcwd() {
 
 inline bool chdir(std::string const& dir) {
 #if defined(_WIN32)
-  return SetCurrentDirectoryW(to_wstring(dir).c_str());
+  return SetCurrentDirectoryW(detail::utf8_to_utf16(dir).c_str());
 #else
   return -1 != ::chdir(dir.c_str());
 #endif
