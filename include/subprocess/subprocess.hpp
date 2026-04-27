@@ -231,10 +231,10 @@ inline void die(std::string const& msg) {
 #else
   if (!msg.empty()) {
 #if defined(_WIN32)
-    WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg.c_str(), msg.size(), NULL,
-              NULL);
+    (void)WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg.c_str(),
+                    static_cast<DWORD>(msg.size()), NULL, NULL);
 #else
-    write(STDERR_FILENO, msg.c_str(), msg.size());
+    (void)write(STDERR_FILENO, msg.c_str(), msg.size());
 #endif
   }
   abort();
