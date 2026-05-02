@@ -1,12 +1,10 @@
 #include <chrono>
-#include <thread>
 
 #include "gtest/gtest.h"
 #include "subprocess/subprocess.hpp"
 
 using namespace std::chrono_literals;
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
 using subprocess::capture_run;
 using subprocess::run;
 

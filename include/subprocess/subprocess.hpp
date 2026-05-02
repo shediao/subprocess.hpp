@@ -6,13 +6,14 @@
  *   int run(...);
  *   int $(...);
  *   namespace named_arguments {
- *     cwd;     $cwd;
- *     devnull; $devnull;
- *     env;     $env;
- *     stderr;  $stderr;
- *     stdin;   $stdin;
- *     stdout;  $stdout;
- *     timeout; $timeout;
+ *     cwd;              $cwd;
+ *     devnull;          $devnull;
+ *     env;              $env;
+ *     stderr;           $stderr;
+ *     stdin;            $stdin;
+ *     stdout;           $stdout;
+ *     timeout;          $timeout;
+ *     timeout_infinite; $timeout_infinite;
  *   }
  * }
  * using subprocess::$;
@@ -102,6 +103,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -2019,6 +2021,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static cwd_operator cwd;
 [[maybe_unused]] inline constexpr static env_operator env;
 [[maybe_unused]] inline constexpr static timeout_operator timeout;
+[[maybe_unused]] inline constexpr static int timeout_infinite = INT_MAX;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
@@ -2032,6 +2035,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static cwd_operator $cwd;
 [[maybe_unused]] inline constexpr static env_operator $env;
 [[maybe_unused]] inline constexpr static timeout_operator $timeout;
+[[maybe_unused]] inline constexpr static int $timeout_infinite = INT_MAX;
 #endif
 }  // namespace named_args
 template <typename T>
@@ -2111,7 +2115,12 @@ class subprocess {
                cwd_ = arg.cwd;
              }
              if constexpr (std::is_same_v<ArgType, Timeout>) {
-               timeout_ = arg.timeout;
+               if (arg.timeout ==
+                   std::chrono::seconds(named_args::timeout_infinite)) {
+                 timeout_ = std::nullopt;
+               } else {
+                 timeout_ = arg.timeout;
+               }
              }
              static_assert(
                  std::is_same_v<Env, std::decay_t<T>> ||
@@ -2594,6 +2603,7 @@ using detail::named_args::$stderr;
 using detail::named_args::$stdin;
 using detail::named_args::$stdout;
 using detail::named_args::$timeout;
+using detail::named_args::$timeout_infinite;
 #endif
 using detail::named_args::cwd;
 using detail::named_args::devnull;
@@ -2602,6 +2612,7 @@ using detail::named_args::std_err;
 using detail::named_args::std_in;
 using detail::named_args::std_out;
 using detail::named_args::timeout;
+using detail::named_args::timeout_infinite;
 }  // namespace named_arguments
 
 template <typename... T>
@@ -2818,6 +2829,7 @@ using subprocess::named_arguments::$stderr;
 using subprocess::named_arguments::$stdin;
 using subprocess::named_arguments::$stdout;
 using subprocess::named_arguments::$timeout;
+using subprocess::named_arguments::$timeout_infinite;
 #endif
 
 #endif  // __SUBPROCESS_SUBPROCESS_HPP__
