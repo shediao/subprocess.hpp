@@ -2186,6 +2186,23 @@ class subprocess {
   void async_run() {
     prepare_all_stdio_redirections();
 
+#if defined(_WIN32)
+    // Create a Job Object to manage the entire process tree.
+    // This allows the watchdog to terminate all child processes (e.g., when
+    // cmd.exe spawns ping.exe, terminating cmd.exe alone does not kill ping,
+    // and ping would keep stdout/stderr pipes open, blocking manage_pipe_io).
+    HANDLE hJob = CreateJobObjectW(NULL, NULL);
+    if (hJob) {
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
+      jeli.BasicLimitInformation.LimitFlags =
+          JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli,
+                              sizeof(jeli));
+      job_handle_->Close();
+      *job_handle_ = HandleGuard(hJob);
+    }
+#endif
+
     // Launch a watchdog thread if a timeout is set.
     // The watchdog kills the process after timeout expires, unblocking
     // manage_pipe_io() if it is stuck waiting for pipe I/O.
@@ -2195,14 +2212,14 @@ class subprocess {
       }
       auto timeout_val = *timeout_;
 #if defined(_WIN32)
-      HANDLE h = process_information_.hProcess;
+      auto job = job_handle_;
 #else
       pid_t p = pid_;
 #endif
       auto done = watchdog_done_;
       watchdog_thread_.emplace([timeout_val,
 #if defined(_WIN32)
-                                h,
+                                job,
 #else
                                 p,
 #endif
@@ -2215,9 +2232,12 @@ class subprocess {
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        // Timeout expired — kill the process
+        // Timeout expired — kill the entire process tree
 #if defined(_WIN32)
-        TerminateProcess(h, 1);
+        if (job->IsValid()) {
+          TerminateJobObject(job->get(), 1);
+          job->Close();
+        }
 #else
         kill(p, SIGTERM);
         // Give the process a short grace period to handle SIGTERM
@@ -2254,6 +2274,10 @@ class subprocess {
         &process_information_);
 
     if (success) {
+      if (job_handle_->IsValid()) {
+        AssignProcessToJobObject(job_handle_->get(),
+                                 process_information_.hProcess);
+      }
       launch_watchdog();
       manage_pipe_io();
     } else {
@@ -2495,6 +2519,7 @@ class subprocess {
   std::shared_ptr<std::atomic<bool>> watchdog_done_{
       std::make_shared<std::atomic<bool>>(false)};
 #if defined(_WIN32)
+  std::shared_ptr<HandleGuard> job_handle_{std::make_shared<HandleGuard>()};
   PROCESS_INFORMATION process_information_;
   STARTUPINFOW startup_info_;
 #else
