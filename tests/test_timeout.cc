@@ -147,7 +147,7 @@ TEST(TimeoutTest, VeryShortTimeout) {
 
 // 8. Timeout with variadic run (no vector for command args)
 TEST(TimeoutTest, VariadicRunWithTimeout) {
-  auto exit_code = run("true", $timeout = std::chrono::seconds(5));
+  auto exit_code = run(CMD_TRUE, $timeout = std::chrono::seconds(5));
   ASSERT_EQ(exit_code, 0);
 }
 
