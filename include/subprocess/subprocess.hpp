@@ -12,6 +12,7 @@
  *     stderr;  $stderr;
  *     stdin;   $stdin;
  *     stdout;  $stdout;
+ *     timeout; $timeout;
  *   }
  * }
  * using subprocess::$;
@@ -21,6 +22,7 @@
  * using subprocess::named_arguments::$stderr;
  * using subprocess::named_arguments::$stdin;
  * using subprocess::named_arguments::$stdout;
+ * using subprocess::named_arguments::$timeout;
  *
  * EXAMPLES:
  *
@@ -83,6 +85,7 @@
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
 #include <spawn.h>
 #endif
+#include <signal.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -97,6 +100,8 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -1937,6 +1942,17 @@ struct EnvItemAppend {
 #endif
 };
 
+struct Timeout {
+  std::chrono::milliseconds timeout;
+};
+
+struct timeout_operator {
+  Timeout operator=(std::chrono::milliseconds ms) const { return Timeout{ms}; }
+  Timeout operator=(int seconds) const {
+    return Timeout{std::chrono::seconds(seconds)};
+  }
+};
+
 struct cwd_operator {
   Cwd operator=(std::string const& p) const {
 #if defined(_WIN32)
@@ -2002,6 +2018,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static stderr_redirector std_err;
 [[maybe_unused]] inline constexpr static cwd_operator cwd;
 [[maybe_unused]] inline constexpr static env_operator env;
+[[maybe_unused]] inline constexpr static timeout_operator timeout;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
@@ -2014,6 +2031,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static stderr_redirector $stderr;
 [[maybe_unused]] inline constexpr static cwd_operator $cwd;
 [[maybe_unused]] inline constexpr static env_operator $env;
+[[maybe_unused]] inline constexpr static timeout_operator $timeout;
 #endif
 }  // namespace named_args
 template <typename T>
@@ -2022,6 +2040,7 @@ concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
                             std::is_same_v<StdoutRedirector, std::decay_t<T>> ||
                             std::is_same_v<StderrRedirector, std::decay_t<T>> ||
                             std::is_same_v<Cwd, std::decay_t<T>> ||
+                            std::is_same_v<Timeout, std::decay_t<T>> ||
                             std::is_same_v<EnvAppend, std::decay_t<T>> ||
                             std::is_same_v<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
@@ -2091,12 +2110,16 @@ class subprocess {
              if constexpr (std::is_same_v<ArgType, Cwd>) {
                cwd_ = arg.cwd;
              }
+             if constexpr (std::is_same_v<ArgType, Timeout>) {
+               timeout_ = arg.timeout;
+             }
              static_assert(
                  std::is_same_v<Env, std::decay_t<T>> ||
                      std::is_same_v<StdinRedirector, std::decay_t<T>> ||
                      std::is_same_v<StdoutRedirector, std::decay_t<T>> ||
                      std::is_same_v<StderrRedirector, std::decay_t<T>> ||
                      std::is_same_v<Cwd, std::decay_t<T>> ||
+                     std::is_same_v<Timeout, std::decay_t<T>> ||
                      std::is_same_v<EnvAppend, std::decay_t<T>> ||
                      std::is_same_v<EnvItemAppend, std::decay_t<T>>,
                  "Unsupported argument type passed to run().");
@@ -2162,6 +2185,51 @@ class subprocess {
 
   void async_run() {
     prepare_all_stdio_redirections();
+
+    // Launch a watchdog thread if a timeout is set.
+    // The watchdog kills the process after timeout expires, unblocking
+    // manage_pipe_io() if it is stuck waiting for pipe I/O.
+    auto launch_watchdog = [this]() {
+      if (!timeout_.has_value()) {
+        return;
+      }
+      auto timeout_val = *timeout_;
+#if defined(_WIN32)
+      HANDLE h = process_information_.hProcess;
+#else
+      pid_t p = pid_;
+#endif
+      auto done = watchdog_done_;
+      watchdog_thread_.emplace([timeout_val,
+#if defined(_WIN32)
+                                h,
+#else
+                                p,
+#endif
+                                done]() {
+        // Sleep in small increments to check for early cancellation
+        auto deadline = std::chrono::steady_clock::now() + timeout_val;
+        while (std::chrono::steady_clock::now() < deadline) {
+          if (done->load(std::memory_order_relaxed)) {
+            return;  // cancelled, process already finished
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        // Timeout expired — kill the process
+#if defined(_WIN32)
+        TerminateProcess(h, 1);
+#else
+        kill(p, SIGTERM);
+        // Give the process a short grace period to handle SIGTERM
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Check if process is still alive (kill with signal 0 does not reap)
+        if (kill(p, 0) == 0) {
+          kill(p, SIGKILL);
+        }
+#endif
+      });
+    };
+
 #if defined(_WIN32)
     auto in = stdin_.get_child_process_stdio_handle();
     startup_info_.hStdInput =
@@ -2186,6 +2254,7 @@ class subprocess {
         &process_information_);
 
     if (success) {
+      launch_watchdog();
       manage_pipe_io();
     } else {
       std::wcerr << utf8_to_utf16(get_last_error_message()) << L'\n';
@@ -2203,6 +2272,7 @@ class subprocess {
     }
     add_posix_spawn_file_actions(action);
     posix_spawn_file_actions_destroy(&action);
+    launch_watchdog();
     manage_pipe_io();
 #else   // SUBPROCESS_USE_POSIX_SPAWN
     auto pid = fork();
@@ -2212,6 +2282,7 @@ class subprocess {
       execute_command_in_child();
     } else {
       pid_ = pid;
+      launch_watchdog();
       manage_pipe_io();
     }
 #endif  // !SUBPROCESS_USE_POSIX_SPAWN
@@ -2223,9 +2294,18 @@ class subprocess {
     return wait_for_exit();
   }
 
+  void stop_watchdog() {
+    if (watchdog_thread_.has_value()) {
+      watchdog_done_->store(true, std::memory_order_relaxed);
+      watchdog_thread_->join();
+      watchdog_thread_.reset();
+    }
+  }
+
 #if defined(_WIN32)
   int wait_for_exit() {
     if (process_information_.hProcess == INVALID_NATIVE_HANDLE_VALUE) {
+      stop_watchdog();
       return 127;
     }
     DWORD ret{127};
@@ -2234,15 +2314,20 @@ class subprocess {
 
     WaitForSingleObject(process_information_.hProcess, INFINITE);
     GetExitCodeProcess(process_information_.hProcess, &ret);
+
+    stop_watchdog();
     return static_cast<int>(ret);
   }
 #else
   int wait_for_exit() {
     if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
+      stop_watchdog();
       return 127;
     }
-    int status;
+    int status = 0;
     waitpid(pid_, &status, 0);
+    stop_watchdog();
+
     auto return_code = -1;
     if (WIFEXITED(status)) {
       return_code = WEXITSTATUS(status);
@@ -2405,6 +2490,10 @@ class subprocess {
   StdinRedirector stdin_;
   StdoutRedirector stdout_;
   StderrRedirector stderr_;
+  std::optional<std::chrono::milliseconds> timeout_{std::nullopt};
+  std::optional<std::thread> watchdog_thread_{std::nullopt};
+  std::shared_ptr<std::atomic<bool>> watchdog_done_{
+      std::make_shared<std::atomic<bool>>(false)};
 #if defined(_WIN32)
   PROCESS_INFORMATION process_information_;
   STARTUPINFOW startup_info_;
@@ -2479,6 +2568,7 @@ using detail::named_args::$env;
 using detail::named_args::$stderr;
 using detail::named_args::$stdin;
 using detail::named_args::$stdout;
+using detail::named_args::$timeout;
 #endif
 using detail::named_args::cwd;
 using detail::named_args::devnull;
@@ -2486,6 +2576,7 @@ using detail::named_args::env;
 using detail::named_args::std_err;
 using detail::named_args::std_in;
 using detail::named_args::std_out;
+using detail::named_args::timeout;
 }  // namespace named_arguments
 
 template <typename... T>
@@ -2701,6 +2792,7 @@ using subprocess::named_arguments::$env;
 using subprocess::named_arguments::$stderr;
 using subprocess::named_arguments::$stdin;
 using subprocess::named_arguments::$stdout;
+using subprocess::named_arguments::$timeout;
 #endif
 
 #endif  // __SUBPROCESS_SUBPROCESS_HPP__
