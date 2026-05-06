@@ -113,7 +113,7 @@ class MultiplexTestBase : public ::testing::Test {
   // The thread writes |data|, then closes the fd to signal EOF.
   static void start_stdout_stderr_feeder_thread(NativeHandle write_fd,
                                                 const buffer& data) {
-    std::thread([write_fd, data]() {
+    std::thread([write_fd, &data]() {
       size_t written = 0;
       while (written < data.size()) {
         ssize_t n =

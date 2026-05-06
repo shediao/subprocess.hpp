@@ -262,6 +262,10 @@ class buffer {
 
  public:
   buffer() = default;
+  ~buffer() = default;
+  buffer(const buffer&) = delete;
+  buffer(buffer&& other)
+      : buf_(std::move(other.buf_)), callback_(other.callback_) {}
   buffer(callback&& cb) : callback_(std::move(cb)) {}
   buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
   buffer(std::string_view const& str, callback&& cb)
@@ -336,7 +340,7 @@ class buffer {
 
  private:
   std::vector<unsigned char> buf_{};
-  callback callback_{};
+  callback callback_{nullptr};
 };
 
 class HandleGuard {
