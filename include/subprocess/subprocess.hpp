@@ -472,6 +472,10 @@ inline void append_windows_arg(std::vector<wchar_t>& cmd,
                                std::wstring const& arg) {
   bool needs_quoting =
       arg.empty() || arg.find_first_of(L" \t\n\v\"") != std::wstring::npos;
+  if (needs_quoting && (arg.size() > 1) && arg[0] == L'\"' &&
+      arg.find(L'\"') == (arg.size() - 1)) {
+    needs_quoting = false;
+  }
   if (!needs_quoting) {
     cmd.insert(cmd.end(), arg.begin(), arg.end());
     return;
