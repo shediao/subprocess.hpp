@@ -242,10 +242,11 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
-  start_stdout_stderr_feeder_thread(pp_err.release_write(),
-                                    {err_str.begin(), err_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer err_data(err_str.begin(), err_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
 
   subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
                                            err_buf);
@@ -308,8 +309,9 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
   subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
                                            err_buf);
@@ -429,10 +431,11 @@ TEST_F(MultiplexSelectTest, AllThreeActive) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
-  start_stdout_stderr_feeder_thread(pp_err.release_write(),
-                                    {err_str.begin(), err_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer err_data(err_str.begin(), err_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
 
   subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
                                              err_buf);
@@ -492,8 +495,9 @@ TEST_F(MultiplexSelectTest, LargerDataTransfer) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
   subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
                                              err_buf);
@@ -616,10 +620,11 @@ TEST_F(MultiplexEpollTest, AllThreeActive) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
-  start_stdout_stderr_feeder_thread(pp_err.release_write(),
-                                    {err_str.begin(), err_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer err_data(err_str.begin(), err_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
 
   subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
                                             err_buf);
@@ -679,8 +684,9 @@ TEST_F(MultiplexEpollTest, LargerDataTransfer) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
   subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
                                             err_buf);
@@ -805,10 +811,11 @@ TEST_F(MultiplexKqueueTest, AllThreeActive) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
-  start_stdout_stderr_feeder_thread(pp_err.release_write(),
-                                    {err_str.begin(), err_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  buffer err_data(err_str.begin(), err_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
 
   subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
                                              err_buf);
@@ -868,8 +875,9 @@ TEST_F(MultiplexKqueueTest, LargerDataTransfer) {
   buffer drained;
 
   start_stdin_drain_thread(pp_in.release_read(), drained);
-  start_stdout_stderr_feeder_thread(pp_out.release_write(),
-                                    {output_str.begin(), output_str.end()});
+
+  buffer out_data(output_str.begin(), output_str.end());
+  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
 
   subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
                                              err_buf);
