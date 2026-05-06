@@ -258,11 +258,18 @@ inline void close_native_handle(NativeHandle& handle) {
 }
 
 class buffer {
+  using callback = std::function<void(const unsigned char*, size_t)>;
+
  public:
   buffer() = default;
+  buffer(callback&& cb) : callback_(std::move(cb)) {}
   buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
+  buffer(std::string_view const& str, callback&& cb)
+      : buf_(str.begin(), str.end()), callback_(std::move(cb)) {}
   buffer(std::string::iterator first, std::string::iterator last)
       : buf_(first, last) {}
+  buffer(std::string::iterator first, std::string::iterator last, callback&& cb)
+      : buf_(first, last), callback_(std::move(cb)) {}
   auto* data() const { return buf_.data(); }
   auto size() const { return buf_.size(); }
   auto span() const { return std::span(buf_.data(), buf_.size()); }
@@ -277,6 +284,9 @@ class buffer {
 
   void append(const char* data, size_t size) {
     buf_.insert(buf_.end(), data, data + size);
+    if (callback_) {
+      callback_(reinterpret_cast<const unsigned char*>(data), size);
+    }
   }
 
   // operator== for test
@@ -325,7 +335,8 @@ class buffer {
   }
 
  private:
-  std::vector<unsigned char> buf_;
+  std::vector<unsigned char> buf_{};
+  callback callback_{};
 };
 
 class HandleGuard {
