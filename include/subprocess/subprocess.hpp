@@ -161,7 +161,7 @@ extern char** environ;
 #define SUBPROCESS_HAS_EXCEPTIONS 1
 #elif defined(__HP_aCC)
 // Exception handling is in effect by default in HP aCC compiler. It has to
-// be turned of by +noeh compiler option if desired.
+// be turned off by +noeh compiler option if desired.
 #define SUBPROCESS_HAS_EXCEPTIONS 1
 #else
 // For other compilers, we assume exceptions are disabled to be
@@ -616,20 +616,20 @@ inline void write_to_native_handle(NativeHandle& fd, buffer const& write_data) {
   fd = INVALID_NATIVE_HANDLE_VALUE;
 }
 
-inline void read_from_native_handle(NativeHandle& fd, buffer& reate_data) {
+inline void read_from_native_handle(NativeHandle& fd, buffer& read_data) {
   HandleGuard guard(fd);
   char buf[1024];
 #if defined(_WIN32)
   DWORD read_count{0};
   while (ReadFile(fd, buf, sizeof(buf), &read_count, 0) && read_count > 0) {
-    reate_data.append(buf, static_cast<size_t>(read_count));
+    read_data.append(buf, static_cast<size_t>(read_count));
   }
 #else
   ssize_t read_count = 0;
   do {
     read_count = read(fd, buf, std::size(buf));
     if (read_count > 0) {
-      reate_data.append(buf, static_cast<size_t>(read_count));
+      read_data.append(buf, static_cast<size_t>(read_count));
     }
     if (read_count == -1) {
       die(get_last_error_message());
