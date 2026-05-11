@@ -1304,7 +1304,9 @@ inline std::optional<std::string> find_command_in_path(
           ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"),
       path_env_sep);
   for (auto& ext : path_exts) {
-    std::transform(begin(ext), end(ext), ext.begin(), ::tolower);
+    std::transform(begin(ext), end(ext), ext.begin(), [](unsigned char c) {
+      return static_cast<char>(::tolower(c));
+    });
   }
   path_exts.insert(path_exts.begin(), "");
 #endif
