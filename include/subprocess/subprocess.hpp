@@ -97,6 +97,7 @@
 
 #include <concepts>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <tuple>
 #include <type_traits>
@@ -413,26 +414,39 @@ class HandleGuard {
   NativeHandle handle_;
 };
 
+template <typename C, typename CharT>
+concept has_emplace_back_range = requires(C c, std::basic_string<CharT> s) {
+  c.emplace_back(s.begin(), s.end());
+};
+
 template <typename C, typename CharT, typename F>
   requires requires(F f, CharT c) {
     { f(c) } -> std::convertible_to<bool>;
-  } &&
-           std::is_constructible_v<
-               C, typename std::vector<typename C::value_type>::iterator,
-               typename std::vector<typename C::value_type>::iterator>
-C split_to_if(const std::basic_string<CharT>& str, F f, int split_count = -1,
-              bool compress_tokens = false) {
+  } && (has_emplace_back_range<C, CharT> ||
+        requires(C c) {
+          c.insert(c.end(), std::declval<std::basic_string<CharT>>());
+        })
+void split_to_if(
+    C& c, const std::basic_string<CharT>& str, F f,
+    std::size_t split_count = (std::numeric_limits<std::size_t>::max)(),
+    bool compress_tokens = false) {
   auto begin = str.begin();
   auto delimiter = begin;
-  int count = 0;
+  std::size_t count = 0;
 
-  std::vector<typename C::value_type> to;
-  if (split_count > 0) {
-    to.reserve(split_count + 1);
+  if constexpr (requires { c.reserve(std::declval<std::size_t>()); }) {
+    if (split_count < (std::numeric_limits<std::size_t>::max)()) {
+      c.reserve(c.size() + split_count + 1);
+    }
   }
-  while ((split_count < 0 || count++ < split_count) &&
+
+  while ((count++ < split_count) &&
          (delimiter = std::find_if(begin, str.end(), f)) != str.end()) {
-    to.emplace_back(begin, delimiter);
+    if constexpr (has_emplace_back_range<C, CharT>) {
+      c.emplace_back(begin, delimiter);
+    } else {
+      c.insert(c.end(), std::basic_string<CharT>{begin, delimiter});
+    }
     if (compress_tokens) {
       begin = std::find_if_not(delimiter, str.end(), f);
     } else {
@@ -440,16 +454,19 @@ C split_to_if(const std::basic_string<CharT>& str, F f, int split_count = -1,
     }
   }
 
-  to.emplace_back(begin, str.end());
-  return C{std::make_move_iterator(to.begin()),
-           std::make_move_iterator(to.end())};
+  if constexpr (has_emplace_back_range<C, CharT>) {
+    c.emplace_back(begin, str.end());
+  } else {
+    c.insert(c.end(), std::basic_string<CharT>{begin, str.end()});
+  }
 }
 
 template <typename CharT>
 inline std::vector<std::basic_string<CharT>> split(
     const std::basic_string<CharT>& s, CharT delim) {
-  return split_to_if<std::vector<std::basic_string<CharT>>>(
-      s, [delim](CharT c) { return c == delim; });
+  std::vector<std::basic_string<CharT>> ret;
+  split_to_if(ret, s, [delim](CharT c) { return c == delim; });
+  return ret;
 }
 
 #if defined(_WIN32)
