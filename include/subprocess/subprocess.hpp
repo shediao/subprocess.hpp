@@ -145,6 +145,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -2240,21 +2241,21 @@ class subprocess {
 #else
       pid_t p = pid_;
 #endif
-      auto done = watchdog_done_;
+      auto state = watchdog_state_;
       watchdog_thread_.emplace([timeout_val,
 #if defined(_WIN32)
                                 job,
 #else
                                 p,
 #endif
-                                done]() {
-        // Sleep in small increments to check for early cancellation
-        auto deadline = std::chrono::steady_clock::now() + timeout_val;
-        while (std::chrono::steady_clock::now() < deadline) {
-          if (done->load(std::memory_order_relaxed)) {
+                                state]() {
+        // Wait for timeout or early cancellation via stop_watchdog().
+        {
+          std::unique_lock lock(state->mtx);
+          if (state->cv.wait_for(lock, timeout_val,
+                                 [&state] { return state->done; })) {
             return;  // cancelled, process already finished
           }
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
         // Timeout expired — kill the entire process tree
 #if defined(_WIN32)
@@ -2263,13 +2264,24 @@ class subprocess {
           job->Close();
         }
 #else
-        kill(p, SIGTERM);
-        // Give the process a short grace period to handle SIGTERM
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        // Check if process is still alive (kill with signal 0 does not reap)
-        if (kill(p, 0) == 0) {
-          kill(p, SIGKILL);
+        // Defensive: posix_spawn may have failed, leaving pid_ invalid.
+        if (p == INVALID_NATIVE_HANDLE_VALUE) {
+          return;
         }
+        // Kill the entire process group (negative PID) so that grandchildren
+        // are also terminated and cannot keep pipe write-ends open.
+        kill(-p, SIGTERM);
+        // Give the process group a short grace period to handle SIGTERM,
+        // checking periodically for early exit.
+        auto sigkill_deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        while (std::chrono::steady_clock::now() < sigkill_deadline) {
+          if (kill(-p, 0) != 0) {
+            return;  // all processes in the group have already exited
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        kill(-p, SIGKILL);
 #endif
       });
     };
@@ -2315,11 +2327,28 @@ class subprocess {
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
     posix_spawn_file_actions_t action;
     if (0 != posix_spawn_file_actions_init(&action)) {
-      std::runtime_error("posix_spawn_file_actions_init failed: " +
-                         get_last_error_message());
+      die("posix_spawn_file_actions_init failed: " + get_last_error_message());
     }
-    add_posix_spawn_file_actions(action);
+    posix_spawnattr_t attr;
+    if (0 != posix_spawnattr_init(&attr)) {
+      posix_spawn_file_actions_destroy(&action);
+      die("posix_spawnattr_init failed: " + get_last_error_message());
+    }
+    // Create a new process group so that the watchdog can kill the entire
+    // process tree on timeout (including any grandchildren).
+    if (0 != posix_spawnattr_setpgroup(&attr, 0)) {
+      posix_spawn_file_actions_destroy(&action);
+      posix_spawnattr_destroy(&attr);
+      die("posix_spawnattr_setpgroup failed: " + get_last_error_message());
+    }
+    if (0 != posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP)) {
+      posix_spawn_file_actions_destroy(&action);
+      posix_spawnattr_destroy(&attr);
+      die("posix_spawnattr_setflags failed: " + get_last_error_message());
+    }
+    add_posix_spawn_file_actions(action, &attr);
     posix_spawn_file_actions_destroy(&action);
+    posix_spawnattr_destroy(&attr);
     launch_watchdog();
     manage_pipe_io();
 #else   // SUBPROCESS_USE_POSIX_SPAWN
@@ -2330,6 +2359,10 @@ class subprocess {
       execute_command_in_child();
     } else {
       pid_ = pid;
+      // Also set the child's process group from the parent side to avoid a race
+      // condition: the watchdog may fire before the child executes setpgid().
+      // Ignore failure — the child may have already called setpgid() itself.
+      (void)setpgid(pid, pid);
       launch_watchdog();
       manage_pipe_io();
     }
@@ -2344,7 +2377,11 @@ class subprocess {
 
   void stop_watchdog() {
     if (watchdog_thread_.has_value()) {
-      watchdog_done_->store(true, std::memory_order_relaxed);
+      {
+        std::lock_guard lock(watchdog_state_->mtx);
+        watchdog_state_->done = true;
+      }
+      watchdog_state_->cv.notify_one();
       watchdog_thread_->join();
       watchdog_thread_.reset();
     }
@@ -2429,6 +2466,9 @@ class subprocess {
   }
 #if !defined(_WIN32)
   void execute_command_in_child() {
+    // Create a new process group so that the watchdog can kill the entire
+    // process tree on timeout (including any grandchildren).
+    setpgid(0, 0);
     stdin_.setup_stdio_in_child_process();
     stdout_.setup_stdio_in_child_process();
     stderr_.setup_stdio_in_child_process();
@@ -2471,7 +2511,8 @@ class subprocess {
     _Exit(127);
   }
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
-  void add_posix_spawn_file_actions(posix_spawn_file_actions_t& action) {
+  void add_posix_spawn_file_actions(posix_spawn_file_actions_t& action,
+                                    posix_spawnattr_t* attr) {
     stdin_.setup_stdio_for_posix_spawn(action);
     stdout_.setup_stdio_for_posix_spawn(action);
     stderr_.setup_stdio_for_posix_spawn(action);
@@ -2509,13 +2550,13 @@ class subprocess {
       std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
                      [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
-      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, nullptr,
+      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, attr,
                              cmd.data(), envs.data());
       if (ret != 0) {
         pid_ = INVALID_NATIVE_HANDLE_VALUE;
       }
     } else {
-      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, nullptr,
+      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, attr,
                              cmd.data(), nullptr);
       if (ret != 0) {
         pid_ = INVALID_NATIVE_HANDLE_VALUE;
@@ -2539,9 +2580,14 @@ class subprocess {
   StdoutRedirector stdout_;
   StderrRedirector stderr_;
   std::optional<std::chrono::milliseconds> timeout_{std::nullopt};
+  struct WatchdogState {
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool done = false;
+  };
   std::optional<std::thread> watchdog_thread_{std::nullopt};
-  std::shared_ptr<std::atomic<bool>> watchdog_done_{
-      std::make_shared<std::atomic<bool>>(false)};
+  std::shared_ptr<WatchdogState> watchdog_state_{
+      std::make_shared<WatchdogState>()};
 #if defined(_WIN32)
   std::shared_ptr<HandleGuard> job_handle_{std::make_shared<HandleGuard>()};
   PROCESS_INFORMATION process_information_;

@@ -190,3 +190,77 @@ TEST(TimeoutTest, TimeoutInMilliseconds) {
   EXPECT_NE(exit_code, 0);
 #endif
 }
+
+// =============================================================================
+// Unix-only tests: verify that timeout kills the entire process *group*, not
+// just the direct child process.  Before the fix a grandchild that inherited
+// pipe write-ends could keep manage_pipe_io() blocked in poll() forever.
+// =============================================================================
+#if !defined(_WIN32)
+
+// Spawn a shell that starts a background sleep (grandchild) and then sleeps
+// itself.  Timeout must kill both; otherwise the background sleep keeps the
+// stdout/stderr pipe(s) open and the test hangs.
+TEST(TimeoutTest, ProcessTreeKilledOnTimeout) {
+  auto start = std::chrono::steady_clock::now();
+
+  auto exit_code = run("sh", "-c", "sleep 10 & sleep 10; wait",
+                       $timeout = std::chrono::milliseconds(500));
+
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+  // If the grandchild survived, poll() would block → elapsed >> 5 s.
+  EXPECT_LT(elapsed_ms, 4000);
+  // 128 + SIGTERM(15) = 143
+  EXPECT_EQ(exit_code, 143);
+}
+
+// A process that explicitly ignores SIGTERM must eventually receive SIGKILL.
+TEST(TimeoutTest, SigtermIgnoredFallsBackToSigkill) {
+  auto start = std::chrono::steady_clock::now();
+
+  auto exit_code = run("sh", "-c", "trap '' TERM; sleep 10",
+                       $timeout = std::chrono::milliseconds(500));
+
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+  EXPECT_LT(elapsed_ms, 4000);
+  // 128 + SIGKILL(9) = 137
+  EXPECT_EQ(exit_code, 137);
+}
+
+// When no timeout is set, a sub-process tree should exit normally.
+// This proves that setpgid() does not interfere with ordinary execution.
+TEST(TimeoutTest, SubprocessTreeExitsNormallyWithoutTimeout) {
+  auto exit_code = run("sh", "-c", "sleep 0.1 & sleep 0.1; wait");
+  EXPECT_EQ(exit_code, 0);
+}
+
+// Same scenario as ProcessTreeKilledOnTimeout but with capture_run, which
+// uses explicit pipe fds that a surviving grandchild would keep open.
+TEST(TimeoutTest, ProcessTreeKilledWithCaptureRun) {
+  auto start = std::chrono::steady_clock::now();
+
+  auto [exit_code, out, err] =
+      capture_run("sh", "-c", "sleep 10 & sleep 10 & sleep 10",
+                  $timeout = std::chrono::milliseconds(500));
+
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+  EXPECT_LT(elapsed_ms, 4000);
+  EXPECT_EQ(exit_code, 143);
+}
+
+// A quick command with a timeout must not show side effects from setpgid.
+TEST(TimeoutTest, QuickCommandWithProcessGroupNoSideEffect) {
+  auto exit_code = run("sh", "-c", "true", $timeout = std::chrono::seconds(5));
+  EXPECT_EQ(exit_code, 0);
+}
+
+#endif  // !_WIN32
