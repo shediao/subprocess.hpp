@@ -13,6 +13,8 @@
 using subprocess::detail::split;
 using subprocess::detail::split_to_if;
 
+static auto constexpr size_t_max = (std::numeric_limits<std::size_t>::max)();
+
 // ============================================================================
 // split() convenience wrapper
 // ============================================================================
@@ -176,7 +178,8 @@ TEST(SplitToIfTest, ComplexPattern) {
 TEST(SplitToIfTest, CompressConsecutive) {
   std::vector<std::string> v;
   split_to_if(
-      v, std::string("a,,b"), [](char c) { return c == ','; }, -1, true);
+      v, std::string("a,,b"), [](char c) { return c == ','; }, size_t_max,
+      true);
   ASSERT_EQ(v.size(), 2u);
   EXPECT_EQ(v[0], "a");
   EXPECT_EQ(v[1], "b");
@@ -185,7 +188,8 @@ TEST(SplitToIfTest, CompressConsecutive) {
 TEST(SplitToIfTest, CompressLeading) {
   std::vector<std::string> v;
   split_to_if(
-      v, std::string(",,a,b"), [](char c) { return c == ','; }, -1, true);
+      v, std::string(",,a,b"), [](char c) { return c == ','; }, size_t_max,
+      true);
   ASSERT_EQ(v.size(), 3u);
   EXPECT_EQ(v[0], "");
   EXPECT_EQ(v[1], "a");
@@ -195,7 +199,8 @@ TEST(SplitToIfTest, CompressLeading) {
 TEST(SplitToIfTest, CompressTrailing) {
   std::vector<std::string> v;
   split_to_if(
-      v, std::string("a,b,,"), [](char c) { return c == ','; }, -1, true);
+      v, std::string("a,b,,"), [](char c) { return c == ','; }, size_t_max,
+      true);
   ASSERT_EQ(v.size(), 3u);
   EXPECT_EQ(v[0], "a");
   EXPECT_EQ(v[1], "b");
@@ -205,7 +210,8 @@ TEST(SplitToIfTest, CompressTrailing) {
 TEST(SplitToIfTest, CompressBothEnds) {
   std::vector<std::string> v;
   split_to_if(
-      v, std::string(",a,,b,"), [](char c) { return c == ','; }, -1, true);
+      v, std::string(",a,,b,"), [](char c) { return c == ','; }, size_t_max,
+      true);
   ASSERT_EQ(v.size(), 4u);
   EXPECT_EQ(v[0], "");
   EXPECT_EQ(v[1], "a");
@@ -215,7 +221,8 @@ TEST(SplitToIfTest, CompressBothEnds) {
 
 TEST(SplitToIfTest, CompressOnlyDelimiters) {
   std::vector<std::string> v;
-  split_to_if(v, std::string(",,"), [](char c) { return c == ','; }, -1, true);
+  split_to_if(
+      v, std::string(",,"), [](char c) { return c == ','; }, size_t_max, true);
   ASSERT_EQ(v.size(), 2u);
   EXPECT_EQ(v[0], "");
   EXPECT_EQ(v[1], "");
@@ -225,7 +232,7 @@ TEST(SplitToIfTest, CompressWhitespace) {
   std::vector<std::string> v;
   split_to_if(
       v, std::string("a  b\tc"), [](char c) { return c == ' ' || c == '\t'; },
-      -1, true);
+      size_t_max, true);
   ASSERT_EQ(v.size(), 3u);
   EXPECT_EQ(v[0], "a");
   EXPECT_EQ(v[1], "b");
@@ -234,7 +241,8 @@ TEST(SplitToIfTest, CompressWhitespace) {
 
 TEST(SplitToIfTest, CompressAllWhitespace) {
   std::vector<std::string> v;
-  split_to_if(v, std::string("   "), [](char c) { return c == ' '; }, -1, true);
+  split_to_if(
+      v, std::string("   "), [](char c) { return c == ' '; }, size_t_max, true);
   ASSERT_EQ(v.size(), 2u);
   EXPECT_EQ(v[0], "");
   EXPECT_EQ(v[1], "");
@@ -365,8 +373,8 @@ TEST(SplitToIfTest, WideString) {
 TEST(SplitToIfTest, WideStringCompress) {
   std::vector<std::wstring> v;
   split_to_if(
-      v, std::wstring(L"w1,,w2"), [](wchar_t c) { return c == L','; }, -1,
-      true);
+      v, std::wstring(L"w1,,w2"), [](wchar_t c) { return c == L','; },
+      size_t_max, true);
   ASSERT_EQ(v.size(), 2u);
   EXPECT_EQ(v[0], L"w1");
   EXPECT_EQ(v[1], L"w2");
@@ -428,7 +436,8 @@ TEST(SplitToIfTest, SingleDelimiterChar) {
 
 TEST(SplitToIfTest, SingleDelimiterCharCompress) {
   std::vector<std::string> v;
-  split_to_if(v, std::string(","), [](char c) { return c == ','; }, -1, true);
+  split_to_if(
+      v, std::string(","), [](char c) { return c == ','; }, size_t_max, true);
   ASSERT_EQ(v.size(), 2u);
   EXPECT_EQ(v[0], "");
   EXPECT_EQ(v[1], "");
