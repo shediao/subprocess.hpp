@@ -2294,20 +2294,18 @@ class subprocess {
         if (p == INVALID_NATIVE_HANDLE_VALUE) {
           return;
         }
-        // Kill the entire process group (negative PID) so that grandchildren
-        // are also terminated and cannot keep pipe write-ends open.
-        kill(-p, SIGTERM);
+        kill(p, SIGTERM);
         // Give the process group a short grace period to handle SIGTERM,
         // checking periodically for early exit.
         auto sigkill_deadline =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
         while (std::chrono::steady_clock::now() < sigkill_deadline) {
-          if (kill(-p, 0) != 0) {
+          if (kill(p, 0) != 0) {
             return;  // all processes in the group have already exited
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        kill(-p, SIGKILL);
+        kill(p, SIGKILL);
 #endif
       });
     };
@@ -2385,10 +2383,6 @@ class subprocess {
       execute_command_in_child();
     } else {
       pid_ = pid;
-      // Also set the child's process group from the parent side to avoid a race
-      // condition: the watchdog may fire before the child executes setpgid().
-      // Ignore failure — the child may have already called setpgid() itself.
-      (void)setpgid(pid, pid);
       launch_watchdog();
       pump_pipe_data();
     }
@@ -2504,9 +2498,6 @@ class subprocess {
   }
 #if !defined(_WIN32)
   void execute_command_in_child() {
-    // Create a new process group so that the watchdog can kill the entire
-    // process tree on timeout (including any grandchildren).
-    setpgid(0, 0);
     stdin_.setup_stdio_in_child_process();
     stdout_.setup_stdio_in_child_process();
     stderr_.setup_stdio_in_child_process();
