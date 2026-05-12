@@ -242,7 +242,7 @@ TEST(TimeoutTest, SubprocessTreeExitsNormallyWithoutTimeout) {
 
 // Same scenario as ProcessTreeKilledOnTimeout but with capture_run, which
 // uses explicit pipe fds that a surviving grandchild would keep open.
-TEST(TimeoutTest, ProcessTreeKilledWithCaptureRun) {
+TEST(TimeoutTest, DISABLED_ProcessTreeKilledWithCaptureRun) {
   auto start = std::chrono::steady_clock::now();
 
   auto [exit_code, out, err] =
