@@ -2710,19 +2710,34 @@ inline int run(std::vector<std::wstring> cmd, T&&... args) {
 }
 #endif
 
+namespace detail {
+template <typename... Args>
+concept partition_args =
+    []<size_t... I, size_t... N>(std::index_sequence<I...>,
+                                 std::index_sequence<N...>) constexpr {
+      return ((string_like_type<std::tuple_element_t<
+                   I, std::tuple<std::decay_t<Args>...>>>) &&
+              ...) &&
+             ((named_argument_type<std::tuple_element_t<
+                   N, typename detail::named_arg_type_list_t<
+                          std::decay_t<Args>...>>>) &&
+              ...);
+    }(std::make_index_sequence<
+          std::tuple_size_v<std::tuple<Args...>> -
+          std::tuple_size_v<
+              typename detail::named_arg_type_list_t<std::decay_t<Args>...>>>{},
+      std::make_index_sequence<std::tuple_size_v<
+          typename detail::named_arg_type_list_t<std::decay_t<Args>...>>>{});
+}  // namespace detail
+
 template <detail::run_args_type... Args>
+  requires detail::partition_args<Args...>
 inline int run(Args... args) {
   std::tuple<Args...> args_tuple{std::move(args)...};
-  using ArgsTuple = std::tuple<Args...>;
   using NamedArgTypeList =
       typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
   return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
                                                  std::index_sequence<N...>) {
-    static_assert((
-        (detail::string_like_type<std::tuple_element_t<I, ArgsTuple>>) && ...));
-    static_assert(((detail::named_argument_type<
-                       std::tuple_element_t<N, NamedArgTypeList>>) &&
-                   ...));
     return run({std::move(std::get<I>(args_tuple))...},
                std::move(std::get<std::tuple_size_v<std::tuple<Args...>> -
                                   std::tuple_size_v<NamedArgTypeList> + N>(

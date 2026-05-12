@@ -377,3 +377,156 @@ TEST(ConceptRelationshipTest, StringLikeTypeSatisfiesCaptureRunArgsType) {
   static_assert(capture_run_args_type<std::string_view>);
   static_assert(capture_run_args_type<const char*>);
 }
+
+// ============================================================================
+// partition_args — positive cases
+// ============================================================================
+
+TEST(PartitionArgsTest, AllStrings) {
+  // Only string-like arguments, no named args
+  static_assert(partition_args<std::string>);
+  static_assert(partition_args<const char*>);
+  static_assert(partition_args<std::string, const char*>);
+  static_assert(partition_args<std::string, std::string_view, const char*>);
+}
+
+TEST(PartitionArgsTest, AllNamedArgs) {
+  // Only named-argument types, no strings
+  static_assert(partition_args<Env>);
+  static_assert(partition_args<Cwd>);
+  static_assert(partition_args<Env, Cwd>);
+  static_assert(partition_args<Env, Cwd, Timeout>);
+}
+
+TEST(PartitionArgsTest, StringsThenNamedArgs) {
+  // Conventional calling pattern: string args first, then named args
+  static_assert(partition_args<std::string, Env>);
+  static_assert(partition_args<std::string, const char*, Env>);
+  static_assert(partition_args<std::string, const char*, Env, Cwd>);
+  static_assert(partition_args<std::string, const char*, std::string_view, Env,
+                               Cwd, Timeout>);
+  static_assert(partition_args<std::string, EnvAppend>);
+  static_assert(partition_args<std::string, EnvItemAppend>);
+}
+
+TEST(PartitionArgsTest, EmptyPack) { static_assert(partition_args<>); }
+
+TEST(PartitionArgsTest, SingleStringSingleNamed) {
+  static_assert(partition_args<std::string, Env>);
+  static_assert(partition_args<const char*, Cwd>);
+  static_assert(partition_args<std::string, Timeout>);
+}
+
+TEST(PartitionArgsTest, AllRedirectorNamedArgs) {
+  // Redirectors are also valid named_argument_type
+  static_assert(partition_args<std::string, StdinRedirector>);
+  static_assert(partition_args<std::string, StdoutRedirector>);
+  static_assert(partition_args<std::string, StderrRedirector>);
+  static_assert(partition_args<std::string, StdinRedirector, StdoutRedirector,
+                               StderrRedirector>);
+}
+
+TEST(PartitionArgsTest, WideStringsWithNamedArgs) {
+#if defined(_WIN32)
+  static_assert(partition_args<wchar_t*, Env>);
+  static_assert(partition_args<const wchar_t*, Cwd>);
+  static_assert(partition_args<std::wstring, Timeout>);
+  static_assert(partition_args<std::wstring_view, Env>);
+  static_assert(partition_args<wchar_t*, std::wstring, Env, Cwd>);
+#endif
+}
+
+TEST(PartitionArgsTest, AllEightNamedArgTypes) {
+  static_assert(
+      partition_args<std::string, Env, StdinRedirector, StdoutRedirector,
+                     StderrRedirector, Cwd, Timeout, EnvAppend, EnvItemAppend>);
+}
+
+// ============================================================================
+// partition_args — negative cases
+// ============================================================================
+
+TEST(PartitionArgsTest, RejectsNonStringLikeInStringPortion) {
+  static_assert(!partition_args<int>);
+  static_assert(!partition_args<double>);
+  static_assert(!partition_args<bool>);
+  static_assert(!partition_args<int, Env>);
+  static_assert(!partition_args<std::string, int, Env>);
+  static_assert(!partition_args<double, const char*, Cwd>);
+}
+
+TEST(PartitionArgsTest, RejectsNamedArgsBeforeStrings) {
+  static_assert(!partition_args<Env, std::string>);
+  static_assert(!partition_args<Cwd, const char*>);
+  static_assert(!partition_args<Timeout, std::string, const char*>);
+}
+
+TEST(PartitionArgsTest, RejectsInterleaved) {
+  static_assert(!partition_args<std::string, Env, const char*>);
+  static_assert(!partition_args<std::string, Env, std::string, Cwd>);
+  static_assert(!partition_args<const char*, Cwd, std::string, Timeout>);
+  static_assert(!partition_args<Env, std::string, Cwd, const char*>);
+}
+
+TEST(PartitionArgsTest, RejectsPointerToNamedArgTypes) {
+  static_assert(!partition_args<Env*>);
+  static_assert(!partition_args<const Cwd*>);
+  static_assert(!partition_args<std::string, Env*>);
+}
+
+TEST(PartitionArgsTest, RejectsContainerInStringPortion) {
+  static_assert(!partition_args<std::vector<int>>);
+  static_assert(!partition_args<std::vector<char>, Env>);
+  static_assert(!partition_args<std::tuple<>>);
+}
+
+TEST(PartitionArgsTest, RejectsReferenceToNamedArgInStringPortion) {
+  static_assert(!partition_args<const Env&, std::string>);
+  static_assert(!partition_args<Env&, const char*>);
+}
+
+// ============================================================================
+// partition_args — edge cases
+// ============================================================================
+
+TEST(PartitionArgsTest, DecayHandlingForStringTypes) {
+  static_assert(partition_args<const std::string&, Env>);
+  static_assert(partition_args<std::string&&, Cwd>);
+  static_assert(partition_args<const char (&)[6], Env>);
+}
+
+TEST(PartitionArgsTest, NamedArgsOnlyWithDecay) {
+  static_assert(partition_args<std::string, const Env&>);
+  static_assert(partition_args<const char*, Env&&>);
+}
+
+TEST(PartitionArgsTest, MultipleStringsMultipleNamed) {
+  static_assert(partition_args<std::string, const char*, std::string_view,
+                               const char*, Env, Cwd, Timeout, EnvAppend>);
+}
+
+TEST(PartitionArgsTest, OnlyOneStringManyNamed) {
+  static_assert(partition_args<std::string, Env, Cwd, Timeout, StdinRedirector,
+                               StdoutRedirector, StderrRedirector, EnvAppend,
+                               EnvItemAppend>);
+}
+
+// ============================================================================
+// partition_args — relationship with other concepts
+// ============================================================================
+
+TEST(PartitionArgsRelationshipTest, SatisfiedByRunArgsType) {
+  static_assert(partition_args<std::string, Env>);
+  static_assert(run_args_type<std::string>);
+  static_assert(run_args_type<Env>);
+}
+
+TEST(PartitionArgsRelationshipTest, RunArgsButNotPartitionArgs) {
+  static_assert(run_args_type<Env>);
+  static_assert(run_args_type<std::string>);
+  static_assert(!partition_args<Env, std::string>);
+
+  static_assert(run_args_type<int> == false);
+  static_assert(!partition_args<int, Env>);
+  static_assert(!partition_args<std::string, int>);
+}
