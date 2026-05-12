@@ -338,9 +338,9 @@ class buffer {
   // operator== for test
   bool operator==(const buffer& other) const { return buf_ == other.buf_; }
   template <typename T>
-    requires(!std::is_same_v<T, char> && !std::is_same_v<T, wchar_t> &&
-             !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
-             !std::is_same_v<T, char32_t>)
+    requires(!std::same_as<T, char> && !std::same_as<T, wchar_t> &&
+             !std::same_as<T, char8_t> && !std::same_as<T, char16_t> &&
+             !std::same_as<T, char32_t>)
   bool operator==(std::span<T> other) const {
     std::span<const unsigned char> other_span{
         reinterpret_cast<const unsigned char*>(other.data()),
@@ -2055,21 +2055,55 @@ namespace named_args {
 #endif
 }  // namespace named_args
 template <typename T>
-concept is_named_argument = std::is_same_v<Env, std::decay_t<T>> ||
-                            std::is_same_v<StdinRedirector, std::decay_t<T>> ||
-                            std::is_same_v<StdoutRedirector, std::decay_t<T>> ||
-                            std::is_same_v<StderrRedirector, std::decay_t<T>> ||
-                            std::is_same_v<Cwd, std::decay_t<T>> ||
-                            std::is_same_v<Timeout, std::decay_t<T>> ||
-                            std::is_same_v<EnvAppend, std::decay_t<T>> ||
-                            std::is_same_v<EnvItemAppend, std::decay_t<T>>;
+concept named_argument_type = std::same_as<Env, std::decay_t<T>> ||
+                              std::same_as<StdinRedirector, std::decay_t<T>> ||
+                              std::same_as<StdoutRedirector, std::decay_t<T>> ||
+                              std::same_as<StderrRedirector, std::decay_t<T>> ||
+                              std::same_as<Cwd, std::decay_t<T>> ||
+                              std::same_as<Timeout, std::decay_t<T>> ||
+                              std::same_as<EnvAppend, std::decay_t<T>> ||
+                              std::same_as<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
-concept is_string_type = std::is_same_v<char*, std::decay_t<T>> ||
-                         std::is_same_v<wchar_t*, std::decay_t<T>> ||
-                         std::is_same_v<const char*, std::decay_t<T>> ||
-                         std::is_same_v<const wchar_t*, std::decay_t<T>> ||
-                         std::is_same_v<std::string, std::decay_t<T>> ||
-                         std::is_same_v<std::wstring, std::decay_t<T>>;
+concept string_like_type =
+#if defined(_WIN32)
+    std::same_as<wchar_t*, std::decay_t<T>> ||
+    std::same_as<const wchar_t*, std::decay_t<T>> ||
+    std::same_as<std::wstring, std::decay_t<T>> ||
+    std::same_as<std::wstring_view, std::decay_t<T>> ||
+#endif
+    std::same_as<char*, std::decay_t<T>> ||
+    std::same_as<const char*, std::decay_t<T>> ||
+    std::same_as<std::string, std::decay_t<T>> ||
+    std::same_as<std::string_view, std::decay_t<T>>;
+
+template <typename T>
+concept run_type = named_argument_type<T>;
+
+template <typename T>
+concept run_with_args_type = named_argument_type<T> || string_like_type<T>;
+
+template <typename T>
+concept capture_run_type =
+    named_argument_type<T> && !std::same_as<StdinRedirector, std::decay_t<T>> &&
+    !std::same_as<StdoutRedirector, std::decay_t<T>> &&
+    !std::same_as<StderrRedirector, std::decay_t<T>>;
+
+template <typename T>
+concept capture_run_with_args_type = capture_run_type<T> || string_like_type<T>;
+
+template <typename T1, typename T2>
+struct tuple_concat;
+
+template <typename... T1, typename... T2>
+struct tuple_concat<std::tuple<T1...>, std::tuple<T2...>> {
+  using type = std::tuple<T1..., T2...>;
+};
+
+template <typename... T1>
+struct tuple_concat<std::tuple<T1...>, std::tuple<>> {
+  using type = std::tuple<T1...>;
+};
+
 template <typename...>
 struct named_arg_type_list;
 
@@ -2079,9 +2113,11 @@ struct named_arg_type_list<> {
 };
 template <typename Head, typename... Tails>
 struct named_arg_type_list<Head, Tails...> {
-  using type =
-      std::conditional_t<is_named_argument<Head>, std::tuple<Head, Tails...>,
-                         typename named_arg_type_list<Tails...>::type>;
+  using type = std::conditional_t<
+      named_argument_type<Head>,
+      typename tuple_concat<std::tuple<Head>,
+                            typename named_arg_type_list<Tails...>::type>::type,
+      typename named_arg_type_list<Tails...>::type>;
 };
 template <typename... T>
 using named_arg_type_list_t = typename named_arg_type_list<T...>::type;
@@ -2090,8 +2126,7 @@ class subprocess {
   friend class subprocess_array;
 
  public:
-  template <typename... T>
-    requires(is_named_argument<T> && ...)
+  template <named_argument_type... T>
 #if defined(_WIN32)
   explicit subprocess(std::vector<std::wstring> cmd, T&&... args)
 #else
@@ -2138,16 +2173,6 @@ class subprocess {
                  timeout_ = arg.timeout;
                }
              }
-             static_assert(
-                 std::is_same_v<Env, std::decay_t<T>> ||
-                     std::is_same_v<StdinRedirector, std::decay_t<T>> ||
-                     std::is_same_v<StdoutRedirector, std::decay_t<T>> ||
-                     std::is_same_v<StderrRedirector, std::decay_t<T>> ||
-                     std::is_same_v<Cwd, std::decay_t<T>> ||
-                     std::is_same_v<Timeout, std::decay_t<T>> ||
-                     std::is_same_v<EnvAppend, std::decay_t<T>> ||
-                     std::is_same_v<EnvItemAppend, std::decay_t<T>>,
-                 "Unsupported argument type passed to run().");
            }(std::forward<T>(args))));
     if ((!env_item_appends.empty() || !env_appends.empty()) &&
         environments.empty()) {
@@ -2190,8 +2215,7 @@ class subprocess {
   }
 
 #if defined(_WIN32)
-  template <typename... T>
-    requires(is_named_argument<T> && ...)
+  template <named_argument_type... T>
   explicit subprocess(std::vector<std::string> cmd, T&&... args)
       : subprocess(
             [](auto const& cmd) {
@@ -2676,23 +2700,19 @@ using detail::named_args::timeout;
 using detail::named_args::timeout_infinite;
 }  // namespace named_arguments
 
-template <typename... T>
-  requires(detail::is_named_argument<T> && ...)
+template <detail::run_type... T>
 inline int run(std::vector<std::string> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 #if defined(_WIN32)
-template <typename... T>
-  requires(detail::is_named_argument<T> && ...)
+template <detail::run_type... T>
 inline int run(std::vector<std::wstring> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif
 
-template <typename... Args>
-  requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
-           ...)
+template <detail::run_with_args_type... Args>
 inline int run(Args... args) {
   std::tuple<Args...> args_tuple{std::move(args)...};
   using ArgsTuple = std::tuple<Args...>;
@@ -2700,9 +2720,9 @@ inline int run(Args... args) {
       typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
   return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
                                                  std::index_sequence<N...>) {
-    static_assert(
-        ((detail::is_string_type<std::tuple_element_t<I, ArgsTuple>>) && ...));
-    static_assert(((detail::is_named_argument<
+    static_assert((
+        (detail::string_like_type<std::tuple_element_t<I, ArgsTuple>>) && ...));
+    static_assert(((detail::named_argument_type<
                        std::tuple_element_t<N, NamedArgTypeList>>) &&
                    ...));
     return run({std::move(std::get<I>(args_tuple))...},
@@ -2715,30 +2735,25 @@ inline int run(Args... args) {
 }
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-template <typename... T>
-  requires(detail::is_named_argument<T> && ...)
+template <detail::run_type... T>
 inline int $(std::vector<std::string> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 #if defined(_WIN32)
-template <typename... T>
-  requires(detail::is_named_argument<T> && ...)
+template <detail::run_type... T>
 inline int $(std::vector<std::wstring> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif  // _WIN32
 
-template <typename... Args>
-  requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
-           ...)
+template <detail::run_with_args_type... Args>
 inline int $(Args... args) {
   return run(std::forward<Args>(args)...);
 }
 #endif  // USE_DOLLAR_NAMED_VARIABLES
 
-template <typename... T>
-  requires(detail::is_named_argument<T> && ...)
+template <detail::capture_run_type... T>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::string> cmd, T&&... args) {
   using namespace named_arguments;
@@ -2749,8 +2764,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   return result;
 }
 #if defined(_WIN32)
-template <typename... T>
-  requires(detail::is_named_argument<T> && ...)
+template <detail::capture_run_type... T>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::wstring> cmd, T&&... args) {
   using namespace named_arguments;
@@ -2762,9 +2776,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 }
 #endif  // _WIN32
 
-template <typename... Args>
-  requires((detail::is_named_argument<Args> || detail::is_string_type<Args>) &&
-           ...)
+template <detail::capture_run_with_args_type... Args>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     Args... args) {
   using namespace named_arguments;
