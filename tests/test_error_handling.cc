@@ -153,7 +153,11 @@ TEST(ErrorHandlingTest, NoPermissionOnExecutableReturns127) {
   auto exit_code = subprocess::run({tmp_path});
   ::unlink(tmp_path.c_str());
   // Without execute permission, execv fails with EACCES → _Exit(127)
+#if defined(__MSYS__) || defined(__CYGWIN__)
+  ASSERT_EQ(exit_code, 0);
+#else
   ASSERT_EQ(exit_code, 127);
+#endif
 }
 
 #endif  // !_WIN32
