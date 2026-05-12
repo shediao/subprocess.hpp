@@ -31,6 +31,30 @@ endif()
 
 # --- Compiler and Platform Specific Configuration ---
 
+set(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR
+    ""
+    CACHE INTERNAL "Have posix_spawn_file_actions_addchdir")
+set(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP
+    ""
+    CACHE INTERNAL "Have posix_spawn_file_actions_addchdir_np")
+
+if(NOT WINDOWS)
+  include(CheckSymbolExists)
+  check_symbol_exists(posix_spawn_file_actions_addchdir "spawn.h"
+                      HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR)
+  check_symbol_exists(posix_spawn_file_actions_addchdir_np "spawn.h"
+                      HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP)
+
+  message(
+    STATUS
+      "Checking for posix_spawn_file_actions_addchdir_np: ${HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP}"
+  )
+  message(
+    STATUS
+      "Checking for posix_spawn_file_actions_addchdir: ${HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR}"
+  )
+endif()
+
 # Define common compile options based on the compiler.
 set(SUBPROCESS_MSVC_COMPILE_OPTIONS "/W4" "/WX" "/utf-8" "/EHsc")
 set(SUBPROCESS_GCC_CLANG_COMPILE_OPTIONS "-Wall" "-Wextra" "-Werror")
@@ -117,6 +141,16 @@ function(add_subprocess_test_suite test_name)
       target_compile_definitions(${target_name} PRIVATE UNICODE _UNICODE)
     endif()
 
+    if(NOT WINDOWS AND "${HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR}" STREQUAL "1")
+      target_compile_definitions(${target_name}
+                                 PRIVATE HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR)
+    endif()
+    if(NOT WINDOWS AND "${HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP}" STREQUAL
+                       "1")
+      target_compile_definitions(
+        ${target_name} PRIVATE HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP)
+    endif()
+
     # Link libraries
     target_link_libraries(${target_name} PRIVATE subprocess::subprocess
                                                  GTest::gtest GTest::gtest_main)
@@ -139,6 +173,3 @@ foreach(test_source IN LISTS test_sources)
   get_filename_component(test_name ${test_source} NAME_WE)
   add_subprocess_test_suite(${test_name} ${test_source})
 endforeach()
-
-# Create a single test executable containing all tests.
-add_subprocess_test_suite(all_tests ${test_sources})

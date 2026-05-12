@@ -229,18 +229,22 @@ class StdinRedirector;
 class StdoutRedirector;
 class StderrRedirector;
 
+inline void print_error(std::string_view msg) {
+  if (msg.empty()) {
+    return;
+  }
+#if defined(_WIN32)
+  (void)WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg.data(),
+                  static_cast<DWORD>(msg.size()), NULL, NULL);
+#else
+  [[maybe_unused]] auto ret = write(STDERR_FILENO, msg.data(), msg.size());
+#endif
+}
 inline void die(std::string const& msg) {
 #if SUBPROCESS_HAS_EXCEPTIONS
   throw std::runtime_error(msg);
 #else
-  if (!msg.empty()) {
-#if defined(_WIN32)
-    (void)WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg.c_str(),
-                    static_cast<DWORD>(msg.size()), NULL, NULL);
-#else
-    [[maybe_unused]] auto ret = write(STDERR_FILENO, msg.c_str(), msg.size());
-#endif
-  }
+  print_error(msg);
   abort();
 #endif
 }
@@ -2393,7 +2397,19 @@ class subprocess {
   }
 
   int run() {
+#if SUBPROCESS_HAS_EXCEPTIONS
+    try {
+      async_run();
+    } catch (std::exception const& e) {
+      print_error(e.what());
+      return 127;
+    } catch (...) {
+      print_error("unknown exception in async_run()");
+      return 127;
+    }
+#else
     async_run();
+#endif
     return wait_for_exit();
   }
 
@@ -2499,8 +2515,9 @@ class subprocess {
     std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
                    [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
-    if (!cwd_.empty() && (-1 == chdir(cwd_.data()))) {
-      die(get_last_error_message());
+    if (!cwd_.empty() && (-1 == ::chdir(cwd_.data()))) {
+      print_error("chdir failed: " + get_last_error_message() + "\n");
+      _Exit(126);
     }
 
     std::string executable_path = cmd_[0];
@@ -2523,16 +2540,20 @@ class subprocess {
                      [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
       execve(executable_path.c_str(), cmd.data(), envs.data());
-      std::cerr << "execve(" << executable_path
-                << ") failed: " << get_last_error_message() << '\n';
+      print_error("execve(" + executable_path +
+                  ") failed: " + get_last_error_message() + "\n");
     } else {
       execv(executable_path.c_str(), cmd.data());
-      std::cerr << "execv(" << executable_path
-                << ") failed: " << get_last_error_message() << '\n';
+      print_error("execv(" + executable_path +
+                  ") failed: " + get_last_error_message() + "\n");
     }
     _Exit(127);
   }
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
+#if defined(__APPLE__) && defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
   void add_posix_spawn_file_actions(posix_spawn_file_actions_t& action,
                                     posix_spawnattr_t* attr) {
     stdin_.setup_stdio_for_posix_spawn(action);
@@ -2543,14 +2564,24 @@ class subprocess {
     std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
                    [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
-    if (!cwd_.empty() &&
-#if defined(__APPLE__) && defined(__MACH__)
-        (-1 == posix_spawn_file_actions_addchdir_np(&action, cwd_.data()))
-#else  // other POSIX systems, try the standard version
-        (-1 == posix_spawn_file_actions_addchdir(&action, cwd_.data()))
+    if (!cwd_.empty()) {
+      int ret = -1;
+#if defined(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP)
+      ret = posix_spawn_file_actions_addchdir_np(&action, cwd_.data());
+#elif defined(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR)
+      ret = posix_spawn_file_actions_addchdir(&action, cwd_.data());
+#elif defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && \
+    __MAC_OS_X_VERSION_MIN_REQUIRED < 101500
+      ret = posix_spawn_file_actions_addchdir_np(&action, cwd_.data());
+#elif (defined(__GLIBC__) && __GLIBC_PREREQ(2, 29)) || defined(__APPLE__) || \
+    defined(__FreeBSD__) || defined(__ANDROID__) || defined(__musl__)
+      ret = posix_spawn_file_actions_addchdir_np(&action, cwd_.data());
+#else
+      ret = posix_spawn_file_actions_addchdir(&action, cwd_.data());
 #endif
-    ) {
-      die(get_last_error_message());
+      if (-1 == ret) {
+        die("chdir failed: " + get_last_error_message());
+      }
     }
 
     std::string executable_path = cmd_[0];
@@ -2585,6 +2616,9 @@ class subprocess {
       }
     }
   }
+#if defined(__APPLE__) && defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif  // SUBPROCESS_USE_POSIX_SPAWN
 #endif  // !_WIN32
 
