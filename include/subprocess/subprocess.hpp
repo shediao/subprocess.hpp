@@ -1592,7 +1592,7 @@ class Redirector {
         },
         *redirect_);
   }
-  void prepare_redirection() {
+  void prepare_for_child() {
     if (!redirect_) {
       return;
     }
@@ -1650,7 +1650,7 @@ class Redirector {
         },
         *redirect_);
   }
-  void close_unused_pipe_ends_in_parent() {
+  void close_child_end() {
     if (!redirect_) {
       return;
     }
@@ -2235,13 +2235,13 @@ class subprocess {
   subprocess& operator=(const subprocess&) = delete;
 
   void async_run() {
-    prepare_all_stdio_redirections();
+    prepare_for_child();
 
 #if defined(_WIN32)
     // Create a Job Object to manage the entire process tree.
     // This allows the watchdog to terminate all child processes (e.g., when
     // cmd.exe spawns ping.exe, terminating cmd.exe alone does not kill ping,
-    // and ping would keep stdout/stderr pipes open, blocking manage_pipe_io).
+    // and ping would keep stdout/stderr pipes open, blocking pump_pipe_data).
     HANDLE hJob = CreateJobObjectW(NULL, NULL);
     if (hJob) {
       JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
@@ -2256,7 +2256,7 @@ class subprocess {
 
     // Launch a watchdog thread if a timeout is set.
     // The watchdog kills the process after timeout expires, unblocking
-    // manage_pipe_io() if it is stuck waiting for pipe I/O.
+    // pump_pipe_data() if it is stuck waiting for pipe I/O.
     auto launch_watchdog = [this]() {
       if (!timeout_.has_value()) {
         return;
@@ -2341,7 +2341,7 @@ class subprocess {
                                  process_information_.hProcess);
       }
       launch_watchdog();
-      manage_pipe_io();
+      pump_pipe_data();
     } else {
       std::wcerr << utf8_to_utf16(get_last_error_message()) << L'\n';
       process_information_.hProcess = INVALID_NATIVE_HANDLE_VALUE;
@@ -2376,7 +2376,7 @@ class subprocess {
     posix_spawn_file_actions_destroy(&action);
     posix_spawnattr_destroy(&attr);
     launch_watchdog();
-    manage_pipe_io();
+    pump_pipe_data();
 #else   // SUBPROCESS_USE_POSIX_SPAWN
     auto pid = fork();
     if (pid < 0) {
@@ -2390,7 +2390,7 @@ class subprocess {
       // Ignore failure — the child may have already called setpgid() itself.
       (void)setpgid(pid, pid);
       launch_watchdog();
-      manage_pipe_io();
+      pump_pipe_data();
     }
 #endif  // !SUBPROCESS_USE_POSIX_SPAWN
 #endif  // !_WIN32
@@ -2462,15 +2462,15 @@ class subprocess {
 #endif
 
  private:
-  void prepare_all_stdio_redirections() {
-    stdin_.prepare_redirection();
-    stdout_.prepare_redirection();
-    stderr_.prepare_redirection();
+  void prepare_for_child() {
+    stdin_.prepare_for_child();
+    stdout_.prepare_for_child();
+    stderr_.prepare_for_child();
   }
-  void manage_pipe_io() {
-    stdin_.close_unused_pipe_ends_in_parent();
-    stdout_.close_unused_pipe_ends_in_parent();
-    stderr_.close_unused_pipe_ends_in_parent();
+  void pump_pipe_data() {
+    stdin_.close_child_end();
+    stdout_.close_child_end();
+    stderr_.close_child_end();
 
 #if defined(_WIN32)
     auto in = stdin_.get_parent_communication_pipe_handle();
