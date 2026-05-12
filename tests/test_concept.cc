@@ -166,114 +166,94 @@ TEST(StringLikeTypeTest, RejectsContainerTypes) {
 }
 
 // ============================================================================
-// run_type
+// run_args_type
 // ============================================================================
 
-TEST(RunTypeTest, EquivalentToNamedArgumentType) {
-  // run_type is defined as named_argument_type<T> — verify equivalence
-  static_assert(run_type<Env>);
-  static_assert(run_type<Cwd>);
-  static_assert(run_type<Timeout>);
-  static_assert(run_type<StdinRedirector>);
-  static_assert(run_type<StdoutRedirector>);
-  static_assert(run_type<StderrRedirector>);
-  static_assert(run_type<EnvAppend>);
-  static_assert(run_type<EnvItemAppend>);
-
-  static_assert(!run_type<int>);
-  static_assert(!run_type<std::string>);
-  static_assert(!run_type<const char*>);
+TEST(RunArgsTypeTest, AcceptsNamedArgumentTypes) {
+  static_assert(run_args_type<Env>);
+  static_assert(run_args_type<Cwd>);
+  static_assert(run_args_type<Timeout>);
+  static_assert(run_args_type<StdinRedirector>);
+  static_assert(run_args_type<StdoutRedirector>);
+  static_assert(run_args_type<StderrRedirector>);
+  static_assert(run_args_type<EnvAppend>);
+  static_assert(run_args_type<EnvItemAppend>);
 }
 
-// ============================================================================
-// run_with_args_type
-// ============================================================================
-
-TEST(RunWithArgsTypeTest, AcceptsNamedArgumentTypes) {
-  static_assert(run_with_args_type<Env>);
-  static_assert(run_with_args_type<Cwd>);
-  static_assert(run_with_args_type<Timeout>);
-  static_assert(run_with_args_type<StdinRedirector>);
-  static_assert(run_with_args_type<StdoutRedirector>);
-  static_assert(run_with_args_type<StderrRedirector>);
-  static_assert(run_with_args_type<EnvAppend>);
-  static_assert(run_with_args_type<EnvItemAppend>);
+TEST(RunArgsTypeTest, AcceptsStringTypes) {
+  static_assert(run_args_type<std::string>);
+  static_assert(run_args_type<std::string_view>);
+  static_assert(run_args_type<const char*>);
+  static_assert(run_args_type<char*>);
 }
 
-TEST(RunWithArgsTypeTest, AcceptsStringTypes) {
-  static_assert(run_with_args_type<std::string>);
-  static_assert(run_with_args_type<std::string_view>);
-  static_assert(run_with_args_type<const char*>);
-  static_assert(run_with_args_type<char*>);
-}
-
-TEST(RunWithArgsTypeTest, RejectsNonStringNonNamedTypes) {
-  static_assert(!run_with_args_type<int>);
-  static_assert(!run_with_args_type<double>);
-  static_assert(!run_with_args_type<std::vector<int>>);
-  static_assert(!run_with_args_type<Env*>);
+TEST(RunArgsTypeTest, RejectsNonStringNonNamedTypes) {
+  static_assert(!run_args_type<int>);
+  static_assert(!run_args_type<double>);
+  static_assert(!run_args_type<std::vector<int>>);
+  static_assert(!run_args_type<Env*>);
 }
 
 // ============================================================================
-// capture_run_type
+// named_argument_for_capture_type
 // ============================================================================
 
-TEST(CaptureRunTypeTest, AcceptsNonRedirectorNamedArgs) {
-  static_assert(capture_run_type<Env>);
-  static_assert(capture_run_type<Cwd>);
-  static_assert(capture_run_type<Timeout>);
-  static_assert(capture_run_type<EnvAppend>);
-  static_assert(capture_run_type<EnvItemAppend>);
+TEST(NamedArgumentForCaptureTypeTest, AcceptsNonRedirectorNamedArgs) {
+  static_assert(named_argument_for_capture_type<Env>);
+  static_assert(named_argument_for_capture_type<Cwd>);
+  static_assert(named_argument_for_capture_type<Timeout>);
+  static_assert(named_argument_for_capture_type<EnvAppend>);
+  static_assert(named_argument_for_capture_type<EnvItemAppend>);
 }
 
-TEST(CaptureRunTypeTest, RejectsRedirectorTypes) {
-  static_assert(!capture_run_type<StdinRedirector>);
-  static_assert(!capture_run_type<StdoutRedirector>);
-  static_assert(!capture_run_type<StderrRedirector>);
+TEST(NamedArgumentForCaptureTypeTest, RejectsRedirectorTypes) {
+  static_assert(!named_argument_for_capture_type<StdinRedirector>);
+  static_assert(!named_argument_for_capture_type<StdoutRedirector>);
+  static_assert(!named_argument_for_capture_type<StderrRedirector>);
 }
 
-TEST(CaptureRunTypeTest, RejectsConstAndRefRedirectors) {
-  static_assert(!capture_run_type<const StdinRedirector>);
-  static_assert(!capture_run_type<StdinRedirector&>);
-  static_assert(!capture_run_type<StdinRedirector&&>);
-  static_assert(!capture_run_type<const StdoutRedirector&>);
+TEST(NamedArgumentForCaptureTypeTest, RejectsConstAndRefRedirectors) {
+  static_assert(!named_argument_for_capture_type<const StdinRedirector>);
+  static_assert(!named_argument_for_capture_type<StdinRedirector&>);
+  static_assert(!named_argument_for_capture_type<StdinRedirector&&>);
+  static_assert(!named_argument_for_capture_type<const StdoutRedirector&>);
 }
 
-TEST(CaptureRunTypeTest, RejectsNonNamedTypes) {
-  static_assert(!capture_run_type<int>);
-  static_assert(!capture_run_type<std::string>);
-  static_assert(!capture_run_type<const char*>);
+TEST(NamedArgumentForCaptureTypeTest, RejectsNonNamedTypes) {
+  static_assert(!named_argument_for_capture_type<int>);
+  static_assert(!named_argument_for_capture_type<std::string>);
+  static_assert(!named_argument_for_capture_type<const char*>);
 }
 
 // ============================================================================
-// capture_run_with_args_type
+// capture_run_args_type
 // ============================================================================
 
-TEST(CaptureRunWithArgsTypeTest, AcceptsNonRedirectorNamedArgs) {
-  static_assert(capture_run_with_args_type<Env>);
-  static_assert(capture_run_with_args_type<Cwd>);
-  static_assert(capture_run_with_args_type<Timeout>);
-  static_assert(capture_run_with_args_type<EnvAppend>);
-  static_assert(capture_run_with_args_type<EnvItemAppend>);
+TEST(CaptureRunArgsTypeTest, AcceptsNonRedirectorNamedArgs) {
+  static_assert(capture_run_args_type<Env>);
+  static_assert(capture_run_args_type<Cwd>);
+  static_assert(capture_run_args_type<Timeout>);
+  static_assert(capture_run_args_type<EnvAppend>);
+  static_assert(capture_run_args_type<EnvItemAppend>);
 }
 
-TEST(CaptureRunWithArgsTypeTest, AcceptsStringTypes) {
-  static_assert(capture_run_with_args_type<std::string>);
-  static_assert(capture_run_with_args_type<std::string_view>);
-  static_assert(capture_run_with_args_type<const char*>);
-  static_assert(capture_run_with_args_type<char*>);
+TEST(CaptureRunArgsTypeTest, AcceptsStringTypes) {
+  static_assert(capture_run_args_type<std::string>);
+  static_assert(capture_run_args_type<std::string_view>);
+  static_assert(capture_run_args_type<const char*>);
+  static_assert(capture_run_args_type<char*>);
 }
 
-TEST(CaptureRunWithArgsTypeTest, RejectsRedirectorTypes) {
-  static_assert(!capture_run_with_args_type<StdinRedirector>);
-  static_assert(!capture_run_with_args_type<StdoutRedirector>);
-  static_assert(!capture_run_with_args_type<StderrRedirector>);
+TEST(CaptureRunArgsTypeTest, RejectsRedirectorTypes) {
+  static_assert(!capture_run_args_type<StdinRedirector>);
+  static_assert(!capture_run_args_type<StdoutRedirector>);
+  static_assert(!capture_run_args_type<StderrRedirector>);
 }
 
-TEST(CaptureRunWithArgsTypeTest, RejectsNonStringNonNamedTypes) {
-  static_assert(!capture_run_with_args_type<int>);
-  static_assert(!capture_run_with_args_type<double>);
-  static_assert(!capture_run_with_args_type<Env*>);
+TEST(CaptureRunArgsTypeTest, RejectsNonStringNonNamedTypes) {
+  static_assert(!capture_run_args_type<int>);
+  static_assert(!capture_run_args_type<double>);
+  static_assert(!capture_run_args_type<Env*>);
 }
 
 // ============================================================================
@@ -360,37 +340,40 @@ TEST(NamedArgTypeListTest, EmptyPackProducesEmptyTuple) {
 // Concept subsumption / relationship checks
 // ============================================================================
 
-TEST(ConceptRelationshipTest, RunTypeIsSubsetOfRunWithArgsType) {
-  // Everything that satisfies run_type also satisfies run_with_args_type
-  static_assert(run_with_args_type<Env>);
-  static_assert(run_with_args_type<StdinRedirector>);
-  static_assert(run_with_args_type<Timeout>);
+TEST(ConceptRelationshipTest, NamedArgumentTypeIsSubsetOfRunArgsType) {
+  // Everything that satisfies named_argument_type also satisfies run_args_type
+  static_assert(run_args_type<Env>);
+  static_assert(run_args_type<StdinRedirector>);
+  static_assert(run_args_type<Timeout>);
 }
 
-TEST(ConceptRelationshipTest, CaptureRunTypeIsSubsetOfRunType) {
-  // capture_run_type is more restrictive than run_type
-  static_assert(!capture_run_type<StdinRedirector>);
-  static_assert(run_type<StdinRedirector>);
+TEST(ConceptRelationshipTest,
+     NamedArgumentForCaptureTypeIsSubsetOfNamedArgumentType) {
+  // named_argument_for_capture_type is more restrictive than
+  // named_argument_type
+  static_assert(!named_argument_for_capture_type<StdinRedirector>);
+  static_assert(named_argument_type<StdinRedirector>);
 
   // But non-redirector named args satisfy both
-  static_assert(capture_run_type<Env>);
-  static_assert(run_type<Env>);
+  static_assert(named_argument_for_capture_type<Env>);
+  static_assert(named_argument_type<Env>);
 }
 
-TEST(ConceptRelationshipTest, CaptureRunTypeIsSubsetOfCaptureRunWithArgsType) {
-  static_assert(capture_run_with_args_type<Env>);
-  static_assert(capture_run_with_args_type<Timeout>);
-  static_assert(capture_run_with_args_type<Cwd>);
+TEST(ConceptRelationshipTest,
+     NamedArgumentForCaptureTypeIsSubsetOfCaptureRunArgsType) {
+  static_assert(capture_run_args_type<Env>);
+  static_assert(capture_run_args_type<Timeout>);
+  static_assert(capture_run_args_type<Cwd>);
 }
 
-TEST(ConceptRelationshipTest, StringLikeTypeSatisfiesRunWithArgsType) {
-  static_assert(run_with_args_type<std::string>);
-  static_assert(run_with_args_type<std::string_view>);
-  static_assert(run_with_args_type<const char*>);
+TEST(ConceptRelationshipTest, StringLikeTypeSatisfiesRunArgsType) {
+  static_assert(run_args_type<std::string>);
+  static_assert(run_args_type<std::string_view>);
+  static_assert(run_args_type<const char*>);
 }
 
-TEST(ConceptRelationshipTest, StringLikeTypeSatisfiesCaptureRunWithArgsType) {
-  static_assert(capture_run_with_args_type<std::string>);
-  static_assert(capture_run_with_args_type<std::string_view>);
-  static_assert(capture_run_with_args_type<const char*>);
+TEST(ConceptRelationshipTest, StringLikeTypeSatisfiesCaptureRunArgsType) {
+  static_assert(capture_run_args_type<std::string>);
+  static_assert(capture_run_args_type<std::string_view>);
+  static_assert(capture_run_args_type<const char*>);
 }

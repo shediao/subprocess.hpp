@@ -2077,19 +2077,17 @@ concept string_like_type =
     std::same_as<std::string_view, std::decay_t<T>>;
 
 template <typename T>
-concept run_type = named_argument_type<T>;
+concept run_args_type = named_argument_type<T> || string_like_type<T>;
 
 template <typename T>
-concept run_with_args_type = named_argument_type<T> || string_like_type<T>;
-
-template <typename T>
-concept capture_run_type =
+concept named_argument_for_capture_type =
     named_argument_type<T> && !std::same_as<StdinRedirector, std::decay_t<T>> &&
     !std::same_as<StdoutRedirector, std::decay_t<T>> &&
     !std::same_as<StderrRedirector, std::decay_t<T>>;
 
 template <typename T>
-concept capture_run_with_args_type = capture_run_type<T> || string_like_type<T>;
+concept capture_run_args_type =
+    named_argument_for_capture_type<T> || string_like_type<T>;
 
 template <typename T1, typename T2>
 struct tuple_concat;
@@ -2700,19 +2698,19 @@ using detail::named_args::timeout;
 using detail::named_args::timeout_infinite;
 }  // namespace named_arguments
 
-template <detail::run_type... T>
+template <detail::named_argument_type... T>
 inline int run(std::vector<std::string> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 #if defined(_WIN32)
-template <detail::run_type... T>
+template <detail::named_argument_type... T>
 inline int run(std::vector<std::wstring> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif
 
-template <detail::run_with_args_type... Args>
+template <detail::run_args_type... Args>
 inline int run(Args... args) {
   std::tuple<Args...> args_tuple{std::move(args)...};
   using ArgsTuple = std::tuple<Args...>;
@@ -2735,25 +2733,25 @@ inline int run(Args... args) {
 }
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-template <detail::run_type... T>
+template <detail::named_argument_type... T>
 inline int $(std::vector<std::string> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 
 #if defined(_WIN32)
-template <detail::run_type... T>
+template <detail::named_argument_type... T>
 inline int $(std::vector<std::wstring> cmd, T&&... args) {
   return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
 }
 #endif  // _WIN32
 
-template <detail::run_with_args_type... Args>
+template <detail::run_args_type... Args>
 inline int $(Args... args) {
   return run(std::forward<Args>(args)...);
 }
 #endif  // USE_DOLLAR_NAMED_VARIABLES
 
-template <detail::capture_run_type... T>
+template <detail::named_argument_for_capture_type... T>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::string> cmd, T&&... args) {
   using namespace named_arguments;
@@ -2764,7 +2762,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   return result;
 }
 #if defined(_WIN32)
-template <detail::capture_run_type... T>
+template <detail::named_argument_for_capture_type... T>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::wstring> cmd, T&&... args) {
   using namespace named_arguments;
@@ -2776,7 +2774,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 }
 #endif  // _WIN32
 
-template <detail::capture_run_with_args_type... Args>
+template <detail::capture_run_args_type... Args>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     Args... args) {
   using namespace named_arguments;
