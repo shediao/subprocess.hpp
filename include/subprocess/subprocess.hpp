@@ -303,6 +303,36 @@ inline void close_native_handle(NativeHandle& handle) {
   }
 }
 
+inline bool is_atty(NativeHandle f) {
+#if defined(_WIN32)
+  return GetFileType(f) == FILE_TYPE_CHAR;
+#else
+  return isatty(f);
+#endif
+}
+
+inline bool stdin_is_atty() {
+#if defined(_WIN32)
+  return is_atty(GetStdHandle(STD_INPUT_HANDLE));
+#else
+  return is_atty(STDIN_FILENO);
+#endif
+}
+inline bool stdout_is_atty() {
+#if defined(_WIN32)
+  return is_atty(GetStdHandle(STD_OUTPUT_HANDLE));
+#else
+  return is_atty(STDOUT_FILENO);
+#endif
+}
+inline bool stderr_is_atty() {
+#if defined(_WIN32)
+  return is_atty(GetStdHandle(STD_ERROR_HANDLE));
+#else
+  return is_atty(STDERR_FILENO);
+#endif
+}
+
 class buffer {
   using callback = std::function<void(const unsigned char*, size_t)>;
 
@@ -1474,7 +1504,7 @@ struct File {
     }
   }
   void close() { close_native_handle(fd_); }
-  NativeHandle fd() { return fd_; }
+  NativeHandle fd() const { return fd_; }
 
  private:
   void open_impl(OpenType type) {
@@ -1789,6 +1819,23 @@ class Redirector {
   }
 #endif  // !_WIN32
   virtual int fileno() const = 0;
+  bool inherit() const { return !redirect_; }
+
+  std::optional<std::reference_wrapper<const File>> get_file() const {
+    if (!redirect_) {
+      return std::nullopt;
+    }
+    return std::visit(
+        []<typename T>([[maybe_unused]] const T& value)
+            -> std::optional<std::reference_wrapper<const File>> {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
+            return std::cref(value);
+          } else {
+            return std::nullopt;
+          }
+        },
+        *redirect_);
+  }
 
  protected:
   std::unique_ptr<value_type> redirect_{nullptr};
@@ -1968,6 +2015,14 @@ struct Timeout {
   std::chrono::milliseconds timeout;
 };
 
+struct Background {
+  bool background{false};
+};
+
+struct background_operator {
+  Background operator=(bool b) const { return Background{b}; }
+};
+
 struct timeout_operator {
   Timeout operator=(std::chrono::milliseconds ms) const { return Timeout{ms}; }
   Timeout operator=(int seconds) const {
@@ -2042,6 +2097,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static env_operator env;
 [[maybe_unused]] inline constexpr static timeout_operator timeout;
 [[maybe_unused]] inline constexpr static int timeout_infinite = INT_MAX;
+[[maybe_unused]] inline constexpr static background_operator background;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
@@ -2056,6 +2112,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static env_operator $env;
 [[maybe_unused]] inline constexpr static timeout_operator $timeout;
 [[maybe_unused]] inline constexpr static int $timeout_infinite = INT_MAX;
+[[maybe_unused]] inline constexpr static background_operator $background;
 #endif
 }  // namespace named_args
 template <typename T>
@@ -2065,6 +2122,7 @@ concept named_argument_type = std::same_as<Env, std::decay_t<T>> ||
                               std::same_as<StderrRedirector, std::decay_t<T>> ||
                               std::same_as<Cwd, std::decay_t<T>> ||
                               std::same_as<Timeout, std::decay_t<T>> ||
+                              std::same_as<Background, std::decay_t<T>> ||
                               std::same_as<EnvAppend, std::decay_t<T>> ||
                               std::same_as<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
@@ -2167,6 +2225,11 @@ class subprocess {
              if constexpr (std::is_same_v<ArgType, Cwd>) {
                cwd_ = arg.cwd;
              }
+             if constexpr (std::is_same_v<ArgType, Background>) {
+#if !defined(_WIN32)
+               background_ = arg.background;
+#endif
+             }
              if constexpr (std::is_same_v<ArgType, Timeout>) {
                if (arg.timeout ==
                    std::chrono::seconds(named_args::timeout_infinite)) {
@@ -2213,6 +2276,10 @@ class subprocess {
     ZeroMemory(&process_information_, sizeof(process_information_));
     ZeroMemory(&startup_info_, sizeof(startup_info_));
     startup_info_.cb = sizeof(startup_info_);
+#else
+    if (background_.value_or(false) && stdin_.inherit()) {
+      stdin_ = StdinRedirector{File{named_args::devnull}};
+    }
 #endif
   }
 
@@ -2251,6 +2318,14 @@ class subprocess {
                               sizeof(jeli));
       job_handle_->Close();
       *job_handle_ = HandleGuard(hJob);
+    }
+#else
+    if (!background_.has_value()) {
+      if (stdin_.inherit()) {
+        background_ = !stdin_is_atty();
+      } else if (auto f = stdin_.get_file(); f) {
+        background_ = !is_atty(f->get().fd());
+      }
     }
 #endif
 
@@ -2320,26 +2395,31 @@ class subprocess {
     if (0 != posix_spawn_file_actions_init(&action)) {
       die("posix_spawn_file_actions_init failed: " + get_last_error_message());
     }
-    posix_spawnattr_t attr;
-    if (0 != posix_spawnattr_init(&attr)) {
-      posix_spawn_file_actions_destroy(&action);
-      die("posix_spawnattr_init failed: " + get_last_error_message());
-    }
-    // Create a new process group so that the watchdog can kill the entire
-    // process tree on timeout (including any grandchildren).
-    if (0 != posix_spawnattr_setpgroup(&attr, 0)) {
+    if (background_.value_or(false)) {
+      posix_spawnattr_t attr;
+      if (0 != posix_spawnattr_init(&attr)) {
+        posix_spawn_file_actions_destroy(&action);
+        die("posix_spawnattr_init failed: " + get_last_error_message());
+      }
+      // Create a new process group so that the watchdog can kill the entire
+      // process tree on timeout (including any grandchildren).
+      if (0 != posix_spawnattr_setpgroup(&attr, 0)) {
+        posix_spawn_file_actions_destroy(&action);
+        posix_spawnattr_destroy(&attr);
+        die("posix_spawnattr_setpgroup failed: " + get_last_error_message());
+      }
+      if (0 != posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP)) {
+        posix_spawn_file_actions_destroy(&action);
+        posix_spawnattr_destroy(&attr);
+        die("posix_spawnattr_setflags failed: " + get_last_error_message());
+      }
+      add_posix_spawn_file_actions(action, &attr);
       posix_spawn_file_actions_destroy(&action);
       posix_spawnattr_destroy(&attr);
-      die("posix_spawnattr_setpgroup failed: " + get_last_error_message());
-    }
-    if (0 != posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP)) {
+    } else {
+      add_posix_spawn_file_actions(action, nullptr);
       posix_spawn_file_actions_destroy(&action);
-      posix_spawnattr_destroy(&attr);
-      die("posix_spawnattr_setflags failed: " + get_last_error_message());
     }
-    add_posix_spawn_file_actions(action, &attr);
-    posix_spawn_file_actions_destroy(&action);
-    posix_spawnattr_destroy(&attr);
     launch_watchdog();
     pump_pipe_data();
 #else   // SUBPROCESS_USE_POSIX_SPAWN
@@ -2347,9 +2427,15 @@ class subprocess {
     if (pid < 0) {
       die("fork() failed");
     } else if (pid == 0) {
+      if (background_.value_or(false)) {
+        setpgid(0, 0);
+      }
       execute_command_in_child();
     } else {
       pid_ = pid;
+      if (background_.value_or(false)) {
+        (void)setpgid(pid, pid);
+      }
       launch_watchdog();
       pump_pipe_data();
     }
@@ -2422,6 +2508,10 @@ class subprocess {
   }
 #endif
 
+#if !defined(_WIN32)
+  NativeHandle pid() const { return pid_; }
+#endif
+
  private:
   void kill_process() {
 #if defined(_WIN32)
@@ -2433,18 +2523,18 @@ class subprocess {
     if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
       return;
     }
-    kill(pid_, SIGTERM);
+    kill(background_.value_or(false) ? -pid_ : pid_, SIGTERM);
     // Give the process group a short grace period to handle SIGTERM,
     // checking periodically for early exit.
     auto sigkill_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     while (std::chrono::steady_clock::now() < sigkill_deadline) {
-      if (kill(pid_, 0) != 0) {
+      if (kill(background_.value_or(false) ? -pid_ : pid_, 0) != 0) {
         return;  // all processes in the group have already exited
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    kill(pid_, SIGKILL);
+    kill(background_.value_or(false) ? -pid_ : pid_, SIGKILL);
 #endif
   }
   void prepare_for_child() {
@@ -2632,6 +2722,7 @@ class subprocess {
   STARTUPINFOW startup_info_;
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
+  std::optional<bool> background_{std::nullopt};
 #endif
 };
 
@@ -2695,6 +2786,7 @@ using detail::buffer;
 
 namespace named_arguments {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
+using detail::named_args::$background;
 using detail::named_args::$cwd;
 using detail::named_args::$devnull;
 using detail::named_args::$env;
@@ -2704,6 +2796,7 @@ using detail::named_args::$stdout;
 using detail::named_args::$timeout;
 using detail::named_args::$timeout_infinite;
 #endif
+using detail::named_args::background;
 using detail::named_args::cwd;
 using detail::named_args::devnull;
 using detail::named_args::env;
@@ -2789,7 +2882,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
-                   std_err > std_err_);
+                   std_err > std_err_, background = true);
   return result;
 }
 #if defined(_WIN32)
@@ -2800,7 +2893,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
-                   std_err > std_err_);
+                   std_err > std_err_, background = true);
   return result;
 }
 #endif  // _WIN32
@@ -2811,8 +2904,8 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ =
-      run(std::forward<Args>(args)..., std_out > std_out_, std_err > std_err_);
+  exit_code_ = run(std::forward<Args>(args)..., std_out > std_out_,
+                   std_err > std_err_, background = true);
   return result;
 }
 
