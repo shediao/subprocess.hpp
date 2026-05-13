@@ -2262,19 +2262,8 @@ class subprocess {
         return;
       }
       auto timeout_val = *timeout_;
-#if defined(_WIN32)
-      auto job = job_handle_;
-#else
-      pid_t p = pid_;
-#endif
       auto state = watchdog_state_;
-      watchdog_thread_.emplace([timeout_val,
-#if defined(_WIN32)
-                                job,
-#else
-                                p,
-#endif
-                                state]() {
+      watchdog_thread_.emplace([timeout_val, state, this]() {
         // Wait for timeout or early cancellation via stop_watchdog().
         {
           std::unique_lock lock(state->mtx);
@@ -2284,29 +2273,7 @@ class subprocess {
           }
         }
         // Timeout expired — kill the entire process tree
-#if defined(_WIN32)
-        if (job->IsValid()) {
-          TerminateJobObject(job->get(), 1);
-          job->Close();
-        }
-#else
-        // Defensive: posix_spawn may have failed, leaving pid_ invalid.
-        if (p == INVALID_NATIVE_HANDLE_VALUE) {
-          return;
-        }
-        kill(p, SIGTERM);
-        // Give the process group a short grace period to handle SIGTERM,
-        // checking periodically for early exit.
-        auto sigkill_deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-        while (std::chrono::steady_clock::now() < sigkill_deadline) {
-          if (kill(p, 0) != 0) {
-            return;  // all processes in the group have already exited
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        kill(p, SIGKILL);
-#endif
+        kill_process();
       });
     };
 
@@ -2456,6 +2423,30 @@ class subprocess {
 #endif
 
  private:
+  void kill_process() {
+#if defined(_WIN32)
+    if (job_handle_->IsValid()) {
+      TerminateJobObject(job_handle_->get(), 1);
+      job_handle_->Close();
+    }
+#else
+    if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
+      return;
+    }
+    kill(pid_, SIGTERM);
+    // Give the process group a short grace period to handle SIGTERM,
+    // checking periodically for early exit.
+    auto sigkill_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    while (std::chrono::steady_clock::now() < sigkill_deadline) {
+      if (kill(pid_, 0) != 0) {
+        return;  // all processes in the group have already exited
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    kill(pid_, SIGKILL);
+#endif
+  }
   void prepare_for_child() {
     stdin_.prepare_for_child();
     stdout_.prepare_for_child();
