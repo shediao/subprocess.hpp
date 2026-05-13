@@ -102,13 +102,14 @@ TEST(BackgroundTest, DollarBackgroundSyntax) {
 //  Background stdin → /dev/null tests
 // =============================================================================
 
-// When background = true and stdin is inherited, the child's stdin is
-// redirected to /dev/null, so reading from stdin should return EOF.
+// capture_run always passes std_in < devnull, so the child's stdin is
+// redirected to /dev/null regardless of whether background is explicitly
+// set.  Reading from stdin should return EOF immediately.
 #if !defined(_WIN32)
-TEST(BackgroundTest, BackgroundTrueStdinIsDevNull) {
+TEST(BackgroundTest, CaptureRunStdinIsDevNull) {
   // Try to read from stdin — should get immediate EOF (empty output)
   auto [exit_code, out, err] =
-      capture_run("cat", background = true, $timeout = std::chrono::seconds(3));
+      capture_run("cat", $timeout = std::chrono::seconds(3));
 
   EXPECT_EQ(exit_code, 0);
   // 'cat' with /dev/null as stdin should produce no output
@@ -133,6 +134,25 @@ TEST(BackgroundTest, BackgroundFalseStdinNotReplaced) {
       std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 
   // It should hit the timeout because cat blocks waiting for stdin.
+  EXPECT_LT(elapsed_ms, 4000);
+  EXPECT_EQ(exit_code, 143);
+}
+
+// With the removal of the implicit constructor-side stdin→/dev/null
+// redirection, run() with background=true no longer auto-redirects
+// stdin.  A command that reads from stdin (like cat) will block waiting
+// for input and eventually hit the timeout.
+TEST(BackgroundTest, BackgroundTrueRunDoesNotAutoRedirectStdin) {
+  auto start = std::chrono::steady_clock::now();
+
+  auto exit_code =
+      run("cat", background = true, $timeout = std::chrono::milliseconds(500));
+
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+  // Should hit the timeout — cat blocks because stdin is NOT /dev/null.
   EXPECT_LT(elapsed_ms, 4000);
   EXPECT_EQ(exit_code, 143);
 }
@@ -228,15 +248,15 @@ TEST(BackgroundTest, StderrIsAttyUtility) {
 #endif  // !_WIN32
 
 // =============================================================================
-//  capture_run always uses background = true
+//  capture_run always uses background = true and stdin → /dev/null
 // =============================================================================
 
 #if !defined(_WIN32)
 TEST(BackgroundTest, CaptureRunUsesBackgroundMode) {
-  // capture_run always passes background=true, so the child process
-  // should be in its own process group even when no timeout is set.
-  // We can verify indirectly: a background grandchild won't keep
-  // stdout/stderr pipes open because the process group is cleaned up.
+  // capture_run always passes background=true and std_in<devnull,
+  // so the child process should be in its own process group and have
+  // its stdin closed.  A background grandchild won't keep stdout/stderr
+  // pipes open because the process group is cleaned up.
   auto [exit_code, out, err] = capture_run("sh", "-c", "echo hello; sleep 0.1");
 
   EXPECT_EQ(exit_code, 0);

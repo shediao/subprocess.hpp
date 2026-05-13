@@ -2276,10 +2276,6 @@ class subprocess {
     ZeroMemory(&process_information_, sizeof(process_information_));
     ZeroMemory(&startup_info_, sizeof(startup_info_));
     startup_info_.cb = sizeof(startup_info_);
-#else
-    if (background_.value_or(false) && stdin_.inherit()) {
-      stdin_ = StdinRedirector{File{named_args::devnull}};
-    }
 #endif
   }
 
@@ -2882,7 +2878,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
-                   std_err > std_err_, background = true);
+                   std_err > std_err_, background = true, std_in < devnull);
   return result;
 }
 #if defined(_WIN32)
@@ -2893,7 +2889,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
-                   std_err > std_err_, background = true);
+                   std_err > std_err_, background = true, std_in < devnull);
   return result;
 }
 #endif  // _WIN32
@@ -2905,7 +2901,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::forward<Args>(args)..., std_out > std_out_,
-                   std_err > std_err_, background = true);
+                   std_err > std_err_, background = true, std_in < devnull);
   return result;
 }
 
