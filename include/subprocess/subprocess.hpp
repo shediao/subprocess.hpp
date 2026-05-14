@@ -2183,7 +2183,7 @@ template <typename... T>
 using named_arg_type_list_t = typename named_arg_type_list<T...>::type;
 
 class subprocess {
-  friend class subprocess_array;
+  friend class pipeline;
 
  public:
   template <named_argument_type... T>
@@ -2722,14 +2722,14 @@ class subprocess {
 #endif
 };
 
-class subprocess_array {
+class pipeline {
  public:
-  subprocess_array(subprocess&& sub) { subs_.push_back(std::move(sub)); }
-  subprocess_array(subprocess_array&&) = default;
-  subprocess_array& operator=(subprocess_array&&) = default;
-  subprocess_array(subprocess_array const&) = delete;
-  subprocess_array& operator=(subprocess_array const&) = delete;
-  subprocess_array& append(subprocess&& sub) {
+  pipeline(subprocess&& sub) { subs_.push_back(std::move(sub)); }
+  pipeline(pipeline&&) = default;
+  pipeline& operator=(pipeline&&) = default;
+  pipeline(pipeline const&) = delete;
+  pipeline& operator=(pipeline const&) = delete;
+  pipeline& append(subprocess&& sub) {
     subs_.push_back(std::move(sub));
     return *this;
   }
@@ -2766,13 +2766,13 @@ class subprocess_array {
   std::vector<int> exit_codes_;
 };
 
-inline subprocess_array operator|(subprocess&& lhs, subprocess&& rhs) {
-  subprocess_array subs(std::move(lhs));
+inline pipeline operator|(subprocess&& lhs, subprocess&& rhs) {
+  pipeline subs(std::move(lhs));
   subs.append(std::move(rhs));
   return subs;
 }
 
-inline subprocess_array operator|(subprocess_array lhs, subprocess&& rhs) {
+inline pipeline operator|(pipeline lhs, subprocess&& rhs) {
   lhs.append(std::move(rhs));
   return lhs;
 }

@@ -63,7 +63,7 @@ TEST(PipeTest, ThreeProcessManualChain) {
 }
 
 // ===========================================================================
-// 2. Two-process pipe via | operator (subprocess_array)
+// 2. Two-process pipe via | operator (pipeline)
 // ===========================================================================
 TEST(PipeTest, TwoProcessPipeOperator) {
 #if defined(_WIN32)
@@ -582,14 +582,14 @@ TEST(PipeTest, MultipleIndependentPipeChains) {
 }
 
 // ===========================================================================
-// 18. Pipe the output of one piped chain into a new subprocess_array
+// 18. Pipe the output of one piped chain into a new pipeline
 //     (dynamically building a chain)
 // ===========================================================================
 TEST(PipeTest, IncrementalPipeChainBuilding) {
 #if defined(_WIN32)
   subprocess::buffer out;
 
-  subprocess::detail::subprocess_array chain =
+  subprocess::detail::pipeline chain =
       subprocess::detail::subprocess(
           {"cmd.exe"s, "/c", "echo first_phase&exit /b 0"}) |
       subprocess::detail::subprocess({"findstr.exe"s, "first"});
@@ -603,7 +603,7 @@ TEST(PipeTest, IncrementalPipeChainBuilding) {
 #else
   subprocess::buffer out;
 
-  subprocess::detail::subprocess_array chain =
+  subprocess::detail::pipeline chain =
       subprocess::detail::subprocess({"printf"s, "first_phase\\n"}) |
       subprocess::detail::subprocess({"grep"s, "first"});
 
@@ -765,7 +765,7 @@ TEST(PipeTest, ExplicitPipeClosedAfterUse) {
 
 // ===========================================================================
 // 24. Pipe chain with the high-level capture_run through piping
-//     (using subprocess_array, capture stdout at the end)
+//     (using pipeline, capture stdout at the end)
 // ===========================================================================
 TEST(PipeTest, PipeChainEquivalentToCaptureRun) {
   using subprocess::capture_run;

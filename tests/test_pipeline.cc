@@ -4,7 +4,7 @@
 
 using std::literals::string_literals::operator""s;
 
-TEST(SubprocessArrayTest, Test1) {
+TEST(PipelineTest, Test1) {
 #if defined(_WIN32)
   subprocess::buffer out;
   auto subs =
