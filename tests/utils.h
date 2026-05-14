@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 inline std::string getTempFilePath(std::string const& prefix,
                                    std::string const& postfix) {

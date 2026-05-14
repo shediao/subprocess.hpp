@@ -123,7 +123,7 @@ TEST(BackgroundTest, CaptureRunStdinIsDevNull) {
 TEST(BackgroundTest, BackgroundFalseStdinNotReplaced) {
   subprocess::buffer in("hello_stdin");
   subprocess::buffer out;
-  auto exit_code = run("cat", background = false, std_in < in, std_out > out,
+  auto exit_code = run("cat", background = false, std_in<in, std_out> out,
                        $timeout = std::chrono::seconds(3));
 
   EXPECT_EQ(exit_code, 0);
@@ -137,7 +137,7 @@ TEST(BackgroundTest, BackgroundFalseStdinNotReplaced) {
 TEST(BackgroundTest, BackgroundTrueRunDoesNotAutoRedirectStdin) {
   subprocess::buffer in("hello_stdin_bg");
   subprocess::buffer out;
-  auto exit_code = run("cat", background = true, std_in < in, std_out > out,
+  auto exit_code = run("cat", background = true, std_in<in, std_out> out,
                        $timeout = std::chrono::seconds(3));
 
   EXPECT_EQ(exit_code, 0);

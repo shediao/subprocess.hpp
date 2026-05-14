@@ -254,8 +254,8 @@ TEST(BufferCallbackTest, IntegrationWithSubprocessStdout) {
 #if !defined(_WIN32)
   int ret = run("bash", "-c", "echo -n hello_world", std_out > out);
 #else
-  int ret = run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=hello_world&exit /b 0"),
-                std_out > out);
+  int ret = run(TEXT("cmd.exe"), TEXT("/c"),
+                TEXT("<nul set /p=hello_world&exit /b 0"), std_out > out);
 #endif
 
   EXPECT_EQ(ret, 0);
@@ -282,8 +282,8 @@ TEST(BufferCallbackTest, IntegrationWithSubprocessStderr) {
 #if !defined(_WIN32)
   int ret = run("bash", "-c", "echo -n error_msg >&2", std_err > err);
 #else
-  int ret = run(TEXT("cmd.exe"), TEXT("/c"), TEXT("<nul set /p=error_msg>&2&exit /b 0"),
-                std_err > err);
+  int ret = run(TEXT("cmd.exe"), TEXT("/c"),
+                TEXT("<nul set /p=error_msg>&2&exit /b 0"), std_err > err);
 #endif
 
   EXPECT_EQ(ret, 0);
