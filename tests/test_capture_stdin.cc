@@ -644,7 +644,8 @@ TEST(CaptureStdinTest, StdinFromFileUnicodeContent) {
   ASSERT_EQ(out, content);
   ASSERT_TRUE(err.empty());
 #else
-  auto [exit_code, out, err] = capture_run("more.com", std_in < tf.path());
+  auto [exit_code, out, err] =
+      capture_run("findstr.exe", ".", std_in < tf.path());
   ASSERT_EQ(exit_code, 0);
   ASSERT_FALSE(out.empty());
 #endif
