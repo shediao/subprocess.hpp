@@ -2227,7 +2227,9 @@ class subprocess {
              }
              if constexpr (std::is_same_v<ArgType, Background>) {
 #if !defined(_WIN32)
-               background_ = arg.background;
+               if (arg.background) {
+                 group_id_ = 0;
+               }
 #endif
              }
              if constexpr (std::is_same_v<ArgType, Timeout>) {
@@ -2305,22 +2307,24 @@ class subprocess {
     // This allows the watchdog to terminate all child processes (e.g., when
     // cmd.exe spawns ping.exe, terminating cmd.exe alone does not kill ping,
     // and ping would keep stdout/stderr pipes open, blocking pump_pipe_data).
-    HANDLE hJob = CreateJobObjectW(NULL, NULL);
-    if (hJob) {
-      JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
-      jeli.BasicLimitInformation.LimitFlags =
-          JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-      SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli,
-                              sizeof(jeli));
-      job_handle_->Close();
-      *job_handle_ = HandleGuard(hJob);
+    if (!job_handle_->IsValid()) {
+      HANDLE hJob = CreateJobObjectW(NULL, NULL);
+      if (hJob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
+        jeli.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli,
+                                sizeof(jeli));
+        job_handle_->Close();
+        *job_handle_ = HandleGuard(hJob);
+      }
     }
 #else
-    if (!background_.has_value()) {
-      if (stdin_.inherit()) {
-        background_ = !stdin_is_atty();
-      } else if (auto f = stdin_.get_file(); f) {
-        background_ = !is_atty(f->get().fd());
+    if (!group_id_.has_value()) {
+      if (stdin_.inherit() && !stdin_is_atty()) {
+        group_id_ = 0;
+      } else if (auto f = stdin_.get_file(); f && !is_atty(f->get().fd())) {
+        group_id_ = 0;
       }
     }
 #endif
@@ -2344,7 +2348,7 @@ class subprocess {
           }
         }
         // Timeout expired — kill the entire process tree
-        kill_process();
+        terminate();
       });
     };
 
@@ -2391,7 +2395,7 @@ class subprocess {
     if (0 != posix_spawn_file_actions_init(&action)) {
       die("posix_spawn_file_actions_init failed: " + get_last_error_message());
     }
-    if (background_.value_or(false)) {
+    if (group_id_.has_value()) {
       posix_spawnattr_t attr;
       if (0 != posix_spawnattr_init(&attr)) {
         posix_spawn_file_actions_destroy(&action);
@@ -2399,7 +2403,7 @@ class subprocess {
       }
       // Create a new process group so that the watchdog can kill the entire
       // process tree on timeout (including any grandchildren).
-      if (0 != posix_spawnattr_setpgroup(&attr, 0)) {
+      if (0 != posix_spawnattr_setpgroup(&attr, group_id_.value())) {
         posix_spawn_file_actions_destroy(&action);
         posix_spawnattr_destroy(&attr);
         die("posix_spawnattr_setpgroup failed: " + get_last_error_message());
@@ -2423,14 +2427,14 @@ class subprocess {
     if (pid < 0) {
       die("fork() failed");
     } else if (pid == 0) {
-      if (background_.value_or(false)) {
-        setpgid(0, 0);
+      if (group_id_.has_value()) {
+        setpgid(0, group_id_.value());
       }
       execute_command_in_child();
     } else {
       pid_ = pid;
-      if (background_.value_or(false)) {
-        (void)setpgid(pid, pid);
+      if (group_id_.has_value()) {
+        (void)setpgid(pid, group_id_.value() == 0 ? pid : group_id_.value());
       }
       launch_watchdog();
       pump_pipe_data();
@@ -2504,12 +2508,16 @@ class subprocess {
   }
 #endif
 
-#if !defined(_WIN32)
-  NativeHandle pid() const { return pid_; }
+  NativeHandle pid() const {
+#if defined(_WIN32)
+    return process_information_.hProcess;
+#else
+    return pid_;
 #endif
+  }
 
  private:
-  void kill_process() {
+  void terminate() {
 #if defined(_WIN32)
     if (job_handle_->IsValid()) {
       TerminateJobObject(job_handle_->get(), 1);
@@ -2519,18 +2527,24 @@ class subprocess {
     if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
       return;
     }
-    kill(background_.value_or(false) ? -pid_ : pid_, SIGTERM);
+    auto kill_pid = pid_;
+    if (group_id_.has_value()) {
+      if (group_id_.value() == 0 || group_id_.value() == pid_) {
+        kill_pid = -pid_;
+      }
+    }
+    kill(kill_pid, SIGTERM);
     // Give the process group a short grace period to handle SIGTERM,
     // checking periodically for early exit.
     auto sigkill_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     while (std::chrono::steady_clock::now() < sigkill_deadline) {
-      if (kill(background_.value_or(false) ? -pid_ : pid_, 0) != 0) {
+      if (kill(kill_pid, 0) != 0) {
         return;  // all processes in the group have already exited
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    kill(background_.value_or(false) ? -pid_ : pid_, SIGKILL);
+    kill(kill_pid, SIGKILL);
 #endif
   }
   void prepare_for_child() {
@@ -2718,7 +2732,7 @@ class subprocess {
   STARTUPINFOW startup_info_;
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
-  std::optional<bool> background_{std::nullopt};
+  std::optional<NativeHandle> group_id_{std::nullopt};
 #endif
 };
 
@@ -2736,27 +2750,45 @@ class pipeline {
 
   int run() {
     std::vector<Pipe> pipes;
-    if (subs_.size() > 1) {
-      for (auto it = subs_.begin(); it != subs_.end() - 1; ++it) {
-        pipes.push_back(Pipe::create());
+
+    for (auto it = subs_.begin(); it != subs_.end() - 1; ++it) {
+      pipes.push_back(Pipe::create());
 #if defined(_WIN32)
-        SetHandleInformation(pipes.back().read(), HANDLE_FLAG_INHERIT,
-                             HANDLE_FLAG_INHERIT);
-        SetHandleInformation(pipes.back().write(), HANDLE_FLAG_INHERIT,
-                             HANDLE_FLAG_INHERIT);
+      SetHandleInformation(pipes.back().read(), HANDLE_FLAG_INHERIT,
+                           HANDLE_FLAG_INHERIT);
+      SetHandleInformation(pipes.back().write(), HANDLE_FLAG_INHERIT,
+                           HANDLE_FLAG_INHERIT);
 #endif
-        it->stdout_ = (named_args::std_out > pipes.back());
-        (it + 1)->stdin_ = (named_args::std_in < pipes.back());
-      }
+      it->stdout_ = (named_args::std_out > pipes.back());
+      (it + 1)->stdin_ = (named_args::std_in < pipes.back());
     }
-    for (auto& sub : subs_) {
-      sub.async_run();
+    for (auto it = subs_.begin(); it != subs_.end(); ++it) {
+#if defined(_WIN32)
+      if (it != subs_.begin()) {
+        it->job_handle_ = subs_.begin()->job_handle_;
+      }
+#else
+      if (it == subs_.begin()) {
+        it->group_id_ = 0;
+      } else {
+        it->group_id_ = subs_.begin()->pid_;
+      }
+#endif
+      it->async_run();
+      if (it->pid() == INVALID_NATIVE_HANDLE_VALUE) {
+        for (auto& p : pipes) {
+          p.close_all();
+        }
+        break;
+      }
     }
     for (auto& sub : subs_) {
       exit_codes_.push_back(sub.wait_for_exit());
     }
     return exit_codes_.back();
   }
+
+  void terminate() { subs_[0].terminate(); }
 
   int exit_code() const { return exit_codes_.back(); }
   std::vector<int> exit_codes() const { return exit_codes_; }
