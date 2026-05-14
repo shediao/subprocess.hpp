@@ -2227,6 +2227,7 @@ class subprocess {
              }
              if constexpr (std::is_same_v<ArgType, Background>) {
 #if !defined(_WIN32)
+               background_explicit_ = true;
                if (arg.background) {
                  group_id_ = 0;
                }
@@ -2320,7 +2321,7 @@ class subprocess {
       }
     }
 #else
-    if (!group_id_.has_value()) {
+    if (!group_id_.has_value() && !background_explicit_) {
       if (stdin_.inherit() && !stdin_is_atty()) {
         group_id_ = 0;
       } else if (auto f = stdin_.get_file(); f && !is_atty(f->get().fd())) {
@@ -2733,6 +2734,7 @@ class subprocess {
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
   std::optional<NativeHandle> group_id_{std::nullopt};
+  bool background_explicit_{false};
 #endif
 };
 
