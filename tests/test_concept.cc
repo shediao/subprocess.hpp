@@ -207,15 +207,15 @@ TEST(NamedArgumentForCaptureTypeTest, AcceptsNonRedirectorNamedArgs) {
 }
 
 TEST(NamedArgumentForCaptureTypeTest, RejectsRedirectorTypes) {
-  static_assert(!named_argument_for_capture_type<StdinRedirector>);
+  static_assert(named_argument_for_capture_type<StdinRedirector>);
   static_assert(!named_argument_for_capture_type<StdoutRedirector>);
   static_assert(!named_argument_for_capture_type<StderrRedirector>);
 }
 
 TEST(NamedArgumentForCaptureTypeTest, RejectsConstAndRefRedirectors) {
-  static_assert(!named_argument_for_capture_type<const StdinRedirector>);
-  static_assert(!named_argument_for_capture_type<StdinRedirector&>);
-  static_assert(!named_argument_for_capture_type<StdinRedirector&&>);
+  static_assert(named_argument_for_capture_type<const StdinRedirector>);
+  static_assert(named_argument_for_capture_type<StdinRedirector&>);
+  static_assert(named_argument_for_capture_type<StdinRedirector&&>);
   static_assert(!named_argument_for_capture_type<const StdoutRedirector&>);
 }
 
@@ -245,7 +245,7 @@ TEST(CaptureRunArgsTypeTest, AcceptsStringTypes) {
 }
 
 TEST(CaptureRunArgsTypeTest, RejectsRedirectorTypes) {
-  static_assert(!capture_run_args_type<StdinRedirector>);
+  static_assert(capture_run_args_type<StdinRedirector>);
   static_assert(!capture_run_args_type<StdoutRedirector>);
   static_assert(!capture_run_args_type<StderrRedirector>);
 }
@@ -351,7 +351,7 @@ TEST(ConceptRelationshipTest,
      NamedArgumentForCaptureTypeIsSubsetOfNamedArgumentType) {
   // named_argument_for_capture_type is more restrictive than
   // named_argument_type
-  static_assert(!named_argument_for_capture_type<StdinRedirector>);
+  static_assert(named_argument_for_capture_type<StdinRedirector>);
   static_assert(named_argument_type<StdinRedirector>);
 
   // But non-redirector named args satisfy both

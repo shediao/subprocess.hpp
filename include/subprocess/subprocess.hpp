@@ -2139,11 +2139,37 @@ concept string_like_type =
     std::same_as<std::string_view, std::decay_t<T>>;
 
 template <typename T>
+struct get_char_type;
+
+template <typename CharT>
+struct get_char_type<std::basic_string<CharT>> {
+  using type = CharT;
+};
+template <typename CharT>
+struct get_char_type<std::basic_string_view<CharT>> {
+  using type = CharT;
+};
+template <typename CharT>
+struct get_char_type<CharT*> {
+  using type = std::remove_cv_t<CharT>;
+};
+
+template <typename T>
+using get_char_type_t = typename get_char_type<T>::type;
+
+template <typename T>
+using to_string_view_t =
+    std::basic_string_view<get_char_type_t<std::decay_t<T>>>;
+
+template <typename T>
+using to_string_t = std::basic_string<get_char_type_t<std::decay_t<T>>>;
+
+template <typename T>
 concept run_args_type = named_argument_type<T> || string_like_type<T>;
 
 template <typename T>
 concept named_argument_for_capture_type =
-    named_argument_type<T> && !std::same_as<StdinRedirector, std::decay_t<T>> &&
+    named_argument_type<T> &&
     !std::same_as<StdoutRedirector, std::decay_t<T>> &&
     !std::same_as<StderrRedirector, std::decay_t<T>>;
 
@@ -2877,10 +2903,13 @@ inline int run(Args... args) {
       typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
   return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
                                                  std::index_sequence<N...>) {
-    return run({std::move(std::get<I>(args_tuple))...},
-               std::move(std::get<std::tuple_size_v<std::tuple<Args...>> -
-                                  std::tuple_size_v<NamedArgTypeList> + N>(
-                   args_tuple))...);
+    return run(
+        std::vector<
+            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
+            std::move(std::get<I>(args_tuple))...},
+        std::move(
+            std::get<std::tuple_size_v<std::tuple<Args...>> -
+                     std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
   }(std::make_index_sequence<std::tuple_size_v<std::tuple<Args...>> -
                              std::tuple_size_v<NamedArgTypeList>>{},
          std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
@@ -2911,8 +2940,9 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
-                   std_err > std_err_, background = true, std_in < devnull);
+  exit_code_ = run(std::move(cmd),
+                   std_in<devnull, std::forward<T>(args)..., std_out> std_out_,
+                   std_err > std_err_, background = true);
   return result;
 }
 #if defined(_WIN32)
@@ -2922,8 +2952,9 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   using namespace named_arguments;
   std::tuple<int, subprocess::buffer, subprocess::buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd), std::forward<T>(args)..., std_out > std_out_,
-                   std_err > std_err_, background = true, std_in < devnull);
+  exit_code_ = run(std::move(cmd),
+                   std_in<devnull, std::forward<T>(args)..., std_out> std_out_,
+                   std_err > std_err_, background = true);
   return result;
 }
 #endif  // _WIN32
@@ -2932,11 +2963,22 @@ template <detail::capture_run_args_type... Args>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     Args... args) {
   using namespace named_arguments;
-  std::tuple<int, subprocess::buffer, subprocess::buffer> result;
-  auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::forward<Args>(args)..., std_out > std_out_,
-                   std_err > std_err_, background = true, std_in < devnull);
-  return result;
+  std::tuple<Args...> args_tuple{std::move(args)...};
+  using NamedArgTypeList =
+      typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
+
+  return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
+                                                 std::index_sequence<N...>) {
+    return capture_run(
+        std::vector<
+            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
+            std::move(std::get<I>(args_tuple))...},
+        std::move(
+            std::get<std::tuple_size_v<std::tuple<Args...>> -
+                     std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
+  }(std::make_index_sequence<std::tuple_size_v<std::tuple<Args...>> -
+                             std::tuple_size_v<NamedArgTypeList>>{},
+         std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
 }
 
 inline std::optional<std::string> getenv(const std::string& name) {
