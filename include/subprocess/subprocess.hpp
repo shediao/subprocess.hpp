@@ -2906,7 +2906,8 @@ inline int run(Args... args) {
     return run(
         std::vector<
             detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
-            std::move(std::get<I>(args_tuple))...},
+            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>{
+                std::move(std::get<I>(args_tuple))}...},
         std::move(
             std::get<std::tuple_size_v<std::tuple<Args...>> -
                      std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
@@ -2972,7 +2973,8 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     return capture_run(
         std::vector<
             detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
-            std::move(std::get<I>(args_tuple))...},
+            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>{
+                std::move(std::get<I>(args_tuple))}...},
         std::move(
             std::get<std::tuple_size_v<std::tuple<Args...>> -
                      std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
