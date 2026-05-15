@@ -2939,11 +2939,12 @@ template <detail::named_argument_for_capture_type... T>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::string> cmd, T&&... args) {
   using namespace named_arguments;
-  std::tuple<int, subprocess::buffer, subprocess::buffer> result;
+  using namespace detail;
+  std::tuple<int, buffer, buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd),
-                   std_in<devnull, std::forward<T>(args)..., std_out> std_out_,
-                   std_err > std_err_, background = true);
+  exit_code_ = run(std::move(cmd), StdinRedirector(File{devnull}),
+                   std::forward<T>(args)..., StdoutRedirector{std_out_},
+                   StderrRedirector{std_err_}, Background{true});
   return result;
 }
 #if defined(_WIN32)
@@ -2951,11 +2952,12 @@ template <detail::named_argument_for_capture_type... T>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     std::vector<std::wstring> cmd, T&&... args) {
   using namespace named_arguments;
-  std::tuple<int, subprocess::buffer, subprocess::buffer> result;
+  using namespace detail;
+  std::tuple<int, buffer, buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd),
-                   std_in<devnull, std::forward<T>(args)..., std_out> std_out_,
-                   std_err > std_err_, background = true);
+  exit_code_ = run(std::move(cmd), StdinRedirector(File{devnull}),
+                   std::forward<T>(args)..., StdoutRedirector{std_out_},
+                   StderrRedirector{std_err_}, Background{true});
   return result;
 }
 #endif  // _WIN32
