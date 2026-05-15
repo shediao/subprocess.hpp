@@ -28,6 +28,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     endif()
   endforeach()
 endif()
+foreach(gtarget gtest gmock gmock_main gtest_main)
+  set_target_properties(${gtarget} PROPERTIES EXPORT_COMPILE_COMMANDS OFF)
+endforeach()
 
 # --- Compiler and Platform Specific Configuration ---
 
