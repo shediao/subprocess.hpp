@@ -417,7 +417,7 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 
   p.async_run();
   buffer tmp;
-  subprocess::detail::read_from_native_handle(pipe.read(), tmp);
+  subprocess::detail::read_from_native_handle(pipe.rfd(), tmp);
   p.wait_for_exit();
   ASSERT_EQ(tmp, "single_pipe_test\r\n");
 #else
@@ -428,7 +428,7 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 
   p.async_run();
   buffer tmp;
-  subprocess::detail::read_from_native_handle(pipe.read(), tmp);
+  subprocess::detail::read_from_native_handle(pipe.rfd(), tmp);
   p.wait_for_exit();
   ASSERT_EQ(tmp, "single_pipe_test\n");
 #endif
@@ -783,7 +783,7 @@ TEST(PipelineTest, ExplicitPipeClosedAfterUse) {
                                      $stdout > pipe);
 #endif
     p.async_run();
-    subprocess::detail::read_from_native_handle(pipe.read(), captured);
+    subprocess::detail::read_from_native_handle(pipe.rfd(), captured);
     p.wait_for_exit();
   }
 #if defined(_WIN32)

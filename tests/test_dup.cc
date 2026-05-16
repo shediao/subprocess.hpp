@@ -44,14 +44,14 @@ TEST(DupTest, PipeDupBasic) {
   auto p2 = p1.dup();
 
   // Both pipes should have valid handles
-  ASSERT_NE(p1.read(), S::INVALID_NATIVE_HANDLE_VALUE);
-  ASSERT_NE(p1.write(), S::INVALID_NATIVE_HANDLE_VALUE);
-  ASSERT_NE(p2.read(), S::INVALID_NATIVE_HANDLE_VALUE);
-  ASSERT_NE(p2.write(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(p1.rfd(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(p1.wfd(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(p2.rfd(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(p2.wfd(), S::INVALID_NATIVE_HANDLE_VALUE);
 
   // The duped handles should be different from the original
-  ASSERT_NE(p1.read(), p2.read());
-  ASSERT_NE(p1.write(), p2.write());
+  ASSERT_NE(p1.rfd(), p2.rfd());
+  ASSERT_NE(p1.wfd(), p2.wfd());
 }
 
 // ===========================================================================
@@ -64,13 +64,13 @@ TEST(DupTest, PipeDupReadFromDuppedEnd) {
   auto p2 = p1.dup();
 
   const char* msg = "hello_dup";
-  S::write_to_native_handle(p1.write(), buffer{msg});
+  S::write_to_native_handle(p1.wfd(), buffer{msg});
 
-  // p2.write() still shares the same write-end; close it to signal EOF
+  // p2.wfd() still shares the same write-end; close it to signal EOF
   p2.close_write();
 
   buffer out;
-  S::read_from_native_handle(p2.read(), out);
+  S::read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -80,13 +80,13 @@ TEST(DupTest, PipeDupReadFromOriginalEnd) {
   auto p2 = p1.dup();
 
   const char* msg = "hello_reverse";
-  S::write_to_native_handle(p2.write(), buffer{msg});
+  S::write_to_native_handle(p2.wfd(), buffer{msg});
 
-  // p1.write() still shares the same write-end; close it to signal EOF
+  // p1.wfd() still shares the same write-end; close it to signal EOF
   p1.close_write();
 
   buffer out;
-  S::read_from_native_handle(p1.read(), out);
+  S::read_from_native_handle(p1.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -99,7 +99,7 @@ TEST(DupTest, PipeDupCloseOriginalReadStillWorks) {
   auto p2 = p1.dup();
 
   const char* msg = "before_close";
-  S::write_to_native_handle(p1.write(), buffer{msg});
+  S::write_to_native_handle(p1.wfd(), buffer{msg});
 
   // Close BOTH write ends; close original read end
   p2.close_write();
@@ -107,7 +107,7 @@ TEST(DupTest, PipeDupCloseOriginalReadStillWorks) {
 
   // Duped read end should still read the data
   buffer out;
-  S::read_from_native_handle(p2.read(), out);
+  S::read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -123,10 +123,10 @@ TEST(DupTest, PipeDupCloseDuppedWriteStillWorks) {
   p2.close_write();
 
   const char* msg = "close_dup_write";
-  S::write_to_native_handle(p1.write(), buffer{msg});
+  S::write_to_native_handle(p1.wfd(), buffer{msg});
 
   buffer out;
-  S::read_from_native_handle(p2.read(), out);
+  S::read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -141,9 +141,9 @@ TEST(DupTest, PipeDupAfterCloseReadEnd) {
   auto p2 = p1.dup();
 
   // The dup should have both ends invalid since fds_[0] dup fails
-  ASSERT_EQ(p2.read(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_EQ(p2.rfd(), S::INVALID_NATIVE_HANDLE_VALUE);
   // fds_[1] dup is never attempted because fds_[0] failed
-  ASSERT_EQ(p2.write(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_EQ(p2.wfd(), S::INVALID_NATIVE_HANDLE_VALUE);
 }
 
 // ===========================================================================
@@ -155,21 +155,21 @@ TEST(DupTest, PipeDupChained) {
   auto p2 = p1.dup();
   auto p3 = p2.dup();
 
-  ASSERT_NE(p3.read(), S::INVALID_NATIVE_HANDLE_VALUE);
-  ASSERT_NE(p3.write(), S::INVALID_NATIVE_HANDLE_VALUE);
-  ASSERT_NE(p3.read(), p1.read());
-  ASSERT_NE(p3.read(), p2.read());
-  ASSERT_NE(p3.write(), p1.write());
-  ASSERT_NE(p3.write(), p2.write());
+  ASSERT_NE(p3.rfd(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(p3.wfd(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(p3.rfd(), p1.rfd());
+  ASSERT_NE(p3.rfd(), p2.rfd());
+  ASSERT_NE(p3.wfd(), p1.wfd());
+  ASSERT_NE(p3.wfd(), p2.wfd());
 
   // Write through p3's write, close p1 and p2 writes too, read through p1
   const char* msg = "chained_dup";
-  S::write_to_native_handle(p3.write(), buffer{msg});
+  S::write_to_native_handle(p3.wfd(), buffer{msg});
   p1.close_write();
   p2.close_write();
 
   buffer out;
-  S::read_from_native_handle(p1.read(), out);
+  S::read_from_native_handle(p1.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -193,12 +193,12 @@ TEST(DupTest, PipeDupWithSubprocess) {
   proc.wait_for_exit();
 
   // The child has exited, closing its stdout (a dup of the pipe write end).
-  // close_child_end() already closed p1.write().  p2.write() still refers
+  // close_child_end() already closed p1.wfd().  p2.wfd() still refers
   // to the same file description; close it to signal EOF.
   p2.close_write();
 
   buffer out;
-  S::read_from_native_handle(p2.read(), out);
+  S::read_from_native_handle(p2.rfd(), out);
 
 #if defined(_WIN32)
   ASSERT_TRUE(out.to_string().find("dup_subprocess_test") != std::string::npos);
@@ -297,7 +297,7 @@ TEST(DupTest, FileDupReadContent) {
 TEST(DupTest, FileHandlerDupBasic) {
   // Create a pipe, get a native handle, wrap in FileHandler, dup it
   auto pipe = S::Pipe::create();
-  S::FileHandler fh(pipe.read());
+  S::FileHandler fh(pipe.rfd());
   ASSERT_NE(fh.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
 
   auto fh2 = fh.dup();
@@ -316,9 +316,9 @@ TEST(DupTest, FileHandlerDupFunctional) {
   auto pipe = S::Pipe::create();
 
   const char* msg = "filehandler_dup_test";
-  S::write_to_native_handle(pipe.write(), buffer{msg});
+  S::write_to_native_handle(pipe.wfd(), buffer{msg});
 
-  S::FileHandler fh(pipe.read());
+  S::FileHandler fh(pipe.rfd());
   auto fh2 = fh.dup();
 
   // Close original, read through duped
@@ -345,8 +345,8 @@ TEST(DupTest, BufferDupSharedBuffer) {
   ASSERT_EQ(&buf1.buf(), &buf2.buf());
 
   // But have different pipes
-  ASSERT_NE(buf1.pipe().read(), buf2.pipe().read());
-  ASSERT_NE(buf1.pipe().write(), buf2.pipe().write());
+  ASSERT_NE(buf1.pipe().rfd(), buf2.pipe().rfd());
+  ASSERT_NE(buf1.pipe().wfd(), buf2.pipe().wfd());
 }
 
 TEST(DupTest, BufferDupOwnedBuffer) {
@@ -357,8 +357,8 @@ TEST(DupTest, BufferDupOwnedBuffer) {
   ASSERT_EQ(&buf1.buf(), &buf2.buf());
 
   // But have different pipes
-  ASSERT_NE(buf1.pipe().read(), buf2.pipe().read());
-  ASSERT_NE(buf1.pipe().write(), buf2.pipe().write());
+  ASSERT_NE(buf1.pipe().rfd(), buf2.pipe().rfd());
+  ASSERT_NE(buf1.pipe().wfd(), buf2.pipe().wfd());
 }
 
 // ===========================================================================
@@ -374,7 +374,7 @@ TEST(DupTest, BufferDupIntegration) {
   ASSERT_EQ(&buf.buf(), &buf2.buf());
 
   // buf and buf2 have independent pipes
-  ASSERT_NE(buf.pipe().read(), buf2.pipe().read());
+  ASSERT_NE(buf.pipe().rfd(), buf2.pipe().rfd());
 
 #if defined(_WIN32)
   run({"cmd.exe", "/c", "echo buffer_dup_integration&exit /b 0"},
@@ -401,14 +401,14 @@ TEST(DupTest, BufferDupIndependentPipes) {
   auto buf2 = buf1.dup();
 
   // The two Buffer objects have distinct Pipe objects
-  ASSERT_NE(buf1.pipe().read(), buf2.pipe().read());
-  ASSERT_NE(buf1.pipe().write(), buf2.pipe().write());
+  ASSERT_NE(buf1.pipe().rfd(), buf2.pipe().rfd());
+  ASSERT_NE(buf1.pipe().wfd(), buf2.pipe().wfd());
 
   // Write through buf1's pipe, close both write ends, read via buf2's pipe
-  S::write_to_native_handle(buf1.pipe().write(), buffer{"from_buf1"});
+  S::write_to_native_handle(buf1.pipe().wfd(), buffer{"from_buf1"});
   buf2.pipe().close_write();
 
-  S::read_from_native_handle(buf2.pipe().read(), shared);
+  S::read_from_native_handle(buf2.pipe().rfd(), shared);
   ASSERT_EQ(shared, "from_buf1");
 }
 
@@ -425,8 +425,8 @@ TEST(DupTest, RedirectorDupPipe) {
 
   auto* duped_pipe = std::get_if<S::Pipe>(duped.get());
   ASSERT_NE(duped_pipe, nullptr);
-  ASSERT_NE(duped_pipe->read(), S::INVALID_NATIVE_HANDLE_VALUE);
-  ASSERT_NE(duped_pipe->write(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(duped_pipe->rfd(), S::INVALID_NATIVE_HANDLE_VALUE);
+  ASSERT_NE(duped_pipe->wfd(), S::INVALID_NATIVE_HANDLE_VALUE);
 }
 
 TEST(DupTest, RedirectorDupFile) {
@@ -448,7 +448,7 @@ TEST(DupTest, RedirectorDupFile) {
 
 TEST(DupTest, RedirectorDupFileHandler) {
   auto pipe = S::Pipe::create();
-  S::FileHandler fh(pipe.read());
+  S::FileHandler fh(pipe.rfd());
 
   S::StdinRedirector redir(std::move(fh));
 
@@ -504,7 +504,7 @@ TEST(DupTest, PipeDupBeforeSubprocessPattern) {
   p_reader.close_write();
 
   buffer out;
-  S::read_from_native_handle(p_reader.read(), out);
+  S::read_from_native_handle(p_reader.rfd(), out);
 
 #if defined(_WIN32)
   ASSERT_TRUE(out.to_string().find("dup_before_sp") != std::string::npos);

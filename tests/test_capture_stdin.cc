@@ -93,8 +93,8 @@ TEST(CaptureStdinTest, StdinFromBufferTwoArgForm) {
 TEST(CaptureStdinTest, StdinFromPipeTwoArgForm) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string pipe_data = "pipe_data_123\n";
-  write_to_native_handle(pipe.write(), buffer{pipe_data});
-  close_native_handle(pipe.write());
+  write_to_native_handle(pipe.wfd(), buffer{pipe_data});
+  close_native_handle(pipe.wfd());
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -154,8 +154,8 @@ TEST(CaptureStdinTest, StdinFromBufferVariadicForm) {
 TEST(CaptureStdinTest, StdinFromPipeVariadicForm) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string pipe_data = "variadic_pipe_data\n";
-  write_to_native_handle(pipe.write(), buffer{pipe_data});
-  close_native_handle(pipe.write());
+  write_to_native_handle(pipe.wfd(), buffer{pipe_data});
+  close_native_handle(pipe.wfd());
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -272,7 +272,7 @@ TEST(CaptureStdinTest, EmptyStdinFromBuffer) {
 // ===========================================================================
 TEST(CaptureStdinTest, EmptyStdinFromPipe) {
   auto pipe = subprocess::detail::Pipe::create();
-  close_native_handle(pipe.write());
+  close_native_handle(pipe.wfd());
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -416,8 +416,8 @@ TEST(CaptureStdinTest, StdinFromBufferWithStderrOutput) {
 TEST(CaptureStdinTest, StdinFromPipeSpecialChars) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string special_data = "spaces  and\ttabs\n!@#$%^&*()\n";
-  write_to_native_handle(pipe.write(), buffer{special_data});
-  close_native_handle(pipe.write());
+  write_to_native_handle(pipe.wfd(), buffer{special_data});
+  close_native_handle(pipe.wfd());
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -598,8 +598,8 @@ TEST(CaptureStdinTest, StdinFromBufferProgramReadsPartially) {
 TEST(CaptureStdinTest, StdinFromPipeWriteBeforeProcessStart) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string expected = "pipe_streaming_data\n";
-  write_to_native_handle(pipe.write(), buffer{expected});
-  close_native_handle(pipe.write());
+  write_to_native_handle(pipe.wfd(), buffer{expected});
+  close_native_handle(pipe.wfd());
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);

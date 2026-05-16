@@ -1444,8 +1444,8 @@ class Pipe {
     close_read();
     close_write();
   }
-  NativeHandle& read() { return fds_[0]; }
-  NativeHandle& write() { return fds_[1]; }
+  NativeHandle& rfd() { return fds_[0]; }
+  NativeHandle& wfd() { return fds_[1]; }
   Pipe dup() {
     Pipe p{no_init_t{}};
     p.fds_[0] = dup_native_handle(fds_[0]);
@@ -1673,18 +1673,18 @@ class Redirector {
     std::visit(
         []<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            if (value.read() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (value.rfd() != INVALID_NATIVE_HANDLE_VALUE) {
               std::cerr << ">> pipe read handle not closed!" << '\n';
             }
-            if (value.write() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (value.wfd() != INVALID_NATIVE_HANDLE_VALUE) {
               std::cerr << ">> pipe write handle not closed!" << '\n';
             }
 
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            if (value.pipe().read() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (value.pipe().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
               std::cerr << ">> buffer pipe read handle not closed!" << '\n';
             }
-            if (value.pipe().write() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (value.pipe().wfd() != INVALID_NATIVE_HANDLE_VALUE) {
               std::cerr << ">> buffer pipe write handle not closed!" << '\n';
             }
           }
@@ -1725,7 +1725,7 @@ class Redirector {
           if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
             if (NativeHandle non_inheritable_handle =
-                    fileno() == 0 ? value.write() : value.read();
+                    fileno() == 0 ? value.wfd() : value.rfd();
                 non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(non_inheritable_handle,
                                         HANDLE_FLAG_INHERIT, 0)) {
@@ -1734,7 +1734,7 @@ class Redirector {
               }
             }
             if (NativeHandle inheritable_handle =
-                    fileno() == 0 ? value.read() : value.write();
+                    fileno() == 0 ? value.rfd() : value.wfd();
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
@@ -1754,7 +1754,7 @@ class Redirector {
           } else if constexpr (std::is_same_v<T, Buffer>) {
 #if defined(_WIN32)
             if (NativeHandle non_inheritable_handle =
-                    fileno() == 0 ? value.pipe().write() : value.pipe().read();
+                    fileno() == 0 ? value.pipe().wfd() : value.pipe().rfd();
                 non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(non_inheritable_handle,
                                         HANDLE_FLAG_INHERIT, 0)) {
@@ -1763,7 +1763,7 @@ class Redirector {
               }
             }
             if (NativeHandle inheritable_handle =
-                    fileno() == 0 ? value.pipe().read() : value.pipe().write();
+                    fileno() == 0 ? value.pipe().rfd() : value.pipe().wfd();
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
@@ -1785,7 +1785,7 @@ class Redirector {
         [this]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             // For child: fd 0 is the read end, parent should close it
-            close_native_handle(fileno() == 0 ? value.read() : value.write());
+            close_native_handle(fileno() == 0 ? value.rfd() : value.wfd());
           } else if constexpr (std::is_same_v<T, File>) {
             // The redirected file was passed to the child, parent no longer
             // needs it
@@ -1795,8 +1795,8 @@ class Redirector {
             // useful, do nothing, let the original opener close it
           } else if constexpr (std::is_same_v<T, Buffer>) {
             // For child: fd 0 is the read end, parent should close it
-            close_native_handle(fileno() == 0 ? value.pipe().read()
-                                              : value.pipe().write());
+            close_native_handle(fileno() == 0 ? value.pipe().rfd()
+                                              : value.pipe().wfd());
           }
         },
         *redirect_);
@@ -1829,13 +1829,13 @@ class Redirector {
         [this]<typename T>(
             [[maybe_unused]] T& value) -> std::optional<NativeHandle> {
           if constexpr (std::is_same_v<T, Pipe>) {
-            return fileno() == 0 ? value.read() : value.write();
+            return fileno() == 0 ? value.rfd() : value.wfd();
           } else if constexpr (std::is_same_v<T, File>) {
             return value.fd();
           } else if constexpr (std::is_same_v<T, FileHandler>) {
             return value.fd();
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            return fileno() == 0 ? value.pipe().read() : value.pipe().write();
+            return fileno() == 0 ? value.pipe().rfd() : value.pipe().wfd();
           }
         },
         *redirect_);
@@ -1849,8 +1849,8 @@ class Redirector {
         [this]<typename T>([[maybe_unused]] T& value)
             -> std::optional<std::reference_wrapper<NativeHandle>> {
           if constexpr (std::is_same_v<T, Buffer>) {
-            return std::ref(fileno() == 0 ? value.pipe().write()
-                                          : value.pipe().read());
+            return std::ref(fileno() == 0 ? value.pipe().wfd()
+                                          : value.pipe().rfd());
           } else {
             return std::nullopt;
           }
@@ -1869,11 +1869,11 @@ class Redirector {
           if constexpr (std::is_same_v<T, Pipe>) {
             // Child: dup stdin as the pipe's read end, stdout as the pipe's
             // write end
-            dup2(fileno() == 0 ? value.read() : value.write(), fileno());
-            close_native_handle(value.read());   // stdin has been redirected,
-                                                 // now close to prevent leak
-            close_native_handle(value.write());  // stdout has been redirected,
-                                                 // now close to prevent leak
+            dup2(fileno() == 0 ? value.rfd() : value.wfd(), fileno());
+            close_native_handle(value.rfd());  // stdin has been redirected,
+                                               // now close to prevent leak
+            close_native_handle(value.wfd());  // stdout has been redirected,
+                                               // now close to prevent leak
           } else if constexpr (std::is_same_v<T, File>) {
             if (value.fd() != fileno()) {
               dup2(value.fd(), fileno());  // dup to the opened file handle
@@ -1888,7 +1888,7 @@ class Redirector {
           } else if constexpr (std::is_same_v<T, Buffer>) {
             // Child: dup stdin as the pipe's read end, stdout as the pipe's
             // write end
-            dup2(fileno() == 0 ? value.pipe().read() : value.pipe().write(),
+            dup2(fileno() == 0 ? value.pipe().rfd() : value.pipe().wfd(),
                  fileno());
             value.pipe().close_all();
           }
@@ -1905,10 +1905,9 @@ class Redirector {
         [this, &action]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
             posix_spawn_file_actions_adddup2(
-                &action, fileno() == 0 ? value.read() : value.write(),
-                fileno());
-            posix_spawn_file_actions_addclose(&action, value.read());
-            posix_spawn_file_actions_addclose(&action, value.write());
+                &action, fileno() == 0 ? value.rfd() : value.wfd(), fileno());
+            posix_spawn_file_actions_addclose(&action, value.rfd());
+            posix_spawn_file_actions_addclose(&action, value.wfd());
           } else if constexpr (std::is_same_v<T, File>) {
             if (value.fd() != fileno()) {
               posix_spawn_file_actions_adddup2(&action, value.fd(), fileno());
@@ -1922,10 +1921,10 @@ class Redirector {
           } else if constexpr (std::is_same_v<T, Buffer>) {
             posix_spawn_file_actions_adddup2(
                 &action,
-                fileno() == 0 ? value.pipe().read() : value.pipe().write(),
+                fileno() == 0 ? value.pipe().rfd() : value.pipe().wfd(),
                 fileno());
-            posix_spawn_file_actions_addclose(&action, value.pipe().read());
-            posix_spawn_file_actions_addclose(&action, value.pipe().write());
+            posix_spawn_file_actions_addclose(&action, value.pipe().rfd());
+            posix_spawn_file_actions_addclose(&action, value.pipe().wfd());
           }
         },
         *redirect_);
@@ -1942,8 +1941,8 @@ class Redirector {
           if constexpr (std::is_same_v<T, Buffer>) {
             // 0: parent needs to write data
             // 1: parent needs to read data
-            return std::ref(fileno() == 0 ? value.pipe().write()
-                                          : value.pipe().read());
+            return std::ref(fileno() == 0 ? value.pipe().wfd()
+                                          : value.pipe().rfd());
           } else {
             return std::nullopt;
           }
@@ -2920,9 +2919,9 @@ class pipeline {
     for (auto it = subs_.begin(); it != subs_.end() - 1; ++it) {
       pipes.push_back(Pipe::create());
 #if defined(_WIN32)
-      SetHandleInformation(pipes.back().read(), HANDLE_FLAG_INHERIT,
+      SetHandleInformation(pipes.back().rfd(), HANDLE_FLAG_INHERIT,
                            HANDLE_FLAG_INHERIT);
-      SetHandleInformation(pipes.back().write(), HANDLE_FLAG_INHERIT,
+      SetHandleInformation(pipes.back().wfd(), HANDLE_FLAG_INHERIT,
                            HANDLE_FLAG_INHERIT);
 #endif
       it->stdout_ = (named_args::std_out > pipes.back());
