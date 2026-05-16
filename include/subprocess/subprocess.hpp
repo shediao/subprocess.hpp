@@ -1678,7 +1678,7 @@ inline void read_write_to_buffer_use_poll(
             }
           }
           if (in->get().empty()) {
-            epoll_ctl(epfd, EPOLL_CTL_DEL, in->get().rfd(), nullptr);
+            epoll_ctl(epfd, EPOLL_CTL_DEL, in->get().wfd(), nullptr);
             in->get().close_write();
           }
         }
