@@ -228,6 +228,10 @@ class StdinRedirector;
 class StdoutRedirector;
 class StderrRedirector;
 
+#if defined(_WIN32)
+using ssize_t = std::ptrdiff_t;
+#endif
+
 inline void print_error(std::string_view msg) {
   if (msg.empty()) {
     return;
@@ -318,6 +322,21 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
 #endif
 }
 
+#if !defined(_WIN32)
+[[maybe_unused]] inline void set_nonblocking(int fd) {
+  if (fd == INVALID_NATIVE_HANDLE_VALUE) {
+    return;
+  }
+  auto const flags = fcntl(fd, F_GETFL, 0);
+  if (flags == -1) {
+    die("fcntl(F_GETFL) failed");
+  }
+  if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
+    die("fcntl(F_SETFL) failed");
+  }
+}
+#endif
+
 inline bool is_atty(NativeHandle f) {
 #if defined(_WIN32)
   return GetFileType(f) == FILE_TYPE_CHAR;
@@ -383,6 +402,8 @@ class buffer {
       callback_(reinterpret_cast<const unsigned char*>(data), size);
     }
   }
+
+  void shift(size_t size) { buf_.erase(buf_.begin(), buf_.begin() + size); }
 
   // operator== for test
   bool operator==(const buffer& other) const { return buf_ == other.buf_; }
@@ -634,6 +655,80 @@ inline std::string get_last_error_message() {
 #endif  // !_WIN32
 }
 
+// return value: -1 on error, >=0 on success
+inline ssize_t write_some(NativeHandle fd, void const* data, std::size_t size) {
+#if defined(_WIN32)
+  DWORD chunk = static_cast<DWORD>((std::min<std::size_t>)(0x7ffff000u, size));
+  DWORD written{0};
+  BOOL ok = WriteFile(fd, data, chunk, &written, 0);
+  if (!ok) {
+    return -1;
+  }
+  return static_cast<ssize_t>(written);
+#else
+  ssize_t written = -1;
+  std::size_t chunk =
+      std::min<std::size_t>(std::numeric_limits<ssize_t>::max(), size);
+  do {
+    written = ::write(fd, data, chunk);
+  } while (written == -1 && errno == EINTR);
+  return written;
+#endif
+}
+
+inline bool write_all(NativeHandle fd, void const* data, std::size_t size) {
+  auto* p = static_cast<std::byte const*>(data);
+  while (size > 0) {
+    ssize_t written = write_some(fd, p, size);
+    if (written <= 0) {
+      return false;
+    }
+    p += written;
+    size -= static_cast<std::size_t>(written);
+  }
+  return true;
+}
+
+inline ssize_t read_some(NativeHandle fd, void* data, std::size_t size) {
+  if (size == 0) {
+    return 0;
+  }
+#if defined(_WIN32)
+  DWORD chunk = static_cast<DWORD>((std::min<std::size_t>)(0x7ffff000u, size));
+  DWORD read{0};
+  BOOL ok = ReadFile(fd, data, chunk, &read, 0);
+  if (!ok) {
+    auto err = GetLastError();
+    if (err == ERROR_BROKEN_PIPE || err == ERROR_NO_DATA) {
+      return 0;
+    }
+    return -1;
+  }
+  return static_cast<ssize_t>(read);
+#else
+  ssize_t read = -1;
+  std::size_t chunk =
+      std::min<std::size_t>(std::numeric_limits<ssize_t>::max(), size);
+  do {
+    read = ::read(fd, data, chunk);
+  } while (read == -1 && errno == EINTR);
+  return read;
+#endif
+}
+
+inline bool read_exact(NativeHandle fd, void* data, std::size_t size) {
+  auto* p = static_cast<std::byte*>(data);
+  while (size > 0) {
+    ssize_t read = read_some(fd, p, size);
+    if (read <= 0) {
+      return false;
+    }
+    p += read;
+    size -= static_cast<std::size_t>(read);
+  }
+  return true;
+}
+
 inline void write_to_native_handle(NativeHandle& fd, buffer const& write_data) {
   HandleGuard guard(fd);
   auto write_span = write_data.span();
@@ -648,12 +743,11 @@ inline void write_to_native_handle(NativeHandle& fd, buffer const& write_data) {
       write_span = write_span.subspan(static_cast<size_t>(write_count));
     }
 #else
-    auto write_count = write(fd, write_data.data(), write_data.size());
+    auto write_count = write_some(fd, write_span.data(), write_span.size());
     if (write_count > 0) {
       write_span = write_span.subspan(static_cast<size_t>(write_count));
-    }
-    if (write_count == -1) {
-      die("write() error: " + std::to_string(errno));
+    } else if (write_count == -1) {
+      die("write() error: " + get_last_error_message());
     }
 #endif
   }
@@ -671,585 +765,15 @@ inline void read_from_native_handle(NativeHandle& fd, buffer& read_data) {
 #else
   ssize_t read_count = 0;
   do {
-    read_count = read(fd, buf, std::size(buf));
+    read_count = read_some(fd, buf, std::size(buf));
     if (read_count > 0) {
       read_data.append(buf, static_cast<size_t>(read_count));
-    }
-    if (read_count == -1) {
+    } else if (read_count == -1) {
       die(get_last_error_message());
     }
   } while (read_count > 0);
 #endif
   fd = INVALID_NATIVE_HANDLE_VALUE;
-}
-
-#if !defined(_WIN32)
-[[maybe_unused]] inline void set_nonblocking(int fd) {
-  if (fd == INVALID_NATIVE_HANDLE_VALUE) {
-    return;
-  }
-  auto const flags = fcntl(fd, F_GETFL, 0);
-  if (flags == -1) {
-    die("fcntl(F_GETFL) failed");
-  }
-  if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
-    die("fcntl(F_SETFL) failed");
-  }
-}
-
-[[maybe_unused]] inline void multiplex_using_poll(
-    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
-    NativeHandle& err, buffer& err_buf) {
-  set_nonblocking(in);
-  set_nonblocking(out);
-  set_nonblocking(err);
-  struct pollfd fds[3]{{.fd = in, .events = POLLOUT, .revents = 0},
-                       {.fd = out, .events = POLLIN, .revents = 0},
-                       {.fd = err, .events = POLLIN, .revents = 0}};
-
-  auto in_data_span = in_buf.span();
-
-  char buf[1024];
-  while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
-         fds[1].fd != INVALID_NATIVE_HANDLE_VALUE ||
-         fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
-    int poll_count = poll(fds, 3, -1);
-    if (poll_count == -1) {
-      die("poll() failed");
-    }
-    if (poll_count == 0) {
-      break;
-    }
-    if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
-        (fds[0].revents & POLLOUT)) {
-      auto write_count =
-          write(fds[0].fd, in_data_span.data(), in_data_span.size());
-      while (write_count > 0) {
-        in_data_span = in_data_span.subspan(static_cast<size_t>(write_count));
-        write_count =
-            write(fds[0].fd, in_data_span.data(), in_data_span.size());
-      }
-      if (write_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die("write() error: " + std::to_string(errno));
-        }
-      }
-      if (in_data_span.empty()) {
-        close_native_handle(fds[0].fd);
-      }
-    }
-    if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
-      auto read_count = read(fds[1].fd, buf, std::size(buf));
-      while (read_count > 0) {
-        out_buf.append(buf, static_cast<size_t>(read_count));
-        read_count = read(fds[1].fd, buf, std::size(buf));
-      }
-      if (read_count == 0) {
-        close_native_handle(fds[1].fd);
-      }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
-        }
-      }
-    } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
-               (fds[1].revents & (POLLHUP | POLLERR))) {
-      close_native_handle(fds[1].fd);
-    }
-    if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
-      auto read_count = read(fds[2].fd, buf, std::size(buf));
-      while (read_count > 0) {
-        err_buf.append(buf, static_cast<size_t>(read_count));
-        read_count = read(fds[2].fd, buf, std::size(buf));
-      }
-      if (read_count == 0) {
-        close_native_handle(fds[2].fd);
-      }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
-        }
-      }
-    } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
-               (fds[2].revents & (POLLHUP | POLLERR))) {
-      close_native_handle(fds[2].fd);
-    }
-    for (auto& pfd : fds) {
-      if (pfd.fd != INVALID_NATIVE_HANDLE_VALUE &&
-          (pfd.revents & (POLLNVAL | POLLHUP | POLLERR))) {
-        close_native_handle(pfd.fd);
-      }
-    }
-    if (fds[0].fd == INVALID_NATIVE_HANDLE_VALUE &&
-        fds[1].fd == INVALID_NATIVE_HANDLE_VALUE &&
-        fds[2].fd == INVALID_NATIVE_HANDLE_VALUE) {
-      break;
-    }
-  }
-  in = INVALID_NATIVE_HANDLE_VALUE;
-  out = INVALID_NATIVE_HANDLE_VALUE;
-  err = INVALID_NATIVE_HANDLE_VALUE;
-}
-
-[[maybe_unused]] inline void multiplex_using_select(
-    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
-    NativeHandle& err, buffer& err_buf) {
-  auto in_data_span = in_buf.span();
-  char buf[1024];
-
-  fd_set read_fds;
-  fd_set write_fds;
-  while (in != INVALID_NATIVE_HANDLE_VALUE ||
-         out != INVALID_NATIVE_HANDLE_VALUE ||
-         err != INVALID_NATIVE_HANDLE_VALUE) {
-    FD_ZERO(&write_fds);
-    FD_ZERO(&read_fds);
-    if (in != INVALID_NATIVE_HANDLE_VALUE) {
-      FD_SET(in, &write_fds);
-    }
-    if (out != INVALID_NATIVE_HANDLE_VALUE) {
-      FD_SET(out, &read_fds);
-    }
-    if (err != INVALID_NATIVE_HANDLE_VALUE) {
-      FD_SET(err, &read_fds);
-    }
-    auto max_fd = std::max(std::max(in, out), err);
-    auto const ready =
-        select(max_fd + 1, &read_fds, &write_fds, nullptr, nullptr);
-    if (ready == 0) {
-      close_native_handle(in);
-      close_native_handle(out);
-      close_native_handle(err);
-      break;
-    }
-    if (ready == -1) {
-      die(get_last_error_message());
-    }
-    if (in != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(in, &write_fds)) {
-      auto write_count = write(in, in_data_span.data(), in_data_span.size());
-      while (write_count > 0) {
-        in_data_span = in_data_span.subspan(static_cast<size_t>(write_count));
-        write_count = write(in, in_data_span.data(), in_data_span.size());
-      }
-      if (write_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die("write() error: " + std::to_string(errno));
-        }
-      }
-      if (in_data_span.empty()) {
-        close_native_handle(in);
-      }
-    }
-    if (out != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(out, &read_fds)) {
-      auto read_count = read(out, buf, std::size(buf));
-      while (read_count > 0) {
-        out_buf.append(buf, static_cast<size_t>(read_count));
-        read_count = read(out, buf, std::size(buf));
-      }
-      if (read_count == 0) {
-        close_native_handle(out);
-      }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
-        }
-      }
-    }
-    if (err != INVALID_NATIVE_HANDLE_VALUE && FD_ISSET(err, &read_fds)) {
-      auto read_count = read(err, buf, std::size(buf));
-      while (read_count > 0) {
-        err_buf.append(buf, static_cast<size_t>(read_count));
-        read_count = read(err, buf, std::size(buf));
-      }
-      if (read_count == 0) {
-        close_native_handle(err);
-      }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
-        }
-      }
-    }
-  }
-}
-#endif
-#if defined(__linux__)
-[[maybe_unused]] inline void multiplex_using_epoll(
-    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
-    NativeHandle& err, buffer& err_buf) {
-  set_nonblocking(in);
-  set_nonblocking(out);
-  set_nonblocking(err);
-
-  int epfd = epoll_create1(EPOLL_CLOEXEC);
-  if (epfd == -1) {
-    die("epoll_create1() failed: " + get_last_error_message());
-  }
-  HandleGuard epoll_guard(epfd);
-
-  struct epoll_event ev;
-  struct epoll_event events[3];
-
-  // Add valid file descriptors to the epoll interest list
-  if (in != INVALID_NATIVE_HANDLE_VALUE) {
-    ev.events = EPOLLOUT;
-    ev.data.fd = in;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, in, &ev) == -1) {
-      die("epoll_ctl(EPOLL_CTL_ADD, in) failed: " + get_last_error_message());
-    }
-  }
-  if (out != INVALID_NATIVE_HANDLE_VALUE) {
-    ev.events = EPOLLIN;
-    ev.data.fd = out;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, out, &ev) == -1) {
-      die("epoll_ctl(EPOLL_CTL_ADD, out) failed: " + get_last_error_message());
-    }
-  }
-  if (err != INVALID_NATIVE_HANDLE_VALUE) {
-    ev.events = EPOLLIN;
-    ev.data.fd = err;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, err, &ev) == -1) {
-      die("epoll_ctl(EPOLL_CTL_ADD, err) failed: " + get_last_error_message());
-    }
-  }
-
-  auto in_data_span = in_buf.span();
-  char buf[1024];
-
-  while (in != INVALID_NATIVE_HANDLE_VALUE ||
-         out != INVALID_NATIVE_HANDLE_VALUE ||
-         err != INVALID_NATIVE_HANDLE_VALUE) {
-    int nfds = epoll_wait(epfd, events, 3, -1);
-    if (nfds == -1) {
-      if (errno == EINTR) {
-        continue;
-      }
-      die("epoll_wait() failed: " + get_last_error_message());
-    }
-
-    for (int i = 0; i < nfds; ++i) {
-      int fd = events[i].data.fd;
-      uint32_t revents = events[i].events;
-
-      if (fd == in) {
-        if (revents & EPOLLOUT) {
-          auto write_count =
-              write(fd, in_data_span.data(), in_data_span.size());
-          while (write_count > 0) {
-            in_data_span =
-                in_data_span.subspan(static_cast<size_t>(write_count));
-            write_count = write(fd, in_data_span.data(), in_data_span.size());
-          }
-          if (write_count == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die("write() error: " + std::to_string(errno));
-            }
-          }
-          if (in_data_span.empty()) {
-            epoll_ctl(epfd, EPOLL_CTL_DEL, in, nullptr);
-            close_native_handle(in);
-          }
-        }
-        if (revents & (EPOLLHUP | EPOLLERR)) {
-          epoll_ctl(epfd, EPOLL_CTL_DEL, in, nullptr);
-          close_native_handle(in);
-        }
-      } else if (fd == out) {
-        if (revents & EPOLLIN) {
-          auto read_count = read(fd, buf, std::size(buf));
-          while (read_count > 0) {
-            out_buf.append(buf, static_cast<size_t>(read_count));
-            read_count = read(fd, buf, std::size(buf));
-          }
-          if (read_count == 0) {
-            epoll_ctl(epfd, EPOLL_CTL_DEL, out, nullptr);
-            close_native_handle(out);
-          }
-          if (read_count == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
-            }
-          }
-        }
-        if (revents & (EPOLLHUP | EPOLLERR)) {
-          epoll_ctl(epfd, EPOLL_CTL_DEL, out, nullptr);
-          close_native_handle(out);
-        }
-      } else if (fd == err) {
-        if (revents & EPOLLIN) {
-          auto read_count = read(fd, buf, std::size(buf));
-          while (read_count > 0) {
-            err_buf.append(buf, static_cast<size_t>(read_count));
-            read_count = read(fd, buf, std::size(buf));
-          }
-          if (read_count == 0) {
-            epoll_ctl(epfd, EPOLL_CTL_DEL, err, nullptr);
-            close_native_handle(err);
-          }
-          if (read_count == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
-            }
-          }
-        }
-        if (revents & (EPOLLHUP | EPOLLERR)) {
-          epoll_ctl(epfd, EPOLL_CTL_DEL, err, nullptr);
-          close_native_handle(err);
-        }
-      }
-    }
-  }
-
-  in = INVALID_NATIVE_HANDLE_VALUE;
-  out = INVALID_NATIVE_HANDLE_VALUE;
-  err = INVALID_NATIVE_HANDLE_VALUE;
-}
-#endif
-
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
-    defined(__OpenBSD__)
-
-[[maybe_unused]] inline void multiplex_using_kqueue(
-    NativeHandle& in, buffer const& in_buf, NativeHandle& out, buffer& out_buf,
-    NativeHandle& err, buffer& err_buf) {
-  set_nonblocking(in);
-  set_nonblocking(out);
-  set_nonblocking(err);
-
-  int kq = kqueue();
-  if (kq == -1) {
-    die("kqueue() failed: " + get_last_error_message());
-  }
-  HandleGuard kq_guard(kq);
-
-  struct kevent changes[3];
-  int nchanges = 0;
-
-  if (in != INVALID_NATIVE_HANDLE_VALUE) {
-    EV_SET(&changes[nchanges++], in, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0,
-           nullptr);
-  }
-  if (out != INVALID_NATIVE_HANDLE_VALUE) {
-    EV_SET(&changes[nchanges++], out, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0,
-           nullptr);
-  }
-  if (err != INVALID_NATIVE_HANDLE_VALUE) {
-    EV_SET(&changes[nchanges++], err, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0,
-           nullptr);
-  }
-
-  if (nchanges > 0) {
-    if (kevent(kq, changes, nchanges, nullptr, 0, nullptr) == -1) {
-      die("kevent() register failed: " + get_last_error_message());
-    }
-  }
-
-  auto in_data_span = in_buf.span();
-  char buf[1024];
-
-  struct kevent events[3];
-
-  while (in != INVALID_NATIVE_HANDLE_VALUE ||
-         out != INVALID_NATIVE_HANDLE_VALUE ||
-         err != INVALID_NATIVE_HANDLE_VALUE) {
-    int nev = kevent(kq, nullptr, 0, events, 3, nullptr);
-    if (nev == -1) {
-      if (errno == EINTR) {
-        continue;
-      }
-      die("kevent() failed: " + get_last_error_message());
-    }
-
-    for (int i = 0; i < nev; ++i) {
-      int fd = static_cast<int>(events[i].ident);
-      int16_t filter = events[i].filter;
-      uint16_t flags = events[i].flags;
-
-      if (flags & EV_ERROR) {
-        struct kevent ch;
-        EV_SET(&ch, fd, filter, EV_DELETE, 0, 0, nullptr);
-        kevent(kq, &ch, 1, nullptr, 0, nullptr);
-        if (fd == in) {
-          close_native_handle(in);
-        } else if (fd == out) {
-          close_native_handle(out);
-        } else if (fd == err) {
-          close_native_handle(err);
-        }
-        continue;
-      }
-
-      if (fd == in) {
-        if (filter == EVFILT_WRITE) {
-          auto write_count =
-              write(fd, in_data_span.data(), in_data_span.size());
-          while (write_count > 0) {
-            in_data_span =
-                in_data_span.subspan(static_cast<size_t>(write_count));
-            write_count = write(fd, in_data_span.data(), in_data_span.size());
-          }
-          if (write_count == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die("write() error: " + std::to_string(errno));
-            }
-          }
-          if (in_data_span.empty()) {
-            struct kevent ch;
-            EV_SET(&ch, in, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
-            kevent(kq, &ch, 1, nullptr, 0, nullptr);
-            close_native_handle(in);
-          }
-        }
-        if (flags & EV_EOF) {
-          struct kevent ch;
-          EV_SET(&ch, in, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
-          kevent(kq, &ch, 1, nullptr, 0, nullptr);
-          close_native_handle(in);
-        }
-      } else if (fd == out) {
-        if (filter == EVFILT_READ) {
-          auto read_count = read(fd, buf, std::size(buf));
-          while (read_count > 0) {
-            out_buf.append(buf, static_cast<size_t>(read_count));
-            read_count = read(fd, buf, std::size(buf));
-          }
-          if (read_count == 0) {
-            struct kevent ch;
-            EV_SET(&ch, out, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
-            kevent(kq, &ch, 1, nullptr, 0, nullptr);
-            close_native_handle(out);
-          } else if (read_count == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
-            }
-          }
-        }
-      } else if (fd == err) {
-        if (filter == EVFILT_READ) {
-          auto read_count = read(fd, buf, std::size(buf));
-          while (read_count > 0) {
-            err_buf.append(buf, static_cast<size_t>(read_count));
-            read_count = read(fd, buf, std::size(buf));
-          }
-          if (read_count == 0) {
-            struct kevent ch;
-            EV_SET(&ch, err, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
-            kevent(kq, &ch, 1, nullptr, 0, nullptr);
-            close_native_handle(err);
-          } else if (read_count == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
-            }
-          }
-        }
-      }
-    }
-  }
-
-  in = INVALID_NATIVE_HANDLE_VALUE;
-  out = INVALID_NATIVE_HANDLE_VALUE;
-  err = INVALID_NATIVE_HANDLE_VALUE;
-}
-#endif
-
-[[maybe_unused]]
-inline void read_write_with_threads(NativeHandle& in, buffer const& in_buf,
-                                    NativeHandle& out, buffer& out_buf,
-                                    NativeHandle& err, buffer& err_buf) {
-  std::vector<std::thread> threads;
-#if SUBPROCESS_HAS_EXCEPTIONS
-  std::exception_ptr exception{nullptr};
-  std::mutex exception_mutex;
-#endif
-
-  if (in != INVALID_NATIVE_HANDLE_VALUE) {
-#if SUBPROCESS_HAS_EXCEPTIONS
-    threads.emplace_back(
-        [](NativeHandle& fd, buffer const& buf, std::exception_ptr& exc,
-           std::mutex& mtx) {
-          try {
-            write_to_native_handle(fd, buf);
-          } catch (...) {
-            std::lock_guard<std::mutex> lock(mtx);
-            if (!exc) {
-              exc = std::current_exception();
-            }
-          }
-        },
-        std::ref(in), std::ref(in_buf), std::ref(exception),
-        std::ref(exception_mutex));
-#else
-    threads.emplace_back(write_to_native_handle, std::ref(in),
-                         std::ref(in_buf));
-#endif
-  }
-  if (out != INVALID_NATIVE_HANDLE_VALUE) {
-#if SUBPROCESS_HAS_EXCEPTIONS
-    threads.emplace_back(
-        [](NativeHandle& fd, buffer& buf, std::exception_ptr& exc,
-           std::mutex& mtx) {
-          try {
-            read_from_native_handle(fd, buf);
-          } catch (...) {
-            std::lock_guard<std::mutex> lock(mtx);
-            if (!exc) {
-              exc = std::current_exception();
-            }
-          }
-        },
-        std::ref(out), std::ref(out_buf), std::ref(exception),
-        std::ref(exception_mutex));
-#else
-    threads.emplace_back(read_from_native_handle, std::ref(out),
-                         std::ref(out_buf));
-#endif
-  }
-  if (err != INVALID_NATIVE_HANDLE_VALUE) {
-#if SUBPROCESS_HAS_EXCEPTIONS
-    threads.emplace_back(
-        [](NativeHandle& fd, buffer& buf, std::exception_ptr& exc,
-           std::mutex& mtx) {
-          try {
-            read_from_native_handle(fd, buf);
-          } catch (...) {
-            std::lock_guard<std::mutex> lock(mtx);
-            if (!exc) {
-              exc = std::current_exception();
-            }
-          }
-        },
-        std::ref(err), std::ref(err_buf), std::ref(exception),
-        std::ref(exception_mutex));
-#else
-    threads.emplace_back(read_from_native_handle, std::ref(err),
-                         std::ref(err_buf));
-#endif
-  }
-
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-#if SUBPROCESS_HAS_EXCEPTIONS
-  if (exception) {
-    std::rethrow_exception(exception);
-  }
-#endif
-}
-
-inline void read_write_pipes(NativeHandle& in, buffer const& in_buf,
-                             NativeHandle& out, buffer& out_buf,
-                             NativeHandle& err, buffer& err_buf) {
-#if defined(_WIN32)
-  return read_write_with_threads(in, in_buf, out, out_buf, err, err_buf);
-#else
-#if defined(SUBPROCESS_MULTIPLEXING_USE_SELECT) && \
-    SUBPROCESS_MULTIPLEXING_USE_SELECT
-  return multiplex_using_select(in, in_buf, out, out_buf, err, err_buf);
-#else
-  return multiplex_using_poll(in, in_buf, out, out_buf, err, err_buf);
-#endif
-#endif
 }
 
 #if defined(_WIN32)
@@ -1446,6 +970,20 @@ class Pipe {
   }
   NativeHandle& rfd() { return fds_[0]; }
   NativeHandle& wfd() { return fds_[1]; }
+
+  ssize_t read_some(void* data, std::size_t size) const {
+    return detail::read_some(fds_[0], data, size);
+  }
+  bool read_exact(void* data, std::size_t size) const {
+    return detail::read_exact(fds_[0], data, size);
+  }
+  ssize_t write_some(void const* data, std::size_t size) const {
+    return detail::write_some(fds_[1], data, size);
+  }
+  bool write_all(void const* data, std::size_t size) const {
+    return detail::write_all(fds_[1], data, size);
+  }
+
   Pipe dup() {
     Pipe p{no_init_t{}};
     p.fds_[0] = dup_native_handle(fds_[0]);
@@ -1473,7 +1011,7 @@ class Pipe {
     at.nLength = sizeof(SECURITY_ATTRIBUTES);
     at.lpSecurityDescriptor = nullptr;
 
-    if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 0)) {
+    if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 64 * 1024)) {
       die(get_last_error_message());
     }
 #else
@@ -1538,6 +1076,19 @@ struct File {
   }
   void close() { close_native_handle(fd_); }
   NativeHandle fd() const { return fd_; }
+
+  ssize_t read_some(void* data, std::size_t size) const {
+    return detail::read_some(fd_, data, size);
+  }
+  bool read_exact(void* data, std::size_t size) const {
+    return detail::read_exact(fd_, data, size);
+  }
+  ssize_t write_some(void const* data, std::size_t size) const {
+    return detail::write_some(fd_, data, size);
+  }
+  bool write_all(void const* data, std::size_t size) const {
+    return detail::write_all(fd_, data, size);
+  }
 
   File dup() {
     File f{path_};
@@ -1606,6 +1157,19 @@ class FileHandler {
     fd_ = INVALID_NATIVE_HANDLE_VALUE;
   }
 
+  ssize_t read_some(void* data, std::size_t size) const {
+    return detail::read_some(fd_, data, size);
+  }
+  bool read_exact(void* data, std::size_t size) const {
+    return detail::read_exact(fd_, data, size);
+  }
+  ssize_t write_some(void const* data, std::size_t size) const {
+    return detail::write_some(fd_, data, size);
+  }
+  bool write_all(void const* data, std::size_t size) const {
+    return detail::write_all(fd_, data, size);
+  }
+
   FileHandler dup() const { return FileHandler(dup_native_handle(fd_)); }
 
  private:
@@ -1625,6 +1189,41 @@ class Buffer {
       : buf_{std::make_shared<value_type>(buffer_container_type{})},
         pipe_{Pipe::create()} {}
 
+  ssize_t read_some() {
+    char tmp[1024];
+    auto size = pipe_.read_some(tmp, sizeof(tmp));
+    if (size > 0) {
+      std::visit(
+          [tmp, size](buffer_container_type& buf) { buf.append(tmp, size); },
+          *buf_);
+    }
+    return size;
+  }
+
+  ssize_t write_some() {
+    return std::visit(
+        [this](buffer_container_type& buf) {
+          if (buf.size() <= written_size_) {
+            return static_cast<ssize_t>(0);  // EOF0;
+          }
+          auto written = pipe_.write_some(buf.data() + written_size_,
+                                          buf.size() - written_size_);
+          if (written > 0) {
+            written_size_ += written;
+          }
+          return written;
+        },
+        *buf_);
+  }
+
+  bool empty() const {
+    return std::visit(
+        [this](buffer_container_type const& buf) {
+          return buf.size() <= written_size_;
+        },
+        *buf_);
+  }
+
   buffer& buf() {
     return std::visit(
         []<typename T>(T& value) -> buffer_container_type& {
@@ -1638,6 +1237,11 @@ class Buffer {
         *buf_);
   }
   Pipe& pipe() { return pipe_; }
+  NativeHandle& rfd() { return pipe_.rfd(); }
+  NativeHandle& wfd() { return pipe_.wfd(); }
+
+  void close_write() { pipe_.close_write(); }
+  void close_read() { pipe_.close_read(); }
 
   Buffer dup() { return Buffer{buf_, pipe_.dup()}; }
 
@@ -1645,8 +1249,610 @@ class Buffer {
   Buffer(std::shared_ptr<value_type> buf, Pipe&& pipe)
       : buf_{buf}, pipe_{std::move(pipe)} {}
   std::shared_ptr<value_type> buf_;
+  std::size_t written_size_{0};
   Pipe pipe_;
 };
+
+[[maybe_unused]]
+inline void read_write_to_buffer_with_threads(
+    std::optional<std::reference_wrapper<Buffer>> in,
+    std::optional<std::reference_wrapper<Buffer>> out,
+    std::optional<std::reference_wrapper<Buffer>> err) {
+  std::vector<std::thread> threads;
+#if SUBPROCESS_HAS_EXCEPTIONS
+  std::exception_ptr exception{nullptr};
+  std::mutex exception_mutex;
+#endif
+
+  if (in) {
+#if SUBPROCESS_HAS_EXCEPTIONS
+    threads.emplace_back(
+        [](Buffer& buf, std::exception_ptr& exc, std::mutex& mtx) {
+          try {
+            ssize_t write_size;
+            while ((write_size = buf.write_some()) > 0) {
+            }
+            buf.close_write();
+            if (write_size == -1) {
+              die("write_some() failed");
+            }
+          } catch (...) {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!exc) {
+              exc = std::current_exception();
+            }
+          }
+        },
+        std::ref(in.value()), std::ref(exception), std::ref(exception_mutex));
+#else
+    threads.emplace_back(
+        [](Buffer& buf) {
+          ssize_t write_size;
+          while ((write_size = buf.write_some()) > 0) {
+          }
+          buf.close_write();
+          if (write_size == -1) {
+            die("write_some() failed");
+          }
+        },
+        std::ref(in.value()));
+#endif
+  }
+  if (out) {
+#if SUBPROCESS_HAS_EXCEPTIONS
+    threads.emplace_back(
+        [](Buffer& buf, std::exception_ptr& exc, std::mutex& mtx) {
+          try {
+            ssize_t read_size;
+            while ((read_size = buf.read_some()) > 0) {
+            }
+            buf.close_read();
+            if (read_size == -1) {
+              die("read_some() failed: " + get_last_error_message());
+            }
+          } catch (...) {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!exc) {
+              exc = std::current_exception();
+            }
+          }
+        },
+        std::ref(out.value()), std::ref(exception), std::ref(exception_mutex));
+#else
+    threads.emplace_back(
+        [](Buffer& buf) {
+          ssize_t read_size;
+          while ((read_size = buf.read_some()) > 0) {
+          }
+          buf.close_read();
+          if (read_size == -1) {
+            die("read_some() failed: " + get_last_error_message());
+          }
+        },
+        std::ref(out.value()));
+#endif
+  }
+  if (err) {
+#if SUBPROCESS_HAS_EXCEPTIONS
+    threads.emplace_back(
+        [](Buffer& buf, std::exception_ptr& exc, std::mutex& mtx) {
+          try {
+            ssize_t read_size;
+            while ((read_size = buf.read_some()) > 0) {
+            }
+            buf.close_read();
+            if (read_size == -1) {
+              die("read_some() failed: " + get_last_error_message());
+            }
+          } catch (...) {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!exc) {
+              exc = std::current_exception();
+            }
+          }
+        },
+        std::ref(err.value()), std::ref(exception), std::ref(exception_mutex));
+#else
+    threads.emplace_back(
+        [](Buffer& buf) {
+          ssize_t read_size;
+          while ((read_size = buf.read_some()) > 0) {
+          }
+          buf.close_read();
+          if (read_size == -1) {
+            die("read_some() failed: " + get_last_error_message());
+          }
+        },
+        std::ref(err.value()));
+#endif
+  }
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+#if SUBPROCESS_HAS_EXCEPTIONS
+  if (exception) {
+    std::rethrow_exception(exception);
+  }
+#endif
+}
+
+#if !defined(_WIN32)
+[[maybe_unused]]
+inline void read_write_to_buffer_use_poll(
+    std::optional<std::reference_wrapper<Buffer>> in,
+    std::optional<std::reference_wrapper<Buffer>> out,
+    std::optional<std::reference_wrapper<Buffer>> err) {
+  if (in) {
+    set_nonblocking(in->get().wfd());
+  }
+  if (out) {
+    set_nonblocking(out->get().rfd());
+  }
+  if (err) {
+    set_nonblocking(err->get().rfd());
+  }
+
+  struct pollfd fds[3]{
+      {.fd = in ? in->get().wfd() : INVALID_NATIVE_HANDLE_VALUE,
+       .events = POLLOUT,
+       .revents = 0},
+      {.fd = out ? out->get().rfd() : INVALID_NATIVE_HANDLE_VALUE,
+       .events = POLLIN,
+       .revents = 0},
+      {.fd = err ? err->get().rfd() : INVALID_NATIVE_HANDLE_VALUE,
+       .events = POLLIN,
+       .revents = 0}};
+
+  while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
+         fds[1].fd != INVALID_NATIVE_HANDLE_VALUE ||
+         fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
+    int poll_count = poll(fds, 3, -1);
+    if (poll_count == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      die("poll() failed");
+    }
+    if (poll_count == 0) {
+      break;
+    }
+    if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
+        (fds[0].revents & POLLOUT)) {
+      ssize_t write_count;
+      while ((write_count = in->get().write_some()) > 0) {
+      }
+      if (write_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          die("write() error: " + std::to_string(errno));
+        }
+      }
+      if (in->get().empty()) {
+        in->get().close_write();
+        fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+    }
+    if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
+      ssize_t read_count;
+      while ((read_count = out->get().read_some()) > 0) {
+      }
+      if (read_count == 0) {
+        out->get().close_read();
+        fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          die(get_last_error_message());
+        }
+      }
+    } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
+               (fds[1].revents & (POLLHUP | POLLERR))) {
+      out->get().close_read();
+      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
+      ssize_t read_count;
+      while ((read_count = err->get().read_some())) {
+      }
+      if (read_count == 0) {
+        err->get().close_read();
+        fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          die(get_last_error_message());
+        }
+      }
+    } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
+               (fds[2].revents & (POLLHUP | POLLERR))) {
+      err->get().close_read();
+      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
+        (fds[0].revents & (POLLNVAL | POLLHUP | POLLERR))) {
+      in->get().close_write();
+      fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
+        (fds[1].revents & (POLLNVAL | POLLHUP | POLLERR))) {
+      out->get().close_read();
+      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
+        (fds[2].revents & (POLLNVAL | POLLHUP | POLLERR))) {
+      err->get().close_read();
+      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (fds[0].fd == INVALID_NATIVE_HANDLE_VALUE &&
+        fds[1].fd == INVALID_NATIVE_HANDLE_VALUE &&
+        fds[2].fd == INVALID_NATIVE_HANDLE_VALUE) {
+      break;
+    }
+  }
+  if (in) {
+    in->get().wfd() = INVALID_NATIVE_HANDLE_VALUE;
+  }
+  if (out) {
+    out->get().rfd() = INVALID_NATIVE_HANDLE_VALUE;
+  }
+  if (err) {
+    err->get().rfd() = INVALID_NATIVE_HANDLE_VALUE;
+  }
+}
+
+[[maybe_unused]] inline void read_write_to_buffer_use_select(
+    std::optional<std::reference_wrapper<Buffer>> in,
+    std::optional<std::reference_wrapper<Buffer>> out,
+    std::optional<std::reference_wrapper<Buffer>> err) {
+  fd_set read_fds;
+  fd_set write_fds;
+  while ((in && in->get().wfd() != INVALID_NATIVE_HANDLE_VALUE) ||
+         (out && out->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) ||
+         (err && err->get().rfd() != INVALID_NATIVE_HANDLE_VALUE)) {
+    FD_ZERO(&write_fds);
+    FD_ZERO(&read_fds);
+    if (in && in->get().wfd() != INVALID_NATIVE_HANDLE_VALUE) {
+      FD_SET(in->get().wfd(), &write_fds);
+    }
+    if (out && out->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+      FD_SET(out->get().rfd(), &read_fds);
+    }
+    if (err && err->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+      FD_SET(err->get().rfd(), &read_fds);
+    }
+    auto in_wfd = in ? in->get().wfd() : INVALID_NATIVE_HANDLE_VALUE;
+    auto out_rfd = out ? out->get().rfd() : INVALID_NATIVE_HANDLE_VALUE;
+    auto err_rfd = err ? err->get().rfd() : INVALID_NATIVE_HANDLE_VALUE;
+
+    auto max_fd = std::max(std::max(in_wfd, out_rfd), err_rfd);
+    auto const ready =
+        select(max_fd + 1, &read_fds, &write_fds, nullptr, nullptr);
+    if (ready == 0) {
+      if (in) {
+        in->get().close_write();
+      }
+      if (out) {
+        out->get().close_read();
+      }
+      if (err) {
+        err->get().close_read();
+      }
+      break;
+    }
+    if (ready == -1) {
+      die(get_last_error_message());
+    }
+    if (in && in_wfd != INVALID_NATIVE_HANDLE_VALUE &&
+        FD_ISSET(in_wfd, &write_fds)) {
+      ssize_t write_count;
+      while ((write_count = in->get().write_some()) > 0) {
+      }
+      if (write_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          die("write() error: " + std::to_string(errno));
+        }
+      }
+      if (in->get().empty()) {
+        in->get().close_write();
+      }
+    }
+    if (out && out_rfd != INVALID_NATIVE_HANDLE_VALUE &&
+        FD_ISSET(out_rfd, &read_fds)) {
+      ssize_t read_count;
+      while ((read_count = out->get().read_some()) > 0) {
+      }
+      if (read_count == 0) {
+        out->get().close_read();
+      }
+      if (read_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          die(get_last_error_message());
+        }
+      }
+    }
+    if (err && err_rfd != INVALID_NATIVE_HANDLE_VALUE &&
+        FD_ISSET(err_rfd, &read_fds)) {
+      ssize_t read_count;
+      while ((read_count = err->get().read_some()) > 0) {
+      }
+      if (read_count == 0) {
+        err->get().close_read();
+      }
+      if (read_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          die(get_last_error_message());
+        }
+      }
+    }
+  }
+}
+#endif
+
+#if defined(__linux__)
+[[maybe_unused]] inline void read_write_to_buffer_use_epoll(
+    std::optional<std::reference_wrapper<Buffer>> in,
+    std::optional<std::reference_wrapper<Buffer>> out,
+    std::optional<std::reference_wrapper<Buffer>> err) {
+  if (in) {
+    set_nonblocking(in->get().wfd());
+  }
+  if (out) {
+    set_nonblocking(out->get().rfd());
+  }
+  if (err) {
+    set_nonblocking(err->get().rfd());
+  }
+
+  int epfd = epoll_create1(EPOLL_CLOEXEC);
+  if (epfd == -1) {
+    die("epoll_create1() failed: " + get_last_error_message());
+  }
+  HandleGuard epoll_guard(epfd);
+
+  struct epoll_event ev;
+  struct epoll_event events[3];
+
+  // Add valid file descriptors to the epoll interest list
+  if (in && in->get().wfd() != INVALID_NATIVE_HANDLE_VALUE) {
+    ev.events = EPOLLOUT;
+    ev.data.fd = in->get().wfd();
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, in->get().wfd(), &ev) == -1) {
+      die("epoll_ctl(EPOLL_CTL_ADD, in) failed: " + get_last_error_message());
+    }
+  }
+  if (out && out->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+    ev.events = EPOLLIN;
+    ev.data.fd = out->get().rfd();
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, out->get().rfd(), &ev) == -1) {
+      die("epoll_ctl(EPOLL_CTL_ADD, out) failed: " + get_last_error_message());
+    }
+  }
+  if (err && err->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+    ev.events = EPOLLIN;
+    ev.data.fd = err->get().rfd();
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, err->get().rfd(), &ev) == -1) {
+      die("epoll_ctl(EPOLL_CTL_ADD, err) failed: " + get_last_error_message());
+    }
+  }
+
+  while ((in && in->get().wfd() != INVALID_NATIVE_HANDLE_VALUE) ||
+         (out && out->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) ||
+         (err && err->get().rfd() != INVALID_NATIVE_HANDLE_VALUE)) {
+    int nfds = epoll_wait(epfd, events, 3, -1);
+    if (nfds == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      die("epoll_wait() failed: " + get_last_error_message());
+    }
+
+    for (int i = 0; i < nfds; ++i) {
+      int fd = events[i].data.fd;
+      uint32_t revents = events[i].events;
+
+      if (in && fd == in->get().wfd()) {
+        if (revents & EPOLLOUT) {
+          ssize_t write_count;
+          while ((write_count = in->get().write_some()) > 0) {
+          }
+          if (write_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              die("write() error: " + std::to_string(errno));
+            }
+          }
+          if (in->get().empty()) {
+            epoll_ctl(epfd, EPOLL_CTL_DEL, in->get().rfd(), nullptr);
+            in->get().close_write();
+          }
+        }
+        if (revents & (EPOLLHUP | EPOLLERR)) {
+          epoll_ctl(epfd, EPOLL_CTL_DEL, in->get().wfd(), nullptr);
+          in->get().close_write();
+        }
+      } else if (out && fd == out->get().rfd()) {
+        if (revents & EPOLLIN) {
+          ssize_t read_count;
+          while ((read_count = out->get().read_some()) > 0) {
+          }
+          if (read_count == 0) {
+            epoll_ctl(epfd, EPOLL_CTL_DEL, out->get().rfd(), nullptr);
+            out->get().close_read();
+          }
+          if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              die(get_last_error_message());
+            }
+          }
+        }
+        if (revents & (EPOLLHUP | EPOLLERR)) {
+          epoll_ctl(epfd, EPOLL_CTL_DEL, out->get().rfd(), nullptr);
+          out->get().close_read();
+        }
+      } else if (err && fd == err->get().rfd()) {
+        if (revents & EPOLLIN) {
+          ssize_t read_count;
+          while ((read_count = err->get().read_some()) > 0) {
+          }
+          if (read_count == 0) {
+            epoll_ctl(epfd, EPOLL_CTL_DEL, err->get().rfd(), nullptr);
+            err->get().close_read();
+          }
+          if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              die(get_last_error_message());
+            }
+          }
+        }
+        if (revents & (EPOLLHUP | EPOLLERR)) {
+          epoll_ctl(epfd, EPOLL_CTL_DEL, err->get().rfd(), nullptr);
+          err->get().close_read();
+        }
+      }
+    }
+  }
+}
+#endif
+
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
+    defined(__OpenBSD__)
+[[maybe_unused]] inline void read_write_to_buffer_use_kqueue(
+    std::optional<std::reference_wrapper<Buffer>> in,
+    std::optional<std::reference_wrapper<Buffer>> out,
+    std::optional<std::reference_wrapper<Buffer>> err) {
+  if (in) {
+    set_nonblocking(in->get().wfd());
+  }
+  if (out) {
+    set_nonblocking(out->get().rfd());
+  }
+  if (err) {
+    set_nonblocking(err->get().rfd());
+  }
+
+  int kq = kqueue();
+  if (kq == -1) {
+    die("kqueue() failed: " + get_last_error_message());
+  }
+  HandleGuard kq_guard(kq);
+
+  struct kevent changes[3];
+  int nchanges = 0;
+
+  if (in && in->get().wfd() != INVALID_NATIVE_HANDLE_VALUE) {
+    EV_SET(&changes[nchanges++], in->get().wfd(), EVFILT_WRITE,
+           EV_ADD | EV_ENABLE, 0, 0, nullptr);
+  }
+  if (out && out->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+    EV_SET(&changes[nchanges++], out->get().rfd(), EVFILT_READ,
+           EV_ADD | EV_ENABLE, 0, 0, nullptr);
+  }
+  if (err && err->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+    EV_SET(&changes[nchanges++], err->get().rfd(), EVFILT_READ,
+           EV_ADD | EV_ENABLE, 0, 0, nullptr);
+  }
+
+  if (nchanges > 0) {
+    if (kevent(kq, changes, nchanges, nullptr, 0, nullptr) == -1) {
+      die("kevent() register failed: " + get_last_error_message());
+    }
+  }
+
+  struct kevent events[3];
+
+  while ((in && in->get().wfd() != INVALID_NATIVE_HANDLE_VALUE) ||
+         (out && out->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) ||
+         (err && err->get().rfd() != INVALID_NATIVE_HANDLE_VALUE)) {
+    int nev = kevent(kq, nullptr, 0, events, 3, nullptr);
+    if (nev == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      die("kevent() failed: " + get_last_error_message());
+    }
+
+    for (int i = 0; i < nev; ++i) {
+      int fd = static_cast<int>(events[i].ident);
+      int16_t filter = events[i].filter;
+      uint16_t flags = events[i].flags;
+
+      if (flags & EV_ERROR) {
+        struct kevent ch;
+        EV_SET(&ch, fd, filter, EV_DELETE, 0, 0, nullptr);
+        kevent(kq, &ch, 1, nullptr, 0, nullptr);
+        if (in && fd == in->get().wfd()) {
+          in->get().close_write();
+        } else if (out && fd == out->get().rfd()) {
+          out->get().close_read();
+        } else if (err && fd == err->get().rfd()) {
+          err->get().close_read();
+        }
+        continue;
+      }
+
+      if (in && fd == in->get().wfd()) {
+        if (filter == EVFILT_WRITE) {
+          ssize_t write_count;
+          while ((write_count = in->get().write_some()) > 0) {
+          }
+          if (write_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              die("write() error: " + std::to_string(errno));
+            }
+          }
+          if (in->get().empty()) {
+            struct kevent ch;
+            EV_SET(&ch, in->get().wfd(), EVFILT_WRITE, EV_DELETE, 0, 0,
+                   nullptr);
+            kevent(kq, &ch, 1, nullptr, 0, nullptr);
+            in->get().close_write();
+          }
+        }
+        if (flags & EV_EOF) {
+          struct kevent ch;
+          EV_SET(&ch, in->get().wfd(), EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+          kevent(kq, &ch, 1, nullptr, 0, nullptr);
+          in->get().close_write();
+        }
+      } else if (out && fd == out->get().rfd()) {
+        if (filter == EVFILT_READ) {
+          ssize_t read_count;
+          while ((read_count = out->get().read_some()) > 0) {
+          }
+          if (read_count == 0) {
+            struct kevent ch;
+            EV_SET(&ch, out->get().rfd(), EVFILT_READ, EV_DELETE, 0, 0,
+                   nullptr);
+            kevent(kq, &ch, 1, nullptr, 0, nullptr);
+            out->get().close_read();
+          } else if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              die(get_last_error_message());
+            }
+          }
+        }
+      } else if (err && fd == err->get().rfd()) {
+        if (filter == EVFILT_READ) {
+          ssize_t read_count;
+          while ((read_count = err->get().read_some()) > 0) {
+          }
+          if (read_count == 0) {
+            struct kevent ch;
+            EV_SET(&ch, err->get().rfd(), EVFILT_READ, EV_DELETE, 0, 0,
+                   nullptr);
+            kevent(kq, &ch, 1, nullptr, 0, nullptr);
+            err->get().close_read();
+          } else if (read_count == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              die(get_last_error_message());
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#endif
 
 class Redirector {
   friend class subprocess;
@@ -1840,23 +2046,6 @@ class Redirector {
         },
         *redirect_);
   }
-  std::optional<std::reference_wrapper<NativeHandle>>
-  get_buffer_fd_for_parent() {
-    if (!redirect_) {
-      return std::nullopt;
-    }
-    return std::visit(
-        [this]<typename T>([[maybe_unused]] T& value)
-            -> std::optional<std::reference_wrapper<NativeHandle>> {
-          if constexpr (std::is_same_v<T, Buffer>) {
-            return std::ref(fileno() == 0 ? value.pipe().wfd()
-                                          : value.pipe().rfd());
-          } else {
-            return std::nullopt;
-          }
-        },
-        *redirect_);
-  }
 #endif
 #if !defined(_WIN32)
   // Child closes handles needed by the parent, which the child does not need
@@ -1930,26 +2119,22 @@ class Redirector {
         *redirect_);
   }
 #endif  // SUBPROCESS_USE_POSIX_SPAWN
-  std::optional<std::reference_wrapper<NativeHandle>>
-  get_buffer_fd_for_parent() {
+#endif  // !_WIN32
+  std::optional<std::reference_wrapper<Buffer>> get_buffer() {
     if (!redirect_) {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>([[maybe_unused]] T& value)
-            -> std::optional<std::reference_wrapper<NativeHandle>> {
+        []<typename T>([[maybe_unused]] T& value)
+            -> std::optional<std::reference_wrapper<Buffer>> {
           if constexpr (std::is_same_v<T, Buffer>) {
-            // 0: parent needs to write data
-            // 1: parent needs to read data
-            return std::ref(fileno() == 0 ? value.pipe().wfd()
-                                          : value.pipe().rfd());
+            return std::ref(value);
           } else {
             return std::nullopt;
           }
         },
         *redirect_);
   }
-#endif  // !_WIN32
   virtual int fileno() const = 0;
   bool inherit() const { return !redirect_; }
 
@@ -2722,33 +2907,19 @@ class subprocess {
     stderr_.close_child_end();
 
 #if defined(_WIN32)
-    auto in = stdin_.get_buffer_fd_for_parent();
-    auto out = stdout_.get_buffer_fd_for_parent();
-    auto err = stderr_.get_buffer_fd_for_parent();
+    read_write_to_buffer_with_threads(stdin_.get_buffer(), stdout_.get_buffer(),
+                                      stderr_.get_buffer());
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
+    defined(__OpenBSD__)
+    read_write_to_buffer_use_kqueue(stdin_.get_buffer(), stdout_.get_buffer(),
+                                    stderr_.get_buffer());
+#elif defined(__linux__)
+    read_write_to_buffer_use_epoll(stdin_.get_buffer(), stdout_.get_buffer(),
+                                   stderr_.get_buffer());
 
-    NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
-    buffer tmp_buf;
-    read_write_pipes(
-        in.has_value() ? in.value().get() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
-        out.has_value() ? out.value().get() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
-        err.has_value() ? err.value().get() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
 #else
-    auto in = stdin_.get_buffer_fd_for_parent();
-    auto out = stdout_.get_buffer_fd_for_parent();
-    auto err = stderr_.get_buffer_fd_for_parent();
-
-    NativeHandle tmp_handle = INVALID_NATIVE_HANDLE_VALUE;
-    buffer tmp_buf;
-    read_write_pipes(
-        in.has_value() ? in.value().get() : tmp_handle,
-        in.has_value() ? std::get<Buffer>(*stdin_.redirect_).buf() : tmp_buf,
-        out.has_value() ? out.value().get() : tmp_handle,
-        out.has_value() ? std::get<Buffer>(*stdout_.redirect_).buf() : tmp_buf,
-        err.has_value() ? err.value().get() : tmp_handle,
-        err.has_value() ? std::get<Buffer>(*stderr_.redirect_).buf() : tmp_buf);
+    read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
+                                  stderr_.get_buffer());
 #endif
   }
 #if !defined(_WIN32)

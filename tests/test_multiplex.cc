@@ -1,896 +1,672 @@
+/**
+ * test_multiplex.cc — Tests for detail::read_write_to_buffer_use_*()
+ *
+ * Covers the POSIX I/O multiplexing backends:
+ *   - read_write_to_buffer_use_poll    (all POSIX)
+ *   - read_write_to_buffer_use_select  (all POSIX)
+ *   - read_write_to_buffer_use_epoll   (Linux only)
+ *   - read_write_to_buffer_use_kqueue  (macOS / BSD)
+ *
+ * Each backend is tested with:
+ *   - All handles nullopt (no-op)
+ *   - Only stdin active  (write buffer → pipe)
+ *   - Only stdout active (read pipe → buffer)
+ *   - Only stderr active (read pipe → buffer)
+ *   - All three active simultaneously
+ *   - Empty stdin buffer + stdout
+ *   - Larger data transfer (stdin + stdout)
+ */
+
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstring>
+#include <functional>
+#include <optional>
 #include <string>
 #include <thread>
 
 #include "subprocess/subprocess.hpp"
 
-// The multiplex_using_* functions are POSIX-only
+// The multiplexing backends are POSIX-only
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <unistd.h>
 
-using std::string_view_literals::operator""sv;
 using subprocess::buffer;
+using subprocess::detail::Buffer;
 using subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
-using subprocess::detail::NativeHandle;
 
 namespace {
 
 // ---------------------------------------------------------------------------
-// PipePair: RAII helper managing a pair of pipe file descriptors.
-//           Provides release_*() to transfer ownership of a single end.
+// Helpers
 // ---------------------------------------------------------------------------
-struct PipePair {
-  NativeHandle read_fd = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle write_fd = INVALID_NATIVE_HANDLE_VALUE;
 
-  static PipePair create() {
-    int fds[2];
-    if (::pipe(fds) != 0) {
-      subprocess::detail::die("pipe() failed");
-    }
-    return {fds[0], fds[1]};
+// Read everything from a fd (blocking) and append to |drained|.
+// Used to verify data that was written *through* the pipe by the multiplexer
+// (stdin side).
+void drain_fd(int fd, buffer& drained) {
+  char buf[256];
+  ssize_t n;
+  while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
+    drained.append(buf, static_cast<size_t>(n));
   }
+  ::close(fd);
+}
 
-  // Release ownership of the read end and return its fd.
-  NativeHandle release_read() {
-    auto fd = read_fd;
-    read_fd = INVALID_NATIVE_HANDLE_VALUE;
-    return fd;
-  }
-  // Release ownership of the write end and return its fd.
-  NativeHandle release_write() {
-    auto fd = write_fd;
-    write_fd = INVALID_NATIVE_HANDLE_VALUE;
-    return fd;
-  }
-
-  void close_read() {
-    if (read_fd != INVALID_NATIVE_HANDLE_VALUE) {
-      ::close(read_fd);
-      read_fd = INVALID_NATIVE_HANDLE_VALUE;
+// Write |data| to a fd (blocking), then close it to signal EOF.
+// Used to feed data *into* the pipe for the multiplexer to read
+// (stdout / stderr side).
+void feed_and_close(int fd, const buffer& data) {
+  size_t written = 0;
+  while (written < data.size()) {
+    ssize_t n = ::write(fd, data.data() + written, data.size() - written);
+    if (n > 0) {
+      written += static_cast<size_t>(n);
+    } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      std::this_thread::yield();
+      continue;
+    } else {
+      break;
     }
   }
-  void close_write() {
-    if (write_fd != INVALID_NATIVE_HANDLE_VALUE) {
-      ::close(write_fd);
-      write_fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-  }
+  ::close(fd);
+}
 
-  ~PipePair() {
-    close_read();
-    close_write();
-  }
+// Make a buffer pre-filled with |s|.
+buffer make_buf(const std::string& s) {
+  return buffer(s);  // string → string_view implicit conversion
+}
 
-  PipePair(int read_fd, int write_fd) noexcept {
-    this->read_fd = read_fd;
-    this->write_fd = write_fd;
+// Generate a deterministic pattern of length |n| using alternating letters.
+std::string make_pattern(size_t n, char base) {
+  std::string s(n, '\0');
+  for (size_t i = 0; i < n; ++i) {
+    s[i] = static_cast<char>(base + static_cast<char>(i % 26));
   }
-  PipePair(PipePair&& other) noexcept
-      : read_fd(other.read_fd), write_fd(other.write_fd) {
-    other.read_fd = INVALID_NATIVE_HANDLE_VALUE;
-    other.write_fd = INVALID_NATIVE_HANDLE_VALUE;
-  }
-  PipePair& operator=(PipePair&& other) noexcept {
-    if (this != &other) {
-      close_read();
-      close_write();
-      read_fd = other.read_fd;
-      write_fd = other.write_fd;
-      other.read_fd = INVALID_NATIVE_HANDLE_VALUE;
-      other.write_fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    return *this;
-  }
-  PipePair(const PipePair&) = delete;
-  PipePair& operator=(const PipePair&) = delete;
-};
+  return s;
+}
 
 }  // namespace
 
 // ===========================================================================
-// MultiplexTestBase: fixture for all multiplex_using_* tests
+// MultiplexTestBase — shared fixture
 // ===========================================================================
 class MultiplexTestBase : public ::testing::Test {
  protected:
-  // Start a drain-thread that takes *ownership* of the read-end fd.
-  // The thread reads until EOF, appends data to |drained|, then closes the fd.
-  static void start_stdin_drain_thread(NativeHandle read_fd, buffer& drained) {
-    std::thread([read_fd, &drained]() {
-      char buf[256];
-      ssize_t n;
-      while ((n = ::read(read_fd, buf, sizeof(buf))) > 0) {
-        drained.append(buf, n);
-      }
-      ::close(read_fd);
-    }).detach();
-  }
-
-  // Start a feeder-thread that takes *ownership* of the write-end fd.
-  // The thread writes |data|, then closes the fd to signal EOF.
-  static void start_stdout_stderr_feeder_thread(NativeHandle write_fd,
-                                                const buffer& data) {
-    std::thread([write_fd, &data]() {
-      size_t written = 0;
-      while (written < data.size()) {
-        ssize_t n =
-            ::write(write_fd, data.data() + written, data.size() - written);
-        if (n > 0) {
-          written += static_cast<size_t>(n);
-        } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-          std::this_thread::yield();
-          continue;
-        } else {
-          break;
-        }
-      }
-      ::close(write_fd);
-    }).detach();
+  // Short sleep to give detached / background threads a moment to finish
+  // after the multiplexer returns.
+  static void yield_for_threads() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 };
 
 // ===========================================================================
-// multiplex_using_poll  tests
+// read_write_to_buffer_use_poll  tests  (all POSIX)
 // ===========================================================================
 class MultiplexPollTest : public MultiplexTestBase {};
 
-TEST_F(MultiplexPollTest, AllHandlesInvalid) {
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
-
-  subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
-                                           err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_TRUE(in_buf.empty());
-  EXPECT_TRUE(out_buf.empty());
-  EXPECT_TRUE(err_buf.empty());
+TEST_F(MultiplexPollTest, AllHandlesNullopt) {
+  // Should return immediately without side-effects.
+  subprocess::detail::read_write_to_buffer_use_poll(std::nullopt, std::nullopt,
+                                                    std::nullopt);
+  SUCCEED();
 }
 
 TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
-  auto pp = PipePair::create();
-  NativeHandle in = pp.release_write();  // ownership transferred to |in|
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto input_str = std::string("hello from stdin poll");
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);  // wraps in_data, owns the pipe
 
-  auto input_str = "hello from stdin poll"sv;
-  buffer in_buf(input_str);
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
 
-  start_stdin_drain_thread(pp.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_poll(std::ref(in_buf),
+                                                    std::nullopt, std::nullopt);
 
-  subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
-                                           err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  // EXPECT_TRUE(in_buf.empty());
-
-  // Give the drain thread a moment to finish.
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  drain_thread.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
   EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp.release_read();  // ownership transferred to |out|
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("hello from stdout poll");
+  buffer out_data = make_buf(output_str);
+  Buffer out_buf;  // empty internal buffer
 
-  auto output_str = "hello from stdout poll"sv;
-  buffer out_data(output_str);
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(out_buf.wfd(), out_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
+  subprocess::detail::read_write_to_buffer_use_poll(
+      std::nullopt, std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
-                                           err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
+  feeder.join();
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexPollTest, OnlyStderrActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = pp.release_read();  // ownership transferred to |err|
+  auto err_str = std::string("hello from stderr poll");
+  buffer err_data = make_buf(err_str);
+  Buffer err_buf;
 
-  std::string err_str = "hello from stderr poll";
-  buffer err_data(err_str.begin(), err_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(err_buf.wfd(), err_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
+  subprocess::detail::read_write_to_buffer_use_poll(std::nullopt, std::nullopt,
+                                                    std::ref(err_buf));
 
-  subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
-                                           err_buf);
-
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err_buf, err_str);
+  feeder.join();
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexPollTest, AllThreeActive) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
-  auto pp_err = PipePair::create();
+  auto input_str = std::string("stdin-data-poll");
+  auto output_str = std::string("stdout-data-poll");
+  auto err_str = std::string("stderr-data-poll");
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = pp_err.release_read();
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
+  Buffer err_buf;
 
-  std::string input_str = "stdin-data";
-  std::string output_str = "stdout-data-poll";
-  std::string err_str = "stderr-data-poll";
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread out_feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
+  std::thread err_feeder(
+      [&]() { feed_and_close(err_buf.wfd(), make_buf(err_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_poll(
+      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
 
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer err_data(err_str.begin(), err_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
-  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
+  drain_thread.join();
+  out_feeder.join();
+  err_feeder.join();
 
-  subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
-                                           err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-
-  // Give background threads a brief moment to complete
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  yield_for_threads();
 
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf, output_str);
-  EXPECT_EQ(err_buf, err_str);
+  EXPECT_EQ(out_buf.buf(), output_str);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexPollTest, EmptyStdinBuffer) {
-  auto pp_out = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("only-stdout-poll");
+  Buffer out_buf;
 
-  std::string output_str = "only-stdout";
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer in_buf;  // empty
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  // Pass an empty stdin Buffer (no data to write → immediately closes write
+  // end).
+  Buffer in_buf;  // default-constructed: empty buffer
+  subprocess::detail::read_write_to_buffer_use_poll(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
-                                           err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
-  EXPECT_TRUE(in_buf.empty());
+  feeder.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_TRUE(in_buf.buf().empty());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexPollTest, LargerDataTransfer) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
+  auto input_str = make_pattern(128 * 1024, 'A');  // 128 KiB
+  auto output_str = make_pattern(64 * 1024, 'a');  //  64 KiB
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
 
-  // Data larger than typical pipe buffer (64 KiB on Linux)
-  std::string input_str(128 * 1024, 'A');
-  for (size_t i = 0; i < input_str.size(); ++i) {
-    input_str[i] = static_cast<char>('A' + (i % 26));
-  }
-  std::string output_str(64 * 1024, 'B');
-  for (size_t i = 0; i < output_str.size(); ++i) {
-    output_str[i] = static_cast<char>('a' + (i % 26));
-  }
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_poll(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  buffer out_data(output_str.begin(), output_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  drain_thread.join();
+  feeder.join();
 
-  subprocess::detail::multiplex_using_poll(in, in_buf, out, out_buf, err,
-                                           err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  yield_for_threads();
 
   EXPECT_EQ(drained.size(), input_str.size());
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(out_buf.buf().size(), output_str.size());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 // ===========================================================================
-// multiplex_using_select  tests
+// read_write_to_buffer_use_select  tests  (all POSIX)
 // ===========================================================================
 class MultiplexSelectTest : public MultiplexTestBase {};
 
-TEST_F(MultiplexSelectTest, AllHandlesInvalid) {
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
-
-  subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
+TEST_F(MultiplexSelectTest, AllHandlesNullopt) {
+  subprocess::detail::read_write_to_buffer_use_select(
+      std::nullopt, std::nullopt, std::nullopt);
+  SUCCEED();
 }
 
 TEST_F(MultiplexSelectTest, OnlyStdinActiveWritesData) {
-  auto pp = PipePair::create();
-  NativeHandle in = pp.release_write();
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto input_str = std::string("hello from stdin select");
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
 
-  std::string input_str = "hello from stdin select";
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
 
-  start_stdin_drain_thread(pp.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_select(
+      std::ref(in_buf), std::nullopt, std::nullopt);
 
-  subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  drain_thread.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
   EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexSelectTest, OnlyStdoutActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("hello from stdout select");
+  buffer out_data = make_buf(output_str);
+  Buffer out_buf;
 
-  std::string output_str = "hello from stdout select";
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(out_buf.wfd(), out_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
+  subprocess::detail::read_write_to_buffer_use_select(
+      std::nullopt, std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
+  feeder.join();
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexSelectTest, OnlyStderrActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = pp.release_read();
+  auto err_str = std::string("hello from stderr select");
+  buffer err_data = make_buf(err_str);
+  Buffer err_buf;
 
-  std::string err_str = "hello from stderr select";
-  buffer err_data(err_str.begin(), err_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(err_buf.wfd(), err_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
+  subprocess::detail::read_write_to_buffer_use_select(
+      std::nullopt, std::nullopt, std::ref(err_buf));
 
-  subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err_buf, err_str);
+  feeder.join();
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexSelectTest, AllThreeActive) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
-  auto pp_err = PipePair::create();
+  auto input_str = std::string("stdin-select");
+  auto output_str = std::string("stdout-select");
+  auto err_str = std::string("stderr-select");
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = pp_err.release_read();
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
+  Buffer err_buf;
 
-  std::string input_str = "stdin-select";
-  std::string output_str = "stdout-select";
-  std::string err_str = "stderr-select";
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread out_feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
+  std::thread err_feeder(
+      [&]() { feed_and_close(err_buf.wfd(), make_buf(err_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_select(
+      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
 
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer err_data(err_str.begin(), err_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
-  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
+  drain_thread.join();
+  out_feeder.join();
+  err_feeder.join();
 
-  subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
-                                             err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  yield_for_threads();
 
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf, output_str);
-  EXPECT_EQ(err_buf, err_str);
+  EXPECT_EQ(out_buf.buf(), output_str);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexSelectTest, EmptyStdinBuffer) {
-  auto pp_out = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("only-stdout-select");
+  Buffer out_buf;
 
-  std::string output_str = "only-stdout-select";
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  Buffer in_buf;  // empty
+  subprocess::detail::read_write_to_buffer_use_select(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
+  feeder.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_TRUE(in_buf.buf().empty());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexSelectTest, LargerDataTransfer) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
+  auto input_str = make_pattern(96 * 1024, 'X');
+  auto output_str = make_pattern(48 * 1024, 'x');
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
 
-  std::string input_str(96 * 1024, 'X');
-  for (size_t i = 0; i < input_str.size(); ++i) {
-    input_str[i] = static_cast<char>('A' + (i % 26));
-  }
-  std::string output_str(48 * 1024, 'Y');
-  for (size_t i = 0; i < output_str.size(); ++i) {
-    output_str[i] = static_cast<char>('a' + (i % 26));
-  }
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_select(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  buffer out_data(output_str.begin(), output_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  drain_thread.join();
+  feeder.join();
 
-  subprocess::detail::multiplex_using_select(in, in_buf, out, out_buf, err,
-                                             err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  yield_for_threads();
 
   EXPECT_EQ(drained.size(), input_str.size());
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(out_buf.buf().size(), output_str.size());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 // ===========================================================================
-// multiplex_using_epoll  tests  (Linux only)
+// read_write_to_buffer_use_epoll  tests  (Linux only)
 // ===========================================================================
 #if defined(__linux__)
 class MultiplexEpollTest : public MultiplexTestBase {};
 
-TEST_F(MultiplexEpollTest, AllHandlesInvalid) {
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
-
-  subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
-                                            err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_TRUE(out_buf.empty());
-  EXPECT_TRUE(err_buf.empty());
+TEST_F(MultiplexEpollTest, AllHandlesNullopt) {
+  subprocess::detail::read_write_to_buffer_use_epoll(std::nullopt, std::nullopt,
+                                                     std::nullopt);
+  SUCCEED();
 }
 
 TEST_F(MultiplexEpollTest, OnlyStdinActiveWritesData) {
-  auto pp = PipePair::create();
-  NativeHandle in = pp.release_write();
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto input_str = std::string("hello from stdin epoll");
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
 
-  std::string input_str = "hello from stdin epoll";
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
 
-  start_stdin_drain_thread(pp.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_epoll(
+      std::ref(in_buf), std::nullopt, std::nullopt);
 
-  subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
-                                            err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  drain_thread.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
   EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexEpollTest, OnlyStdoutActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("hello from stdout epoll");
+  buffer out_data = make_buf(output_str);
+  Buffer out_buf;
 
-  std::string output_str = "hello from stdout epoll";
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(out_buf.wfd(), out_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
+  subprocess::detail::read_write_to_buffer_use_epoll(
+      std::nullopt, std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
-                                            err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
+  feeder.join();
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexEpollTest, OnlyStderrActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = pp.release_read();
+  auto err_str = std::string("hello from stderr epoll");
+  buffer err_data = make_buf(err_str);
+  Buffer err_buf;
 
-  std::string err_str = "hello from stderr epoll";
-  buffer err_data(err_str.begin(), err_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(err_buf.wfd(), err_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
+  subprocess::detail::read_write_to_buffer_use_epoll(std::nullopt, std::nullopt,
+                                                     std::ref(err_buf));
 
-  subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
-                                            err_buf);
-
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err_buf, err_str);
+  feeder.join();
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexEpollTest, AllThreeActive) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
-  auto pp_err = PipePair::create();
+  auto input_str = std::string("stdin-epoll");
+  auto output_str = std::string("stdout-epoll");
+  auto err_str = std::string("stderr-epoll");
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = pp_err.release_read();
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
+  Buffer err_buf;
 
-  std::string input_str = "stdin-epoll";
-  std::string output_str = "stdout-epoll";
-  std::string err_str = "stderr-epoll";
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread out_feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
+  std::thread err_feeder(
+      [&]() { feed_and_close(err_buf.wfd(), make_buf(err_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_epoll(
+      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
 
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer err_data(err_str.begin(), err_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
-  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
+  drain_thread.join();
+  out_feeder.join();
+  err_feeder.join();
 
-  subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
-                                            err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  yield_for_threads();
 
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf, output_str);
-  EXPECT_EQ(err_buf, err_str);
+  EXPECT_EQ(out_buf.buf(), output_str);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexEpollTest, EmptyStdinBuffer) {
-  auto pp_out = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("only-stdout-epoll");
+  Buffer out_buf;
 
-  std::string output_str = "only-stdout-epoll";
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  Buffer in_buf;  // empty
+  subprocess::detail::read_write_to_buffer_use_epoll(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
-                                            err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
+  feeder.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_TRUE(in_buf.buf().empty());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexEpollTest, LargerDataTransfer) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
+  auto input_str = make_pattern(128 * 1024, 'Z');
+  auto output_str = make_pattern(64 * 1024, 'z');
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
 
-  std::string input_str(128 * 1024, 'Z');
-  for (size_t i = 0; i < input_str.size(); ++i) {
-    input_str[i] = static_cast<char>('A' + (i % 26));
-  }
-  std::string output_str(64 * 1024, 'Q');
-  for (size_t i = 0; i < output_str.size(); ++i) {
-    output_str[i] = static_cast<char>('a' + (i % 26));
-  }
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_epoll(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  buffer out_data(output_str.begin(), output_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  drain_thread.join();
+  feeder.join();
 
-  subprocess::detail::multiplex_using_epoll(in, in_buf, out, out_buf, err,
-                                            err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  yield_for_threads();
 
   EXPECT_EQ(drained.size(), input_str.size());
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(out_buf.buf().size(), output_str.size());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 #endif  // defined(__linux__)
 
 // ===========================================================================
-// multiplex_using_kqueue  tests  (macOS / BSD only)
+// read_write_to_buffer_use_kqueue  tests  (macOS / BSD only)
 // ===========================================================================
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
     defined(__OpenBSD__)
 class MultiplexKqueueTest : public MultiplexTestBase {};
 
-TEST_F(MultiplexKqueueTest, AllHandlesInvalid) {
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
-
-  subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_TRUE(out_buf.empty());
-  EXPECT_TRUE(err_buf.empty());
+TEST_F(MultiplexKqueueTest, AllHandlesNullopt) {
+  subprocess::detail::read_write_to_buffer_use_kqueue(
+      std::nullopt, std::nullopt, std::nullopt);
+  SUCCEED();
 }
 
 TEST_F(MultiplexKqueueTest, OnlyStdinActiveWritesData) {
-  auto pp = PipePair::create();
-  NativeHandle in = pp.release_write();
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto input_str = std::string("hello from stdin kqueue");
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
 
-  std::string input_str = "hello from stdin kqueue";
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
 
-  start_stdin_drain_thread(pp.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_kqueue(
+      std::ref(in_buf), std::nullopt, std::nullopt);
 
-  subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  drain_thread.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
   EXPECT_EQ(drained, input_str);
 }
 
 TEST_F(MultiplexKqueueTest, OnlyStdoutActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("hello from stdout kqueue");
+  buffer out_data = make_buf(output_str);
+  Buffer out_buf;
 
-  std::string output_str = "hello from stdout kqueue";
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(out_buf.wfd(), out_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), out_data);
+  subprocess::detail::read_write_to_buffer_use_kqueue(
+      std::nullopt, std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
+  feeder.join();
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexKqueueTest, OnlyStderrActiveReadsData) {
-  auto pp = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle err = pp.release_read();
+  auto err_str = std::string("hello from stderr kqueue");
+  buffer err_data = make_buf(err_str);
+  Buffer err_buf;
 
-  std::string err_str = "hello from stderr kqueue";
-  buffer err_data(err_str.begin(), err_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder([&]() { feed_and_close(err_buf.wfd(), err_data); });
 
-  start_stdout_stderr_feeder_thread(pp.release_write(), err_data);
+  subprocess::detail::read_write_to_buffer_use_kqueue(
+      std::nullopt, std::nullopt, std::ref(err_buf));
 
-  subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err_buf, err_str);
+  feeder.join();
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexKqueueTest, AllThreeActive) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
-  auto pp_err = PipePair::create();
+  auto input_str = std::string("stdin-kqueue");
+  auto output_str = std::string("stdout-kqueue");
+  auto err_str = std::string("stderr-kqueue");
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = pp_err.release_read();
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
+  Buffer err_buf;
 
-  std::string input_str = "stdin-kqueue";
-  std::string output_str = "stdout-kqueue";
-  std::string err_str = "stderr-kqueue";
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread out_feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
+  std::thread err_feeder(
+      [&]() { feed_and_close(err_buf.wfd(), make_buf(err_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_kqueue(
+      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
 
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer err_data(err_str.begin(), err_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
-  start_stdout_stderr_feeder_thread(pp_err.release_write(), err_data);
+  drain_thread.join();
+  out_feeder.join();
+  err_feeder.join();
 
-  subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
-                                             err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err, INVALID_NATIVE_HANDLE_VALUE);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  yield_for_threads();
 
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf, output_str);
-  EXPECT_EQ(err_buf, err_str);
+  EXPECT_EQ(out_buf.buf(), output_str);
+  EXPECT_EQ(err_buf.buf(), err_str);
 }
 
 TEST_F(MultiplexKqueueTest, EmptyStdinBuffer) {
-  auto pp_out = PipePair::create();
-  NativeHandle in = INVALID_NATIVE_HANDLE_VALUE;
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  auto output_str = std::string("only-stdout-kqueue");
+  Buffer out_buf;
 
-  std::string output_str = "only-stdout-kqueue";
-  buffer out_data(output_str.begin(), output_str.end());
-  buffer in_buf;
-  buffer out_buf;
-  buffer err_buf;
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  Buffer in_buf;  // empty
+  subprocess::detail::read_write_to_buffer_use_kqueue(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
-                                             err_buf);
-
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf, output_str);
+  feeder.join();
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_TRUE(in_buf.buf().empty());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 
 TEST_F(MultiplexKqueueTest, LargerDataTransfer) {
-  auto pp_in = PipePair::create();
-  auto pp_out = PipePair::create();
+  auto input_str = make_pattern(128 * 1024, 'K');
+  auto output_str = make_pattern(64 * 1024, 'k');
 
-  NativeHandle in = pp_in.release_write();
-  NativeHandle out = pp_out.release_read();
-  NativeHandle err = INVALID_NATIVE_HANDLE_VALUE;
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
 
-  std::string input_str(128 * 1024, 'K');
-  for (size_t i = 0; i < input_str.size(); ++i) {
-    input_str[i] = static_cast<char>('A' + (i % 26));
-  }
-  std::string output_str(64 * 1024, 'J');
-  for (size_t i = 0; i < output_str.size(); ++i) {
-    output_str[i] = static_cast<char>('a' + (i % 26));
-  }
-
-  buffer in_buf(input_str.begin(), input_str.end());
-  buffer out_buf;
-  buffer err_buf;
   buffer drained;
+  std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
+  std::thread feeder(
+      [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  start_stdin_drain_thread(pp_in.release_read(), drained);
+  subprocess::detail::read_write_to_buffer_use_kqueue(
+      std::ref(in_buf), std::ref(out_buf), std::nullopt);
 
-  buffer out_data(output_str.begin(), output_str.end());
-  start_stdout_stderr_feeder_thread(pp_out.release_write(), out_data);
+  drain_thread.join();
+  feeder.join();
 
-  subprocess::detail::multiplex_using_kqueue(in, in_buf, out, out_buf, err,
-                                             err_buf);
+  EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
+  EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
 
-  EXPECT_EQ(in, INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out, INVALID_NATIVE_HANDLE_VALUE);
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  yield_for_threads();
 
   EXPECT_EQ(drained.size(), input_str.size());
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf.size(), output_str.size());
-  EXPECT_EQ(out_buf, output_str);
+  EXPECT_EQ(out_buf.buf().size(), output_str.size());
+  EXPECT_EQ(out_buf.buf(), output_str);
 }
 #endif  // defined(__APPLE__) || defined(__FreeBSD__) || ...
 

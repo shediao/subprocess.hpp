@@ -338,8 +338,8 @@ TEST(BufferCallbackTest, IntegrationWithLargeOutput) {
   EXPECT_EQ(ret, 0);
 #else
   // On Windows, use powershell to generate output
-  int ret =
-      run(TEXT("powershell"), TEXT("-c"), TEXT("'A'*131072"), std_out > out);
+  int ret = run(TEXT("powershell"), TEXT("-NoProfile"), TEXT("-c"),
+                TEXT("'A'*131072"), std_out > out);
   EXPECT_EQ(ret, 0);
 #endif
 

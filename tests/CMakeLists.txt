@@ -176,3 +176,5 @@ foreach(test_source IN LISTS test_sources)
   get_filename_component(test_name ${test_source} NAME_WE)
   add_subprocess_test_suite(${test_name} ${test_source})
 endforeach()
+
+add_subprocess_test_suite(all_test "${test_sources}")

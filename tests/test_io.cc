@@ -187,7 +187,8 @@ TEST(IOTest, CaptureRunLargeData) {
   }
 #else
   {
-    auto [exit_code, out, err] = capture_run("powershell", "-c", "'A'*400MB");
+    auto [exit_code, out, err] =
+        capture_run("powershell", "-NoProfile", "-c", "'A'*400MB");
     ASSERT_EQ(exit_code, 0) << err.data();
     ASSERT_EQ(out.size(), (400 * 1024 * 1024 + 2));  // \r\n
   }
