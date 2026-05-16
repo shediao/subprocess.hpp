@@ -1030,7 +1030,7 @@ class Pipe {
     at.nLength = sizeof(SECURITY_ATTRIBUTES);
     at.lpSecurityDescriptor = nullptr;
 
-    if (!CreatePipe(&(fds.rfd), &(fds.wfd), &at, 64 * 1024)) {
+    if (!CreatePipe(&fds.rfd(), &fds.wfd(), &at, 64 * 1024)) {
       die(get_last_error_message());
     }
 #else
