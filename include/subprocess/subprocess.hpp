@@ -961,69 +961,85 @@ inline std::map<std::string, std::string> get_all_env_vars() {
 #endif
 class Pipe {
  public:
-  static Pipe create() { return Pipe{}; }
-  void close_read() { close_native_handle(fds_[0]); }
-  void close_write() { close_native_handle(fds_[1]); }
+  inline static Pipe create() {
+    Pipe p;
+    p.create_native_pipe(*p.fds_);
+    return p;
+  }
+  void close_read() { close_native_handle(fds_->rfd()); }
+  void close_write() { close_native_handle(fds_->wfd()); }
   void close_all() {
     close_read();
     close_write();
   }
-  NativeHandle& rfd() { return fds_[0]; }
-  NativeHandle& wfd() { return fds_[1]; }
+  NativeHandle& rfd() { return fds_->rfd(); }
+  NativeHandle& wfd() { return fds_->wfd(); }
 
   ssize_t read_some(void* data, std::size_t size) const {
-    return detail::read_some(fds_[0], data, size);
+    return detail::read_some(fds_->rfd(), data, size);
   }
   bool read_exact(void* data, std::size_t size) const {
-    return detail::read_exact(fds_[0], data, size);
+    return detail::read_exact(fds_->rfd(), data, size);
   }
   ssize_t write_some(void const* data, std::size_t size) const {
-    return detail::write_some(fds_[1], data, size);
+    return detail::write_some(fds_->wfd(), data, size);
   }
   bool write_all(void const* data, std::size_t size) const {
-    return detail::write_all(fds_[1], data, size);
+    return detail::write_all(fds_->wfd(), data, size);
   }
 
   Pipe dup() {
-    Pipe p{no_init_t{}};
-    p.fds_[0] = dup_native_handle(fds_[0]);
-    if (p.fds_[0] == INVALID_NATIVE_HANDLE_VALUE) {
+    Pipe p;
+    p.fds_->rfd() = dup_native_handle(fds_->rfd());
+    if (p.fds_->rfd() == INVALID_NATIVE_HANDLE_VALUE) {
       return p;
     }
-    p.fds_[1] = dup_native_handle(fds_[1]);
-    if (p.fds_[1] == INVALID_NATIVE_HANDLE_VALUE) {
-      close_native_handle(p.fds_[0]);
-      p.fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
+    p.fds_->wfd() = dup_native_handle(fds_->wfd());
+    if (p.fds_->wfd() == INVALID_NATIVE_HANDLE_VALUE) {
+      close_native_handle(p.fds_->rfd());
+      p.fds_->rfd() = INVALID_NATIVE_HANDLE_VALUE;
     }
     return p;
   }
 
  private:
-  struct no_init_t {};
-  explicit Pipe(no_init_t) : fds_{std::make_shared<NativeHandle[]>(2)} {
-    fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
-    fds_[1] = INVALID_NATIVE_HANDLE_VALUE;
-  }
-  static inline void create_native_pipe(NativeHandle* fds) {
+  Pipe() {}
+  struct pipe_pair {
+    pipe_pair() {}
+    pipe_pair(pipe_pair const&) = delete;
+    pipe_pair& operator=(pipe_pair const&) = delete;
+    ~pipe_pair() {
+      if (fds_[0] != INVALID_NATIVE_HANDLE_VALUE) {
+        close_native_handle(fds_[0]);
+      }
+      if (fds_[1] != INVALID_NATIVE_HANDLE_VALUE) {
+        close_native_handle(fds_[1]);
+      }
+    }
+
+    NativeHandle& rfd() { return fds_[0]; }
+    NativeHandle& wfd() { return fds_[1]; }
+
+    NativeHandle fds_[2]{INVALID_NATIVE_HANDLE_VALUE,
+                         INVALID_NATIVE_HANDLE_VALUE};
+  };
+  static inline void create_native_pipe(pipe_pair& fds) {
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES at;
     at.bInheritHandle = true;
     at.nLength = sizeof(SECURITY_ATTRIBUTES);
     at.lpSecurityDescriptor = nullptr;
 
-    if (!CreatePipe(&(fds[0]), &(fds[1]), &at, 64 * 1024)) {
+    if (!CreatePipe(&(fds.rfd), &(fds.wfd), &at, 64 * 1024)) {
       die(get_last_error_message());
     }
 #else
-    if (-1 == pipe(fds)) {
+    if (-1 == pipe(fds.fds_)) {
       die("pipe() failed");
     }
 #endif
   }
-  explicit Pipe() : fds_{std::make_shared<NativeHandle[]>(2)} {
-    create_native_pipe(fds_.get());
-  }
-  std::shared_ptr<NativeHandle[]> fds_;
+  std::shared_ptr<pipe_pair> fds_{std::make_shared<pipe_pair>()};
 };
 
 struct File {
