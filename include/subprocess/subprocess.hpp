@@ -302,6 +302,22 @@ inline void close_native_handle(NativeHandle& handle) {
   }
 }
 
+inline NativeHandle dup_native_handle(NativeHandle handle) {
+  if (INVALID_NATIVE_HANDLE_VALUE == handle) {
+    return INVALID_NATIVE_HANDLE_VALUE;
+  }
+#if defined(_WIN32)
+  NativeHandle duped = INVALID_NATIVE_HANDLE_VALUE;
+  if (!DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &duped,
+                       0, TRUE, DUPLICATE_SAME_ACCESS)) {
+    return INVALID_NATIVE_HANDLE_VALUE;
+  }
+  return duped;
+#else
+  return fcntl(handle, F_DUPFD_CLOEXEC, 0);
+#endif
+}
+
 inline bool is_atty(NativeHandle f) {
 #if defined(_WIN32)
   return GetFileType(f) == FILE_TYPE_CHAR;
@@ -1430,8 +1446,26 @@ class Pipe {
   }
   NativeHandle& read() { return fds_[0]; }
   NativeHandle& write() { return fds_[1]; }
+  Pipe dup() {
+    Pipe p{no_init_t{}};
+    p.fds_[0] = dup_native_handle(fds_[0]);
+    if (p.fds_[0] == INVALID_NATIVE_HANDLE_VALUE) {
+      return p;
+    }
+    p.fds_[1] = dup_native_handle(fds_[1]);
+    if (p.fds_[1] == INVALID_NATIVE_HANDLE_VALUE) {
+      close_native_handle(p.fds_[0]);
+      p.fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    return p;
+  }
 
  private:
+  struct no_init_t {};
+  explicit Pipe(no_init_t) : fds_{std::make_shared<NativeHandle[]>(2)} {
+    fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
+    fds_[1] = INVALID_NATIVE_HANDLE_VALUE;
+  }
   static inline void create_native_pipe(NativeHandle* fds) {
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES at;
@@ -1505,8 +1539,18 @@ struct File {
   void close() { close_native_handle(fd_); }
   NativeHandle fd() const { return fd_; }
 
+  File dup() {
+    File f{path_};
+    f.append_ = append_;
+    f.fd_ = dup_native_handle(fd_);
+    return f;
+  }
+
  private:
   void open_impl(OpenType type) {
+    if (fd_ != INVALID_NATIVE_HANDLE_VALUE) {
+      return;
+    }
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -1562,17 +1606,24 @@ class FileHandler {
     fd_ = INVALID_NATIVE_HANDLE_VALUE;
   }
 
+  FileHandler dup() const { return FileHandler(dup_native_handle(fd_)); }
+
  private:
   NativeHandle fd_;
 };
 
 class Buffer {
   using buffer_container_type = buffer;
+  using value_type = std::variant<std::reference_wrapper<buffer_container_type>,
+                                  buffer_container_type>;
 
  public:
   Buffer(buffer_container_type& buf)
-      : buf_{std::ref(buf)}, pipe_{Pipe::create()} {}
-  Buffer() : buf_{buffer_container_type{}}, pipe_{Pipe::create()} {}
+      : buf_{std::make_shared<value_type>(std::ref(buf))},
+        pipe_{Pipe::create()} {}
+  Buffer()
+      : buf_{std::make_shared<value_type>(buffer_container_type{})},
+        pipe_{Pipe::create()} {}
 
   buffer& buf() {
     return std::visit(
@@ -1584,14 +1635,16 @@ class Buffer {
             return value.get();
           }
         },
-        buf_);
+        *buf_);
   }
   Pipe& pipe() { return pipe_; }
 
+  Buffer dup() { return Buffer{buf_, pipe_.dup()}; }
+
  private:
-  std::variant<std::reference_wrapper<buffer_container_type>,
-               buffer_container_type>
-      buf_;
+  Buffer(std::shared_ptr<value_type> buf, Pipe&& pipe)
+      : buf_{buf}, pipe_{std::move(pipe)} {}
+  std::shared_ptr<value_type> buf_;
   Pipe pipe_;
 };
 
@@ -1604,6 +1657,8 @@ class Redirector {
   explicit Redirector(Pipe const& p)
       : redirect_(std::make_unique<value_type>(p)) {}
   explicit Redirector(File f)
+      : redirect_(std::make_unique<value_type>(std::move(f))) {}
+  explicit Redirector(FileHandler f)
       : redirect_(std::make_unique<value_type>(std::move(f))) {}
   explicit Redirector(buffer& buf)
       : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
@@ -1636,6 +1691,29 @@ class Redirector {
         },
         *redirect_);
   }
+
+  std::unique_ptr<value_type> dup() {
+    if (!redirect_) {
+      return nullptr;
+    }
+    return std::visit(
+        []<typename T>(
+            [[maybe_unused]] T& value) -> std::unique_ptr<value_type> {
+          if constexpr (std::is_same_v<T, Pipe>) {
+            return std::make_unique<value_type>(value.dup());
+          } else if constexpr (std::is_same_v<T, File>) {
+            return std::make_unique<value_type>(value.dup());
+          } else if constexpr (std::is_same_v<T, FileHandler>) {
+            return std::make_unique<value_type>(value.dup());
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+            return std::make_unique<value_type>(value.dup());
+          } else {
+            return nullptr;
+          }
+        },
+        *redirect_);
+  }
+
   // Parent prepares for child process startup, e.g., opening file handles,
   // pipes, etc.
   void prepare_for_child() {
