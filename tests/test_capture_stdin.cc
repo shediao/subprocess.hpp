@@ -12,9 +12,15 @@
 using namespace subprocess::named_arguments;
 using subprocess::buffer;
 using subprocess::capture_run;
-using subprocess::run;
 using subprocess::detail::close_native_handle;
-using subprocess::detail::write_to_native_handle;
+
+static void write_to_native_handle(subprocess::detail::NativeHandle& fd,
+                                   buffer const& write_data) {
+  subprocess::detail::HandleGuard guard(fd);
+  auto write_span = write_data.span();
+  subprocess::detail::write_all(fd, write_span.data(), write_span.size());
+  fd = subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
+}
 
 // ===========================================================================
 // 1. Default behavior (backward compatibility): no stdin arg → devnull

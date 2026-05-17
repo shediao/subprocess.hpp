@@ -41,4 +41,5 @@
 *.o
 *.swp
 /compile_commands.json
+.DS_Store
 

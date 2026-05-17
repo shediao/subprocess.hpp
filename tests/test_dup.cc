@@ -32,8 +32,32 @@
 using namespace subprocess::named_arguments;
 using subprocess::buffer;
 using subprocess::run;
+#if defined(_WIN32)
+using subprocess::detail::ssize_t;
+#endif
 
 namespace S = subprocess::detail;
+
+static void write_to_native_handle(S::NativeHandle& fd,
+                                   buffer const& write_data) {
+  S::HandleGuard guard(fd);
+  auto write_span = write_data.span();
+  S::write_all(fd, write_span.data(), write_span.size());
+  fd = S::INVALID_NATIVE_HANDLE_VALUE;
+}
+
+static void read_from_native_handle(S::NativeHandle& fd, buffer& read_data) {
+  S::HandleGuard guard(fd);
+  char buf[1024];
+  ssize_t read;
+  do {
+    read = S::read_some(fd, buf, sizeof(buf));
+    if (read > 0) {
+      read_data.append(buf, static_cast<size_t>(read));
+    }
+  } while (read > 0);
+  fd = S::INVALID_NATIVE_HANDLE_VALUE;
+}
 
 // ===========================================================================
 // Pipe::dup() — basic functionality
@@ -64,13 +88,13 @@ TEST(DupTest, PipeDupReadFromDuppedEnd) {
   auto p2 = p1.dup();
 
   const char* msg = "hello_dup";
-  S::write_to_native_handle(p1.wfd(), buffer{msg});
+  write_to_native_handle(p1.wfd(), buffer{msg});
 
   // p2.wfd() still shares the same write-end; close it to signal EOF
   p2.close_write();
 
   buffer out;
-  S::read_from_native_handle(p2.rfd(), out);
+  read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -80,13 +104,13 @@ TEST(DupTest, PipeDupReadFromOriginalEnd) {
   auto p2 = p1.dup();
 
   const char* msg = "hello_reverse";
-  S::write_to_native_handle(p2.wfd(), buffer{msg});
+  write_to_native_handle(p2.wfd(), buffer{msg});
 
   // p1.wfd() still shares the same write-end; close it to signal EOF
   p1.close_write();
 
   buffer out;
-  S::read_from_native_handle(p1.rfd(), out);
+  read_from_native_handle(p1.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -99,7 +123,7 @@ TEST(DupTest, PipeDupCloseOriginalReadStillWorks) {
   auto p2 = p1.dup();
 
   const char* msg = "before_close";
-  S::write_to_native_handle(p1.wfd(), buffer{msg});
+  write_to_native_handle(p1.wfd(), buffer{msg});
 
   // Close BOTH write ends; close original read end
   p2.close_write();
@@ -107,7 +131,7 @@ TEST(DupTest, PipeDupCloseOriginalReadStillWorks) {
 
   // Duped read end should still read the data
   buffer out;
-  S::read_from_native_handle(p2.rfd(), out);
+  read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -123,10 +147,10 @@ TEST(DupTest, PipeDupCloseDuppedWriteStillWorks) {
   p2.close_write();
 
   const char* msg = "close_dup_write";
-  S::write_to_native_handle(p1.wfd(), buffer{msg});
+  write_to_native_handle(p1.wfd(), buffer{msg});
 
   buffer out;
-  S::read_from_native_handle(p2.rfd(), out);
+  read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -164,12 +188,12 @@ TEST(DupTest, PipeDupChained) {
 
   // Write through p3's write, close p1 and p2 writes too, read through p1
   const char* msg = "chained_dup";
-  S::write_to_native_handle(p3.wfd(), buffer{msg});
+  write_to_native_handle(p3.wfd(), buffer{msg});
   p1.close_write();
   p2.close_write();
 
   buffer out;
-  S::read_from_native_handle(p1.rfd(), out);
+  read_from_native_handle(p1.rfd(), out);
   ASSERT_EQ(out, msg);
 }
 
@@ -198,7 +222,7 @@ TEST(DupTest, PipeDupWithSubprocess) {
   p2.close_write();
 
   buffer out;
-  S::read_from_native_handle(p2.rfd(), out);
+  read_from_native_handle(p2.rfd(), out);
 
 #if defined(_WIN32)
   ASSERT_TRUE(out.to_string().find("dup_subprocess_test") != std::string::npos);
@@ -281,7 +305,7 @@ TEST(DupTest, FileDupReadContent) {
   // Read from duped fd
   buffer out2;
   auto fd2 = f2.fd();
-  S::read_from_native_handle(fd2, out2);
+  read_from_native_handle(fd2, out2);
   ASSERT_EQ(out2, "file_dup_subprocess");
 
   // f1.fd() still shares the same file description; close it
@@ -316,7 +340,7 @@ TEST(DupTest, FileHandlerDupFunctional) {
   auto pipe = S::Pipe::create();
 
   const char* msg = "filehandler_dup_test";
-  S::write_to_native_handle(pipe.wfd(), buffer{msg});
+  write_to_native_handle(pipe.wfd(), buffer{msg});
 
   S::FileHandler fh(pipe.rfd());
   auto fh2 = fh.dup();
@@ -326,7 +350,7 @@ TEST(DupTest, FileHandlerDupFunctional) {
 
   buffer out;
   auto duped_fd = fh2.fd();
-  S::read_from_native_handle(duped_fd, out);
+  read_from_native_handle(duped_fd, out);
   ASSERT_EQ(out, msg);
 
   fh2.close();
@@ -405,10 +429,10 @@ TEST(DupTest, BufferDupIndependentPipes) {
   ASSERT_NE(buf1.pipe().wfd(), buf2.pipe().wfd());
 
   // Write through buf1's pipe, close both write ends, read via buf2's pipe
-  S::write_to_native_handle(buf1.pipe().wfd(), buffer{"from_buf1"});
+  write_to_native_handle(buf1.pipe().wfd(), buffer{"from_buf1"});
   buf2.pipe().close_write();
 
-  S::read_from_native_handle(buf2.pipe().rfd(), shared);
+  read_from_native_handle(buf2.pipe().rfd(), shared);
   ASSERT_EQ(shared, "from_buf1");
 }
 
@@ -504,7 +528,7 @@ TEST(DupTest, PipeDupBeforeSubprocessPattern) {
   p_reader.close_write();
 
   buffer out;
-  S::read_from_native_handle(p_reader.rfd(), out);
+  read_from_native_handle(p_reader.rfd(), out);
 
 #if defined(_WIN32)
   ASSERT_TRUE(out.to_string().find("dup_before_sp") != std::string::npos);

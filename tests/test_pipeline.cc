@@ -33,7 +33,23 @@ using namespace subprocess::named_arguments;
 using subprocess::buffer;
 using subprocess::capture_run;
 using std::string_literals::operator""s;
+#if defined(_WIN32)
+using subprocess::detail::ssize_t;
+#endif
 
+static void read_from_native_handle(subprocess::detail::NativeHandle& fd,
+                                    buffer& read_data) {
+  subprocess::detail::HandleGuard guard(fd);
+  char buf[1024];
+  ssize_t read;
+  do {
+    read = subprocess::detail::read_some(fd, buf, sizeof(buf));
+    if (read > 0) {
+      read_data.append(buf, static_cast<size_t>(read));
+    }
+  } while (read > 0);
+  fd = subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
+}
 // ===========================================================================
 // 1. Three-process manual pipe chain (explicit Pipe objects)
 //    This consolidates the original test_pipe.cc and test_pipeline.cc tests.
@@ -417,7 +433,7 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 
   p.async_run();
   buffer tmp;
-  subprocess::detail::read_from_native_handle(pipe.rfd(), tmp);
+  read_from_native_handle(pipe.rfd(), tmp);
   p.wait_for_exit();
   ASSERT_EQ(tmp, "single_pipe_test\r\n");
 #else
@@ -428,7 +444,7 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 
   p.async_run();
   buffer tmp;
-  subprocess::detail::read_from_native_handle(pipe.rfd(), tmp);
+  read_from_native_handle(pipe.rfd(), tmp);
   p.wait_for_exit();
   ASSERT_EQ(tmp, "single_pipe_test\n");
 #endif
@@ -783,7 +799,7 @@ TEST(PipelineTest, ExplicitPipeClosedAfterUse) {
                                      $stdout > pipe);
 #endif
     p.async_run();
-    subprocess::detail::read_from_native_handle(pipe.rfd(), captured);
+    read_from_native_handle(pipe.rfd(), captured);
     p.wait_for_exit();
   }
 #if defined(_WIN32)
