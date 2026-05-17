@@ -313,7 +313,7 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
 #if defined(_WIN32)
   NativeHandle duped = INVALID_NATIVE_HANDLE_VALUE;
   if (!DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &duped,
-                       0, TRUE, DUPLICATE_SAME_ACCESS)) {
+                       0, FALSE, DUPLICATE_SAME_ACCESS)) {
     return INVALID_NATIVE_HANDLE_VALUE;
   }
   return duped;
@@ -979,7 +979,7 @@ class Pipe {
   static inline void create_native_pipe(pipe_pair& fds) {
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES at;
-    at.bInheritHandle = true;
+    at.bInheritHandle = false;
     at.nLength = sizeof(SECURITY_ATTRIBUTES);
     at.lpSecurityDescriptor = nullptr;
 
@@ -1075,7 +1075,7 @@ struct File {
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.lpSecurityDescriptor = nullptr;
-    sa.bInheritHandle = TRUE;  // Make the handle inheritable
+    sa.bInheritHandle = FALSE;  // Default non-inheritable
 
     fd_ = CreateFileW(
         path_.c_str(),
@@ -1899,15 +1899,10 @@ class Redirector {
         [this]<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
 #if defined(_WIN32)
-            if (NativeHandle non_inheritable_handle =
-                    fileno() == 0 ? value.wfd() : value.rfd();
-                non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
-              if (!SetHandleInformation(non_inheritable_handle,
-                                        HANDLE_FLAG_INHERIT, 0)) {
-                die("SetHandleInformation failed: " +
-                    std::to_string(GetLastError()));
-              }
-            }
+            // Default is non-inheritable; make only the child end inheritable.
+            // stdin  (fileno 0): child reads  -> rfd is the child end
+            // stdout (fileno 1): child writes -> wfd is the child end
+            // stderr (fileno 2): child writes -> wfd is the child end
             if (NativeHandle inheritable_handle =
                     fileno() == 0 ? value.rfd() : value.wfd();
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
@@ -1924,19 +1919,22 @@ class Redirector {
             } else {
               value.open_for_write();
             }
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
-            // do nothing
-          } else if constexpr (std::is_same_v<T, Buffer>) {
 #if defined(_WIN32)
-            if (NativeHandle non_inheritable_handle =
-                    fileno() == 0 ? value.wfd() : value.rfd();
-                non_inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
-              if (!SetHandleInformation(non_inheritable_handle,
-                                        HANDLE_FLAG_INHERIT, 0)) {
+            // File handles are now non-inheritable by default; make them
+            // inheritable so the child can use them.
+            if (value.fd() != INVALID_NATIVE_HANDLE_VALUE) {
+              if (!SetHandleInformation(value.fd(), HANDLE_FLAG_INHERIT,
+                                        HANDLE_FLAG_INHERIT)) {
                 die("SetHandleInformation failed: " +
                     std::to_string(GetLastError()));
               }
             }
+#endif
+          } else if constexpr (std::is_same_v<T, FileHandler>) {
+            // do nothing
+          } else if constexpr (std::is_same_v<T, Buffer>) {
+#if defined(_WIN32)
+            // Default is non-inheritable; make only the child end inheritable.
             if (NativeHandle inheritable_handle =
                     fileno() == 0 ? value.rfd() : value.wfd();
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
@@ -2594,7 +2592,7 @@ class subprocess {
 #if defined(_WIN32)
     ZeroMemory(&process_information_, sizeof(process_information_));
     ZeroMemory(&startup_info_, sizeof(startup_info_));
-    startup_info_.cb = sizeof(startup_info_);
+    startup_info_.StartupInfo.cb = sizeof(startup_info_);
 #endif
   }
 
@@ -2672,26 +2670,59 @@ class subprocess {
 
 #if defined(_WIN32)
     auto in = stdin_.child_inherit_handle();
-    startup_info_.hStdInput =
+    startup_info_.StartupInfo.hStdInput =
         in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
     auto out = stdout_.child_inherit_handle();
-    startup_info_.hStdOutput =
+    startup_info_.StartupInfo.hStdOutput =
         out.has_value() ? out.value() : GetStdHandle(STD_OUTPUT_HANDLE);
     auto err = stderr_.child_inherit_handle();
-    startup_info_.hStdError =
+    startup_info_.StartupInfo.hStdError =
         err.has_value() ? err.value() : GetStdHandle(STD_ERROR_HANDLE);
 
-    startup_info_.dwFlags |= STARTF_USESTDHANDLES;
+    startup_info_.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+
+    // Build explicit handle inheritance list so that the child only inherits
+    // the handles we explicitly specify, rather than all inheritable handles.
+    std::vector<HANDLE> handles_to_inherit = {
+        startup_info_.StartupInfo.hStdInput,
+        startup_info_.StartupInfo.hStdOutput,
+        startup_info_.StartupInfo.hStdError,
+    };
+
+    // Set up PROC_THREAD_ATTRIBUTE_LIST for explicit handle inheritance.
+    SIZE_T attr_list_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_list_size);
+    proc_thread_attr_list_.resize(attr_list_size);
+    auto* attr_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
+        proc_thread_attr_list_.data());
+    if (!InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_list_size)) {
+      die("InitializeProcThreadAttributeList failed: " +
+          std::to_string(GetLastError()));
+    }
+    if (!UpdateProcThreadAttribute(
+            attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            handles_to_inherit.data(),
+            handles_to_inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
+      DeleteProcThreadAttributeList(attr_list);
+      die("UpdateProcThreadAttribute failed: " +
+          std::to_string(GetLastError()));
+    }
+    startup_info_.lpAttributeList = attr_list;
 
     auto command = argv_to_command_line_string(cmd_);
 
     auto env_block = create_environment_string_data(env_);
 
     auto success = CreateProcessW(
-        nullptr, command.data(), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT,
+        nullptr, command.data(), NULL, NULL, TRUE,
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
         env_block.empty() ? nullptr : env_block.data(),
-        cwd_.empty() ? nullptr : cwd_.data(), &startup_info_,
+        cwd_.empty() ? nullptr : cwd_.data(),
+        reinterpret_cast<LPSTARTUPINFOW>(&startup_info_),
         &process_information_);
+
+    DeleteProcThreadAttributeList(attr_list);
+    startup_info_.lpAttributeList = nullptr;
 
     if (success) {
       if (job_handle_->IsValid()) {
@@ -3034,7 +3065,8 @@ class subprocess {
 #if defined(_WIN32)
   std::shared_ptr<HandleGuard> job_handle_{std::make_shared<HandleGuard>()};
   PROCESS_INFORMATION process_information_;
-  STARTUPINFOW startup_info_;
+  STARTUPINFOEXW startup_info_{};
+  std::vector<unsigned char> proc_thread_attr_list_;
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
   std::optional<NativeHandle> group_id_{std::nullopt};
@@ -3059,12 +3091,6 @@ class pipeline {
 
     for (auto it = subs_.begin(); it != subs_.end() - 1; ++it) {
       pipes.push_back(Pipe::create());
-#if defined(_WIN32)
-      SetHandleInformation(pipes.back().rfd(), HANDLE_FLAG_INHERIT,
-                           HANDLE_FLAG_INHERIT);
-      SetHandleInformation(pipes.back().wfd(), HANDLE_FLAG_INHERIT,
-                           HANDLE_FLAG_INHERIT);
-#endif
       it->stdout_ = (named_args::std_out > pipes.back());
       (it + 1)->stdin_ = (named_args::std_in < pipes.back());
     }
