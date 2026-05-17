@@ -24,13 +24,42 @@ using namespace subprocess::named_arguments;
 using subprocess::buffer;
 using subprocess::run;
 
+static std::optional<std::string> home() {
+#if defined(_WIN32)
+  auto user_profile = subprocess::detail::get_env("USERPROFILE");
+  if (user_profile.has_value() && !user_profile->empty()) {
+    return user_profile;
+  }
+  auto home_drive = subprocess::detail::get_env("HOMEDRIVE");
+  auto homepath = subprocess::detail::get_env("HOMEPATH");
+  if (home_drive.has_value() && homepath.has_value() &&
+      !home_drive.value().empty() && !homepath.value().empty()) {
+    return home_drive.value() + homepath.value();
+  }
+#else
+  auto home_dir = subprocess::detail::get_env("HOME");
+  if (home_dir.has_value() && !home_dir->empty()) {
+    return home_dir;
+  }
+
+  // If HOME is not set, fall back to getpwuid.
+  // This is a more reliable method for finding the home directory.
+  uid_t uid = getuid();
+  struct passwd* pw = getpwuid(uid);
+  if (pw != nullptr && pw->pw_dir != nullptr && pw->pw_dir[0] != '\0') {
+    return std::string(pw->pw_dir);
+  }
+#endif
+  return std::nullopt;
+}
+
 // ===========================================================================
 // CWD — current working directory
 // ===========================================================================
 
 TEST(EnvironmentTest, CwdSetToHome) {
   buffer out;
-  auto home_dir = subprocess::home();
+  auto home_dir = home();
 
 #if !defined(_WIN32)
   run({"/bin/pwd"}, $stdout > out, $cwd = home_dir.value());
@@ -53,7 +82,7 @@ TEST(EnvironmentTest, CwdSetToHome) {
 
 TEST(EnvironmentTest, CwdSetToHomeVariadic) {
   buffer out;
-  auto home_dir = subprocess::home();
+  auto home_dir = home();
 
 #if !defined(_WIN32)
   run("/bin/pwd", $stdout > out, $cwd = home_dir.value());
