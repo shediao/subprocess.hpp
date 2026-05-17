@@ -2844,7 +2844,10 @@ class subprocess {
       return 127;
     }
     int status = 0;
-    waitpid(pid_, &status, 0);
+    int wait_ret;
+    do {
+      wait_ret = waitpid(pid_, &status, 0);
+    } while (wait_ret == -1 && errno == EINTR);
     stop_watchdog();
 
     auto return_code = -1;
