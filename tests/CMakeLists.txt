@@ -71,7 +71,7 @@ if(NOT WINDOWS)
 endif()
 
 # Define common compile options based on the compiler.
-set(SUBPROCESS_MSVC_COMPILE_OPTIONS "/W4" "/WX" "/utf-8" "/EHsc")
+set(SUBPROCESS_MSVC_COMPILE_OPTIONS "/W4" "/WX" "/utf-8")
 set(SUBPROCESS_GCC_CLANG_COMPILE_OPTIONS "-Wall" "-Wextra" "-Werror")
 
 if(MSVC)
@@ -133,8 +133,10 @@ function(add_subprocess_test_suite test_name)
 
     if(MSVC)
       target_compile_options(${target_name} PRIVATE /EHs-c-)
-      target_compile_definitions(${target_name} PRIVATE _HAS_EXCEPTIONS=0)
+      target_compile_definitions(${target_name} PRIVATE _HAS_EXCEPTIONS=0
+                                                        GTEST_HAS_EXCEPTIONS=0)
     else()
+      target_compile_definitions(${target_name} PRIVATE GTEST_HAS_EXCEPTIONS=0)
       target_compile_options(${target_name} PRIVATE -fno-exceptions)
     endif()
 
