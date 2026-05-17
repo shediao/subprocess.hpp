@@ -1,6 +1,18 @@
 set(CMAKE_CXX_STANDARD 20)
 
-option(SUBPROCESS_ENABLE_ASAN "build asan for unittests" ON)
+# Default ENABLE_ASAN to ON only for Debug builds, unless user explicitly sets
+# it.
+if(NOT DEFINED SUBPROCESS_ENABLE_ASAN)
+  if(CMAKE_BUILD_TYPE MATCHES "Debug")
+    set(SUBPROCESS_ENABLE_ASAN
+        ON
+        CACHE BOOL "build asan for unittests")
+  else()
+    set(SUBPROCESS_ENABLE_ASAN
+        OFF
+        CACHE BOOL "build asan for unittests")
+  endif()
+endif()
 
 set(INSTALL_GTEST OFF)
 
@@ -100,9 +112,9 @@ function(add_subprocess_test_suite test_name)
   set(sources ${ARGN})
   set(variants "")
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(variants "default" "ansi" "noexception")
+    set(variants "default" "ansi")
   else()
-    set(variants "default" "noexception")
+    set(variants "default")
   endif()
 
   foreach(variant IN LISTS variants)
@@ -119,16 +131,14 @@ function(add_subprocess_test_suite test_name)
     target_compile_options(${target_name}
                            PRIVATE ${SUBPROCESS_COMMON_COMPILE_OPTIONS})
 
-    if(variant STREQUAL "noexception")
-      if(MSVC)
-        target_compile_options(${target_name} PRIVATE /EHs-c-)
-        target_compile_definitions(${target_name} PRIVATE _HAS_EXCEPTIONS=0)
-      else()
-        target_compile_options(${target_name} PRIVATE -fno-exceptions)
-      endif()
+    if(MSVC)
+      target_compile_options(${target_name} PRIVATE /EHs-c-)
+      target_compile_definitions(${target_name} PRIVATE _HAS_EXCEPTIONS=0)
+    else()
+      target_compile_options(${target_name} PRIVATE -fno-exceptions)
     endif()
 
-    if(SUBPROCESS_SANITIZER_CXX_FLAGS AND NOT variant STREQUAL "noexception")
+    if(SUBPROCESS_SANITIZER_CXX_FLAGS)
       target_compile_options(
         ${target_name}
         PRIVATE "$<$<CONFIG:Debug>:${SUBPROCESS_SANITIZER_CXX_FLAGS}>")

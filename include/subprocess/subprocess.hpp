@@ -163,58 +163,6 @@
 extern char** environ;
 #endif  // !_WIN32
 
-#ifndef SUBPROCESS_HAS_EXCEPTIONS
-#if defined(_MSC_VER) && defined(_CPPUNWIND)
-// MSVC defines _CPPUNWIND to 1 if and only if exceptions are enabled.
-#define SUBPROCESS_HAS_EXCEPTIONS 1
-#elif defined(__BORLANDC__)
-// C++Builder's implementation of the STL uses the _HAS_EXCEPTIONS
-// macro to enable exceptions, so we'll do the same.
-// Assumes that exceptions are enabled by default.
-#ifndef _HAS_EXCEPTIONS
-#define _HAS_EXCEPTIONS 1
-#endif  // _HAS_EXCEPTIONS
-#define SUBPROCESS_HAS_EXCEPTIONS _HAS_EXCEPTIONS
-#elif defined(__clang__)
-// clang defines __EXCEPTIONS if and only if exceptions are enabled before clang
-// 220714, but if and only if cleanups are enabled after that. In Obj-C++ files,
-// there can be cleanups for ObjC exceptions which also need cleanups, even if
-// C++ exceptions are disabled. clang has __has_feature(cxx_exceptions) which
-// checks for C++ exceptions starting at clang r206352, but which checked for
-// cleanups prior to that. To reliably check for C++ exception availability with
-// clang, check for
-// __EXCEPTIONS && __has_feature(cxx_exceptions).
-#if defined(__EXCEPTIONS) && __EXCEPTIONS && __has_feature(cxx_exceptions)
-#define SUBPROCESS_HAS_EXCEPTIONS 1
-#else
-#define SUBPROCESS_HAS_EXCEPTIONS 0
-#endif
-#elif defined(__GNUC__) && defined(__EXCEPTIONS) && __EXCEPTIONS
-// gcc defines __EXCEPTIONS to 1 if and only if exceptions are enabled.
-#define SUBPROCESS_HAS_EXCEPTIONS 1
-#elif defined(__SUNPRO_CC)
-// Sun Pro CC supports exceptions.  However, there is no compile-time way of
-// detecting whether they are enabled or not.  Therefore, we assume that
-// they are enabled unless the user tells us otherwise.
-#define SUBPROCESS_HAS_EXCEPTIONS 1
-#elif defined(__IBMCPP__) && defined(__EXCEPTIONS) && __EXCEPTIONS
-// xlC defines __EXCEPTIONS to 1 if and only if exceptions are enabled.
-#define SUBPROCESS_HAS_EXCEPTIONS 1
-#elif defined(__HP_aCC)
-// Exception handling is in effect by default in HP aCC compiler. It has to
-// be turned off by +noeh compiler option if desired.
-#define SUBPROCESS_HAS_EXCEPTIONS 1
-#else
-// For other compilers, we assume exceptions are disabled to be
-// conservative.
-#define SUBPROCESS_HAS_EXCEPTIONS 0
-#endif  // defined(_MSC_VER) || defined(__BORLANDC__)
-#endif  // SUBPROCESS_HAS_EXCEPTIONS
-
-#if SUBPROCESS_HAS_EXCEPTIONS
-#include <stdexcept>
-#endif
-
 #ifndef USE_DOLLAR_NAMED_VARIABLES
 #define USE_DOLLAR_NAMED_VARIABLES 1
 #endif
@@ -243,14 +191,6 @@ inline void print_error(std::string_view msg) {
   [[maybe_unused]] auto ret = write(STDERR_FILENO, msg.data(), msg.size());
 #endif
 }
-inline void die(std::string const& msg) {
-#if SUBPROCESS_HAS_EXCEPTIONS
-  throw std::runtime_error(msg);
-#else
-  print_error(msg);
-  abort();
-#endif
-}
 
 #if defined(_WIN32)
 // Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
@@ -261,7 +201,8 @@ inline std::wstring utf8_to_utf16(const std::string_view str) {
   int size_needed =
       MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
   if (size_needed <= 0) {
-    die("MultiByteToWideChar error: " + std::to_string(GetLastError()));
+    print_error("MultiByteToWideChar error: " + std::to_string(GetLastError()));
+    return {};
   }
   std::wstring wstr(static_cast<size_t>(size_needed), 0);
   MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstr[0],
@@ -277,7 +218,8 @@ inline std::string utf16_to_utf8(const std::wstring_view wstr) {
   int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
                                         (int)wstr.size(), NULL, 0, NULL, NULL);
   if (size_needed <= 0) {
-    die("WideCharToMultiByte error: " + std::to_string(GetLastError()));
+    print_error("WideCharToMultiByte error: " + std::to_string(GetLastError()));
+    return {};
   }
   std::string str(static_cast<size_t>(size_needed), 0);
   WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), &str[0],
@@ -329,10 +271,12 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
   }
   auto const flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) {
-    die("fcntl(F_GETFL) failed");
+    print_error("fcntl(F_GETFL) failed");
+    return;
   }
   if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
-    die("fcntl(F_SETFL) failed");
+    print_error("fcntl(F_SETFL) failed");
+    return;
   }
 }
 #endif
@@ -984,11 +928,13 @@ class Pipe {
     at.lpSecurityDescriptor = nullptr;
 
     if (!CreatePipe(&fds.rfd(), &fds.wfd(), &at, 64 * 1024)) {
-      die(get_last_error_message());
+      print_error(get_last_error_message());
+      return;
     }
 #else
     if (-1 == pipe(fds.fds_)) {
-      die("pipe() failed");
+      print_error("pipe() failed");
+      return;
     }
 #endif
   }
@@ -1090,8 +1036,9 @@ struct File {
             : (type == OpenType::WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
         FILE_ATTRIBUTE_NORMAL, nullptr);
     if (fd_ == INVALID_HANDLE_VALUE) {
-      die("open failed: " + utf16_to_utf8(path_) +
-          ", error: " + std::to_string(GetLastError()));
+      print_error("open failed: " + utf16_to_utf8(path_) +
+                  ", error: " + std::to_string(GetLastError()));
+      return;
     }
 #else
     fd_ = (type == OpenType::ReadOnly)
@@ -1102,7 +1049,8 @@ struct File {
                          : (O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC),
                      0644);
     if (fd_ == -1) {
-      die("open failed: " + path_);
+      print_error("open failed: " + path_);
+      return;
     }
 #endif
   }
@@ -1228,123 +1176,51 @@ inline void read_write_to_buffer_with_threads(
     std::optional<std::reference_wrapper<Buffer>> out,
     std::optional<std::reference_wrapper<Buffer>> err) {
   std::vector<std::thread> threads;
-#if SUBPROCESS_HAS_EXCEPTIONS
-  std::exception_ptr exception{nullptr};
-  std::mutex exception_mutex;
-#endif
-
   if (in) {
-#if SUBPROCESS_HAS_EXCEPTIONS
-    threads.emplace_back(
-        [](Buffer& buf, std::exception_ptr& exc, std::mutex& mtx) {
-          try {
-            ssize_t write_size;
-            while ((write_size = buf.write_some()) > 0) {
-            }
-            buf.close_write();
-            if (write_size == -1) {
-              die("write_some() failed");
-            }
-          } catch (...) {
-            std::lock_guard<std::mutex> lock(mtx);
-            if (!exc) {
-              exc = std::current_exception();
-            }
-          }
-        },
-        std::ref(in.value()), std::ref(exception), std::ref(exception_mutex));
-#else
     threads.emplace_back(
         [](Buffer& buf) {
           ssize_t write_size;
-          while ((write_size = buf.write_some()) > 0) {
-          }
+          do {
+            write_size = buf.write_some();
+          } while (write_size > 0);
           buf.close_write();
           if (write_size == -1) {
-            die("write_some() failed");
+            print_error("write_some() failed");
           }
         },
         std::ref(in.value()));
-#endif
   }
   if (out) {
-#if SUBPROCESS_HAS_EXCEPTIONS
-    threads.emplace_back(
-        [](Buffer& buf, std::exception_ptr& exc, std::mutex& mtx) {
-          try {
-            ssize_t read_size;
-            while ((read_size = buf.read_some()) > 0) {
-            }
-            buf.close_read();
-            if (read_size == -1) {
-              die("read_some() failed: " + get_last_error_message());
-            }
-          } catch (...) {
-            std::lock_guard<std::mutex> lock(mtx);
-            if (!exc) {
-              exc = std::current_exception();
-            }
-          }
-        },
-        std::ref(out.value()), std::ref(exception), std::ref(exception_mutex));
-#else
     threads.emplace_back(
         [](Buffer& buf) {
           ssize_t read_size;
-          while ((read_size = buf.read_some()) > 0) {
-          }
+          do {
+            read_size = buf.read_some();
+          } while (read_size > 0);
           buf.close_read();
           if (read_size == -1) {
-            die("read_some() failed: " + get_last_error_message());
+            print_error("read_some() failed: " + get_last_error_message());
           }
         },
         std::ref(out.value()));
-#endif
   }
   if (err) {
-#if SUBPROCESS_HAS_EXCEPTIONS
-    threads.emplace_back(
-        [](Buffer& buf, std::exception_ptr& exc, std::mutex& mtx) {
-          try {
-            ssize_t read_size;
-            while ((read_size = buf.read_some()) > 0) {
-            }
-            buf.close_read();
-            if (read_size == -1) {
-              die("read_some() failed: " + get_last_error_message());
-            }
-          } catch (...) {
-            std::lock_guard<std::mutex> lock(mtx);
-            if (!exc) {
-              exc = std::current_exception();
-            }
-          }
-        },
-        std::ref(err.value()), std::ref(exception), std::ref(exception_mutex));
-#else
     threads.emplace_back(
         [](Buffer& buf) {
           ssize_t read_size;
-          while ((read_size = buf.read_some()) > 0) {
-          }
-          buf.close_read();
+          do {
+            read_size = buf.read_some();
+          } while (read_size > 0);
           if (read_size == -1) {
-            die("read_some() failed: " + get_last_error_message());
+            print_error("read_some() failed: " + get_last_error_message());
           }
         },
         std::ref(err.value()));
-#endif
   }
 
   for (auto& thread : threads) {
     thread.join();
   }
-
-#if SUBPROCESS_HAS_EXCEPTIONS
-  if (exception) {
-    std::rethrow_exception(exception);
-  }
-#endif
 }
 
 #if !defined(_WIN32)
@@ -1379,10 +1255,10 @@ inline void read_write_to_buffer_use_poll(
          fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
     int poll_count = poll(fds, 3, -1);
     if (poll_count == -1) {
-      if (errno == EINTR) {
+      if (errno == EINTR || errno == EAGAIN) {
         continue;
       }
-      die("poll() failed");
+      print_error("poll() failed");
     }
     if (poll_count == 0) {
       break;
@@ -1394,7 +1270,8 @@ inline void read_write_to_buffer_use_poll(
       }
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die("write() error: " + std::to_string(errno));
+          print_error("write() error: " + std::to_string(errno));
+          break;
         }
       }
       if (in->get().empty()) {
@@ -1412,7 +1289,8 @@ inline void read_write_to_buffer_use_poll(
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
+          print_error(get_last_error_message());
+          break;
         }
       }
     } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
@@ -1430,7 +1308,8 @@ inline void read_write_to_buffer_use_poll(
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
+          print_error(get_last_error_message());
+          break;
         }
       }
     } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
@@ -1510,7 +1389,8 @@ inline void read_write_to_buffer_use_poll(
       break;
     }
     if (ready == -1) {
-      die(get_last_error_message());
+      print_error(get_last_error_message());
+      return;
     }
     if (in && in_wfd != INVALID_NATIVE_HANDLE_VALUE &&
         FD_ISSET(in_wfd, &write_fds)) {
@@ -1519,7 +1399,8 @@ inline void read_write_to_buffer_use_poll(
       }
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die("write() error: " + std::to_string(errno));
+          print_error("write() error: " + std::to_string(errno));
+          return;
         }
       }
       if (in->get().empty()) {
@@ -1536,7 +1417,8 @@ inline void read_write_to_buffer_use_poll(
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
+          print_error(get_last_error_message());
+          return;
         }
       }
     }
@@ -1550,7 +1432,8 @@ inline void read_write_to_buffer_use_poll(
       }
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          die(get_last_error_message());
+          print_error(get_last_error_message());
+          return;
         }
       }
     }
@@ -1575,7 +1458,8 @@ inline void read_write_to_buffer_use_poll(
 
   int epfd = epoll_create1(EPOLL_CLOEXEC);
   if (epfd == -1) {
-    die("epoll_create1() failed: " + get_last_error_message());
+    print_error("epoll_create1() failed: " + get_last_error_message());
+    return;
   }
   HandleGuard epoll_guard(epfd);
 
@@ -1587,21 +1471,27 @@ inline void read_write_to_buffer_use_poll(
     ev.events = EPOLLOUT;
     ev.data.fd = in->get().wfd();
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, in->get().wfd(), &ev) == -1) {
-      die("epoll_ctl(EPOLL_CTL_ADD, in) failed: " + get_last_error_message());
+      print_error("epoll_ctl(EPOLL_CTL_ADD, in) failed: " +
+                  get_last_error_message());
+      return;
     }
   }
   if (out && out->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
     ev.events = EPOLLIN;
     ev.data.fd = out->get().rfd();
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, out->get().rfd(), &ev) == -1) {
-      die("epoll_ctl(EPOLL_CTL_ADD, out) failed: " + get_last_error_message());
+      print_error("epoll_ctl(EPOLL_CTL_ADD, out) failed: " +
+                  get_last_error_message());
+      return;
     }
   }
   if (err && err->get().rfd() != INVALID_NATIVE_HANDLE_VALUE) {
     ev.events = EPOLLIN;
     ev.data.fd = err->get().rfd();
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, err->get().rfd(), &ev) == -1) {
-      die("epoll_ctl(EPOLL_CTL_ADD, err) failed: " + get_last_error_message());
+      print_error("epoll_ctl(EPOLL_CTL_ADD, err) failed: " +
+                  get_last_error_message());
+      return;
     }
   }
 
@@ -1613,7 +1503,8 @@ inline void read_write_to_buffer_use_poll(
       if (errno == EINTR) {
         continue;
       }
-      die("epoll_wait() failed: " + get_last_error_message());
+      print_error("epoll_wait() failed: " + get_last_error_message());
+      return;
     }
 
     for (int i = 0; i < nfds; ++i) {
@@ -1627,7 +1518,8 @@ inline void read_write_to_buffer_use_poll(
           }
           if (write_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die("write() error: " + std::to_string(errno));
+              print_error("write() error: " + std::to_string(errno));
+              return;
             }
           }
           if (in->get().empty()) {
@@ -1650,7 +1542,8 @@ inline void read_write_to_buffer_use_poll(
           }
           if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
+              print_error(get_last_error_message());
+              return;
             }
           }
         }
@@ -1669,7 +1562,8 @@ inline void read_write_to_buffer_use_poll(
           }
           if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
+              print_error(get_last_error_message());
+              return;
             }
           }
         }
@@ -1701,7 +1595,8 @@ inline void read_write_to_buffer_use_poll(
 
   int kq = kqueue();
   if (kq == -1) {
-    die("kqueue() failed: " + get_last_error_message());
+    print_error("kqueue() failed: " + get_last_error_message());
+    return;
   }
   HandleGuard kq_guard(kq);
 
@@ -1723,7 +1618,8 @@ inline void read_write_to_buffer_use_poll(
 
   if (nchanges > 0) {
     if (kevent(kq, changes, nchanges, nullptr, 0, nullptr) == -1) {
-      die("kevent() register failed: " + get_last_error_message());
+      print_error("kevent() register failed: " + get_last_error_message());
+      return;
     }
   }
 
@@ -1737,7 +1633,8 @@ inline void read_write_to_buffer_use_poll(
       if (errno == EINTR) {
         continue;
       }
-      die("kevent() failed: " + get_last_error_message());
+      print_error("kevent() failed: " + get_last_error_message());
+      return;
     }
 
     for (int i = 0; i < nev; ++i) {
@@ -1766,7 +1663,8 @@ inline void read_write_to_buffer_use_poll(
           }
           if (write_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die("write() error: " + std::to_string(errno));
+              print_error("write() error: " + std::to_string(errno));
+              return;
             }
           }
           if (in->get().empty()) {
@@ -1796,7 +1694,8 @@ inline void read_write_to_buffer_use_poll(
             out->get().close_read();
           } else if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
+              print_error(get_last_error_message());
+              return;
             }
           }
         }
@@ -1813,7 +1712,8 @@ inline void read_write_to_buffer_use_poll(
             err->get().close_read();
           } else if (read_count == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-              die(get_last_error_message());
+              print_error(get_last_error_message());
+              return;
             }
           }
         }
@@ -1908,8 +1808,9 @@ class Redirector {
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
-                die("SetHandleInformation failed: " +
-                    std::to_string(GetLastError()));
+                print_error("SetHandleInformation failed: " +
+                            std::to_string(GetLastError()));
+                return;
               }
             }
 #endif
@@ -1925,8 +1826,9 @@ class Redirector {
             if (value.fd() != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(value.fd(), HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
-                die("SetHandleInformation failed: " +
-                    std::to_string(GetLastError()));
+                print_error("SetHandleInformation failed: " +
+                            std::to_string(GetLastError()));
+                return;
               }
             }
 #endif
@@ -1940,8 +1842,9 @@ class Redirector {
                 inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
-                die("SetHandleInformation failed: " +
-                    std::to_string(GetLastError()));
+                print_error("SetHandleInformation failed: " +
+                            std::to_string(GetLastError()));
+                return;
               }
             }
 #endif
@@ -2696,16 +2599,18 @@ class subprocess {
     auto* attr_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
         proc_thread_attr_list_.data());
     if (!InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_list_size)) {
-      die("InitializeProcThreadAttributeList failed: " +
-          std::to_string(GetLastError()));
+      print_error("InitializeProcThreadAttributeList failed: " +
+                  std::to_string(GetLastError()));
+      return;
     }
     if (!UpdateProcThreadAttribute(
             attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
             handles_to_inherit.data(),
             handles_to_inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
       DeleteProcThreadAttributeList(attr_list);
-      die("UpdateProcThreadAttribute failed: " +
-          std::to_string(GetLastError()));
+      print_error("UpdateProcThreadAttribute failed: " +
+                  std::to_string(GetLastError()));
+      return;
     }
     startup_info_.lpAttributeList = attr_list;
 
@@ -2742,25 +2647,32 @@ class subprocess {
 #if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
     posix_spawn_file_actions_t action;
     if (0 != posix_spawn_file_actions_init(&action)) {
-      die("posix_spawn_file_actions_init failed: " + get_last_error_message());
+      print_error("posix_spawn_file_actions_init failed: " +
+                  get_last_error_message());
+      return;
     }
     if (group_id_.has_value()) {
       posix_spawnattr_t attr;
       if (0 != posix_spawnattr_init(&attr)) {
         posix_spawn_file_actions_destroy(&action);
-        die("posix_spawnattr_init failed: " + get_last_error_message());
+        print_error("posix_spawnattr_init failed: " + get_last_error_message());
+        return;
       }
       // Create a new process group so that the watchdog can kill the entire
       // process tree on timeout (including any grandchildren).
       if (0 != posix_spawnattr_setpgroup(&attr, group_id_.value())) {
         posix_spawn_file_actions_destroy(&action);
         posix_spawnattr_destroy(&attr);
-        die("posix_spawnattr_setpgroup failed: " + get_last_error_message());
+        print_error("posix_spawnattr_setpgroup failed: " +
+                    get_last_error_message());
+        return;
       }
       if (0 != posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP)) {
         posix_spawn_file_actions_destroy(&action);
         posix_spawnattr_destroy(&attr);
-        die("posix_spawnattr_setflags failed: " + get_last_error_message());
+        print_error("posix_spawnattr_setflags failed: " +
+                    get_last_error_message());
+        return;
       }
       add_posix_spawn_file_actions(action, &attr);
       posix_spawn_file_actions_destroy(&action);
@@ -2774,7 +2686,8 @@ class subprocess {
 #else   // SUBPROCESS_USE_POSIX_SPAWN
     auto pid = fork();
     if (pid < 0) {
-      die("fork() failed");
+      print_error("fork() failed");
+      return;
     } else if (pid == 0) {
       if (group_id_.has_value()) {
         setpgid(0, group_id_.value());
@@ -2793,19 +2706,7 @@ class subprocess {
   }
 
   int run() {
-#if SUBPROCESS_HAS_EXCEPTIONS
-    try {
-      async_run();
-    } catch (std::exception const& e) {
-      print_error(e.what());
-      return 127;
-    } catch (...) {
-      print_error("unknown exception in async_run()");
-      return 127;
-    }
-#else
     async_run();
-#endif
     return wait_for_exit();
   }
 
@@ -3001,7 +2902,8 @@ class subprocess {
       ret = posix_spawn_file_actions_addchdir(&action, cwd_.data());
 #endif
       if (-1 == ret) {
-        die("chdir failed: " + get_last_error_message());
+        print_error("chdir failed: " + get_last_error_message());
+        return;
       }
     }
 
