@@ -237,8 +237,12 @@ using NativeHandle = int;
 constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
 #endif  // !_WIN32
 
+inline bool invalid_handle(NativeHandle handle) {
+  return INVALID_NATIVE_HANDLE_VALUE == handle;
+}
+
 inline void close_native_handle(NativeHandle& handle) {
-  if (handle != INVALID_NATIVE_HANDLE_VALUE) {
+  if (!invalid_handle(handle)) {
 #if defined(_WIN32)
     CloseHandle(handle);
 #else
@@ -249,7 +253,7 @@ inline void close_native_handle(NativeHandle& handle) {
 }
 
 inline NativeHandle dup_native_handle(NativeHandle handle) {
-  if (INVALID_NATIVE_HANDLE_VALUE == handle) {
+  if (invalid_handle(handle)) {
     return INVALID_NATIVE_HANDLE_VALUE;
   }
 #if defined(_WIN32)
@@ -266,7 +270,7 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
 
 #if !defined(_WIN32)
 [[maybe_unused]] inline void set_nonblocking(int fd) {
-  if (fd == INVALID_NATIVE_HANDLE_VALUE) {
+  if (invalid_handle(fd)) {
     return;
   }
   auto const flags = fcntl(fd, F_GETFL, 0);
@@ -423,9 +427,7 @@ class HandleGuard {
 
   void Close() { close_native_handle(handle_); }
 
-  [[nodiscard]] bool IsValid() const {
-    return handle_ != INVALID_NATIVE_HANDLE_VALUE;
-  }
+  [[nodiscard]] bool IsValid() const { return !invalid_handle(handle_); }
 
  private:
   NativeHandle handle_;
@@ -888,11 +890,11 @@ class Pipe {
   Pipe dup() const {
     Pipe p;
     p.fds_->rfd() = dup_native_handle(fds_->rfd());
-    if (p.fds_->rfd() == INVALID_NATIVE_HANDLE_VALUE) {
+    if (invalid_handle(p.fds_->rfd())) {
       return p;
     }
     p.fds_->wfd() = dup_native_handle(fds_->wfd());
-    if (p.fds_->wfd() == INVALID_NATIVE_HANDLE_VALUE) {
+    if (invalid_handle(p.fds_->wfd())) {
       close_native_handle(p.fds_->rfd());
       p.fds_->rfd() = INVALID_NATIVE_HANDLE_VALUE;
     }
@@ -906,10 +908,10 @@ class Pipe {
     pipe_pair(pipe_pair const&) = delete;
     pipe_pair& operator=(pipe_pair const&) = delete;
     ~pipe_pair() {
-      if (fds_[0] != INVALID_NATIVE_HANDLE_VALUE) {
+      if (!invalid_handle(fds_[0])) {
         close_native_handle(fds_[0]);
       }
-      if (fds_[1] != INVALID_NATIVE_HANDLE_VALUE) {
+      if (!invalid_handle(fds_[1])) {
         close_native_handle(fds_[1]);
       }
     }
@@ -1036,7 +1038,7 @@ struct File {
 
  private:
   void open_impl(OpenType type) {
-    if (fd_ != INVALID_NATIVE_HANDLE_VALUE) {
+    if (!invalid_handle(fd_)) {
       return;
     }
 #if defined(_WIN32)
@@ -1285,15 +1287,14 @@ inline void read_write_to_buffer_use_poll(
   // periodically check whether the direct child has exited. This
   // avoids hanging forever when grandchildren inherit and hold open
   // the write ends of stdout/stderr pipes.
-  const bool monitor_child = (child_pid != INVALID_NATIVE_HANDLE_VALUE);
+  const bool monitor_child = (!invalid_handle(child_pid));
   // After the child exits, drain any remaining buffered pipe data
   // before giving up. This gives us 2 seconds to collect final output.
   auto drain_deadline = std::chrono::steady_clock::time_point::max();
   bool child_exited = false;
 
-  while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
-         fds[1].fd != INVALID_NATIVE_HANDLE_VALUE ||
-         fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
+  while (!invalid_handle(fds[0].fd) || !invalid_handle(fds[1].fd) ||
+         !invalid_handle(fds[2].fd)) {
     // Use a 200ms timeout when monitoring the child so we can
     // periodically check liveness; otherwise block indefinitely.
     int poll_count = poll(fds, 3, monitor_child ? 200 : -1);
@@ -1336,8 +1337,7 @@ inline void read_write_to_buffer_use_poll(
       // Timeout only — check child again on next iteration.
       continue;
     }
-    if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
-        (fds[0].revents & POLLOUT)) {
+    if (!invalid_handle(fds[0].fd) && (fds[0].revents & POLLOUT)) {
       ssize_t write_count;
       while ((write_count = in->get().write_some()) > 0) {
       }
@@ -1352,7 +1352,7 @@ inline void read_write_to_buffer_use_poll(
         fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
     }
-    if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
+    if (!invalid_handle(fds[1].fd) && (fds[1].revents & POLLIN)) {
       ssize_t read_count;
       do {
         read_count = out->get().read_some();
@@ -1367,12 +1367,12 @@ inline void read_write_to_buffer_use_poll(
           break;
         }
       }
-    } else if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
+    } else if (!invalid_handle(fds[1].fd) &&
                (fds[1].revents & (POLLHUP | POLLERR))) {
       out->get().close_read();
       fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
     }
-    if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
+    if (!invalid_handle(fds[2].fd) && (fds[2].revents & POLLIN)) {
       ssize_t read_count;
       do {
         read_count = err->get().read_some();
@@ -1387,29 +1387,28 @@ inline void read_write_to_buffer_use_poll(
           break;
         }
       }
-    } else if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
+    } else if (!invalid_handle(fds[2].fd) &&
                (fds[2].revents & (POLLHUP | POLLERR))) {
       err->get().close_read();
       fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
     }
-    if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
+    if (!invalid_handle(fds[0].fd) &&
         (fds[0].revents & (POLLNVAL | POLLHUP | POLLERR))) {
       in->get().close_write();
       fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
     }
-    if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE &&
+    if (!invalid_handle(fds[1].fd) &&
         (fds[1].revents & (POLLNVAL | POLLHUP | POLLERR))) {
       out->get().close_read();
       fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
     }
-    if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE &&
+    if (!invalid_handle(fds[2].fd) &&
         (fds[2].revents & (POLLNVAL | POLLHUP | POLLERR))) {
       err->get().close_read();
       fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
     }
-    if (fds[0].fd == INVALID_NATIVE_HANDLE_VALUE &&
-        fds[1].fd == INVALID_NATIVE_HANDLE_VALUE &&
-        fds[2].fd == INVALID_NATIVE_HANDLE_VALUE) {
+    if (invalid_handle(fds[0].fd) && invalid_handle(fds[1].fd) &&
+        invalid_handle(fds[2].fd)) {
       break;
     }
   }
@@ -1459,18 +1458,18 @@ class Redirector {
     std::visit(
         []<typename T>([[maybe_unused]] T& value) {
           if constexpr (std::is_same_v<T, Pipe>) {
-            if (value.rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (!invalid_handle(value.rfd())) {
               std::cerr << ">> pipe read handle not closed!" << '\n';
             }
-            if (value.wfd() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (!invalid_handle(value.wfd())) {
               std::cerr << ">> pipe write handle not closed!" << '\n';
             }
 
           } else if constexpr (std::is_same_v<T, Buffer>) {
-            if (value.rfd() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (!invalid_handle(value.rfd())) {
               std::cerr << ">> buffer pipe read handle not closed!" << '\n';
             }
-            if (value.wfd() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (!invalid_handle(value.wfd())) {
               std::cerr << ">> buffer pipe write handle not closed!" << '\n';
             }
           }
@@ -1516,7 +1515,7 @@ class Redirector {
             // stderr (fileno 2): child writes -> wfd is the child end
             if (NativeHandle inheritable_handle =
                     fileno() == 0 ? value.rfd() : value.wfd();
-                inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
+                !invalid_handle(inheritable_handle)) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
                 print_error("SetHandleInformation failed: " +
@@ -1534,7 +1533,7 @@ class Redirector {
 #if defined(_WIN32)
             // File handles are now non-inheritable by default; make them
             // inheritable so the child can use them.
-            if (value.fd() != INVALID_NATIVE_HANDLE_VALUE) {
+            if (!invalid_handle(value.fd())) {
               if (!SetHandleInformation(value.fd(), HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
                 print_error("SetHandleInformation failed: " +
@@ -1550,7 +1549,7 @@ class Redirector {
             // Default is non-inheritable; make only the child end inheritable.
             if (NativeHandle inheritable_handle =
                     fileno() == 0 ? value.rfd() : value.wfd();
-                inheritable_handle != INVALID_NATIVE_HANDLE_VALUE) {
+                !invalid_handle(inheritable_handle)) {
               if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
                 print_error("SetHandleInformation failed: " +
@@ -2440,7 +2439,7 @@ class subprocess {
 
 #if defined(_WIN32)
   int wait_for_exit() {
-    if (process_information_.hProcess == INVALID_NATIVE_HANDLE_VALUE) {
+    if (invalid_handle(process_information_.hProcess)) {
       stop_watchdog();
       return 127;
     }
@@ -2456,7 +2455,7 @@ class subprocess {
   }
 #else
   int wait_for_exit() {
-    if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
+    if (invalid_handle(pid_)) {
       stop_watchdog();
       return 127;
     }
@@ -2500,7 +2499,7 @@ class subprocess {
       job_handle_->Close();
     }
 #else
-    if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
+    if (invalid_handle(pid_)) {
       return;
     }
     // Only kill the entire process group when a group was explicitly
@@ -2508,7 +2507,7 @@ class subprocess {
     // This prevents accidentally killing unrelated processes that may
     // share the same process group.
     auto kill_pid = pid_;
-    if (pgid_ != INVALID_NATIVE_HANDLE_VALUE && pid_ == pgid_) {
+    if (!invalid_handle(pgid_) && pid_ == pgid_) {
       kill_pid = -pid_;
     }
     kill(kill_pid, SIGTERM);
@@ -2552,7 +2551,10 @@ class subprocess {
     // record that fact so wait_for_exit() can skip the waitpid call.
     {
       int status = 0;
-      pid_t result = ::waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
+      pid_t result;
+      do {
+        result = ::waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
+      } while (result == -1 && errno == EINTR);
       if (result > 0) {
         // Child just exited — store status.
         early_exit_status_ = status;
@@ -2756,7 +2758,7 @@ class pipeline {
       }
 #endif
       it->async_run();
-      if (it->pid() == INVALID_NATIVE_HANDLE_VALUE) {
+      if (invalid_handle(it->pid())) {
         for (auto& p : pipes) {
           p.close_all();
         }
