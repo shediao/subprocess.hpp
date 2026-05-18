@@ -2077,7 +2077,7 @@ class subprocess {
 #if !defined(_WIN32)
                background_explicit_ = true;
                if (arg.background) {
-                 group_id_ = 0;
+                 requested_pgid_ = 0;
                }
 #endif
              }
@@ -2169,12 +2169,12 @@ class subprocess {
       }
     }
 #else
-    if (!group_id_.has_value() && !background_explicit_) {
+    if (!requested_pgid_.has_value() && !background_explicit_) {
       if (stdin_.inherit() && !stdin_is_atty()) {
-        group_id_ = 0;
+        requested_pgid_ = 0;
       } else if (const auto fd = stdin_.get_file_fd();
                  fd.has_value() && !is_atty(fd.value())) {
-        group_id_ = 0;
+        requested_pgid_ = 0;
       }
     }
 #endif
@@ -2282,7 +2282,7 @@ class subprocess {
                   get_last_error_message());
       return;
     }
-    if (group_id_.has_value()) {
+    if (requested_pgid_.has_value()) {
       posix_spawnattr_t attr;
       if (0 != posix_spawnattr_init(&attr)) {
         posix_spawn_file_actions_destroy(&action);
@@ -2291,7 +2291,7 @@ class subprocess {
       }
       // Create a new process group so that the watchdog can kill the entire
       // process tree on timeout (including any grandchildren).
-      if (0 != posix_spawnattr_setpgroup(&attr, group_id_.value())) {
+      if (0 != posix_spawnattr_setpgroup(&attr, requested_pgid_.value())) {
         posix_spawn_file_actions_destroy(&action);
         posix_spawnattr_destroy(&attr);
         print_error("posix_spawnattr_setpgroup failed: " +
@@ -2308,6 +2308,8 @@ class subprocess {
       add_posix_spawn_file_actions(action, &attr);
       posix_spawn_file_actions_destroy(&action);
       posix_spawnattr_destroy(&attr);
+      // Resolve the actual pgid: 0 means the child's pid becomes its own pgid.
+      pgid_ = (requested_pgid_.value() == 0) ? pid_ : requested_pgid_.value();
     } else {
       add_posix_spawn_file_actions(action, nullptr);
       posix_spawn_file_actions_destroy(&action);
@@ -2320,14 +2322,17 @@ class subprocess {
       print_error("fork() failed");
       return;
     } else if (pid == 0) {
-      if (group_id_.has_value()) {
-        setpgid(0, group_id_.value());
+      if (requested_pgid_.has_value()) {
+        setpgid(0, requested_pgid_.value());
       }
       execute_command_in_child();
     } else {
       pid_ = pid;
-      if (group_id_.has_value()) {
-        (void)setpgid(pid, group_id_.value() == 0 ? pid : group_id_.value());
+      if (requested_pgid_.has_value()) {
+        auto target_pgid =
+            requested_pgid_.value() == 0 ? pid : requested_pgid_.value();
+        (void)setpgid(pid, target_pgid);
+        pgid_ = target_pgid;
       }
       launch_watchdog();
       pump_pipe_data();
@@ -2411,11 +2416,13 @@ class subprocess {
     if (pid_ == INVALID_NATIVE_HANDLE_VALUE) {
       return;
     }
+    // Only kill the entire process group when a group was explicitly
+    // created AND the child is the process group leader (pid == pgid).
+    // This prevents accidentally killing unrelated processes that may
+    // share the same process group.
     auto kill_pid = pid_;
-    if (group_id_.has_value()) {
-      if (group_id_.value() == 0 || group_id_.value() == pid_) {
-        kill_pid = -pid_;
-      }
+    if (pgid_ != INVALID_NATIVE_HANDLE_VALUE && pid_ == pgid_) {
+      kill_pid = -pid_;
     }
     kill(kill_pid, SIGTERM);
     // Give the process group a short grace period to handle SIGTERM,
@@ -2597,7 +2604,8 @@ class subprocess {
   std::vector<unsigned char> proc_thread_attr_list_;
 #else
   NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
-  std::optional<NativeHandle> group_id_{std::nullopt};
+  NativeHandle pgid_{INVALID_NATIVE_HANDLE_VALUE};
+  std::optional<NativeHandle> requested_pgid_{std::nullopt};
   bool background_explicit_{false};
 #endif
 };
@@ -2629,9 +2637,9 @@ class pipeline {
       }
 #else
       if (it == subs_.begin()) {
-        it->group_id_ = 0;
+        it->requested_pgid_ = 0;
       } else {
-        it->group_id_ = subs_.begin()->pid_;
+        it->requested_pgid_ = subs_.begin()->pid_;
       }
 #endif
       it->async_run();
