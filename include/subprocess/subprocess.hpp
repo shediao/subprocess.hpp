@@ -932,10 +932,32 @@ class Pipe {
       return;
     }
 #else
+#if defined(__linux__)
+    // Use pipe2 with O_CLOEXEC so that the pipe fds are automatically closed
+    // on exec(). This prevents child processes' grandchildren from inheriting
+    // the pipe write ends and keeping them open indefinitely, which would
+    // cause pump_pipe_data() to hang waiting for EOF.
+    if (-1 == pipe2(fds.fds_, O_CLOEXEC)) {
+      print_error("pipe2() failed");
+      return;
+    }
+#else
     if (-1 == pipe(fds.fds_)) {
       print_error("pipe() failed");
       return;
     }
+    // Set close-on-exec manually on platforms without pipe2().
+    // This prevents pipe fds from leaking into grandchildren via exec().
+    if (-1 == fcntl(fds.fds_[0], F_SETFD, FD_CLOEXEC) ||
+        -1 == fcntl(fds.fds_[1], F_SETFD, FD_CLOEXEC)) {
+      print_error("fcntl(FD_CLOEXEC) failed");
+      close(fds.fds_[0]);
+      close(fds.fds_[1]);
+      fds.fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
+      fds.fds_[1] = INVALID_NATIVE_HANDLE_VALUE;
+      return;
+    }
+#endif
 #endif
   }
   std::shared_ptr<pipe_pair> fds_{std::make_shared<pipe_pair>()};
@@ -1226,11 +1248,18 @@ inline void read_write_to_buffer_with_threads(
 }
 
 #if !defined(_WIN32)
+// Overload that accepts a child pid. When the child process exits,
+// the poll loop stops waiting for pipe I/O and returns. This prevents
+// hanging when the child's grandchildren inherit pipe fds and keep
+// them open after the direct child has exited.
+// If child_status is non-null and the child is reaped during polling,
+// the status is stored there so wait_for_exit() can retrieve it.
 [[maybe_unused]]
 inline void read_write_to_buffer_use_poll(
     std::optional<std::reference_wrapper<Buffer>> in,
     std::optional<std::reference_wrapper<Buffer>> out,
-    std::optional<std::reference_wrapper<Buffer>> err) {
+    std::optional<std::reference_wrapper<Buffer>> err, NativeHandle child_pid,
+    int* child_status = nullptr) {
   if (in) {
     set_nonblocking(in->get().wfd());
   }
@@ -1252,18 +1281,60 @@ inline void read_write_to_buffer_use_poll(
        .events = POLLIN,
        .revents = 0}};
 
+  // If a child pid was provided, use a timed poll loop so we can
+  // periodically check whether the direct child has exited. This
+  // avoids hanging forever when grandchildren inherit and hold open
+  // the write ends of stdout/stderr pipes.
+  const bool monitor_child = (child_pid != INVALID_NATIVE_HANDLE_VALUE);
+  // After the child exits, drain any remaining buffered pipe data
+  // before giving up. This gives us 2 seconds to collect final output.
+  auto drain_deadline = std::chrono::steady_clock::time_point::max();
+  bool child_exited = false;
+
   while (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE ||
          fds[1].fd != INVALID_NATIVE_HANDLE_VALUE ||
          fds[2].fd != INVALID_NATIVE_HANDLE_VALUE) {
-    int poll_count = poll(fds, 3, -1);
+    // Use a 200ms timeout when monitoring the child so we can
+    // periodically check liveness; otherwise block indefinitely.
+    int poll_count = poll(fds, 3, monitor_child ? 200 : -1);
     if (poll_count == -1) {
       if (errno == EINTR || errno == EAGAIN) {
         continue;
       }
       print_error("poll() failed");
-    }
-    if (poll_count == 0) {
       break;
+    }
+
+    // Check if the direct child has exited. We use waitpid(WNOHANG)
+    // rather than kill(pid, 0) because a zombie process still exists
+    // in the process table and responds to kill(), giving a false
+    // positive that the child is still running.
+    if (monitor_child && !child_exited) {
+      int status = 0;
+      pid_t result = ::waitpid(static_cast<pid_t>(child_pid), &status, WNOHANG);
+      if (result > 0) {
+        // Child has exited — reap it and store the status.
+        child_exited = true;
+        if (child_status != nullptr) {
+          *child_status = status;
+        }
+        // Start the drain timer — collect any last buffered data
+        // from the pipes for a limited time, then stop.
+        drain_deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+      }
+    }
+
+    // If the child exited and the drain deadline has passed, stop
+    // waiting for more pipe data — grandchildren may still be running
+    // but we don't want to block the caller indefinitely.
+    if (child_exited && std::chrono::steady_clock::now() >= drain_deadline) {
+      break;
+    }
+
+    if (poll_count == 0) {
+      // Timeout only — check child again on next iteration.
+      continue;
     }
     if (fds[0].fd != INVALID_NATIVE_HANDLE_VALUE &&
         (fds[0].revents & POLLOUT)) {
@@ -1343,14 +1414,23 @@ inline void read_write_to_buffer_use_poll(
     }
   }
   if (in) {
-    in->get().wfd() = INVALID_NATIVE_HANDLE_VALUE;
+    in->get().close_write();
   }
   if (out) {
-    out->get().rfd() = INVALID_NATIVE_HANDLE_VALUE;
+    out->get().close_read();
   }
   if (err) {
-    err->get().rfd() = INVALID_NATIVE_HANDLE_VALUE;
+    err->get().close_read();
   }
+}
+
+// Convenience overload without child pid — blocks until pipes close naturally.
+[[maybe_unused]]
+inline void read_write_to_buffer_use_poll(
+    std::optional<std::reference_wrapper<Buffer>> in,
+    std::optional<std::reference_wrapper<Buffer>> out,
+    std::optional<std::reference_wrapper<Buffer>> err) {
+  read_write_to_buffer_use_poll(in, out, err, INVALID_NATIVE_HANDLE_VALUE);
 }
 #endif
 
@@ -2381,10 +2461,17 @@ class subprocess {
       return 127;
     }
     int status = 0;
-    int wait_ret;
-    do {
-      wait_ret = waitpid(pid_, &status, 0);
-    } while (wait_ret == -1 && errno == EINTR);
+    if (!child_reaped_early_) {
+      int wait_ret;
+      do {
+        wait_ret = waitpid(pid_, &status, 0);
+      } while (wait_ret == -1 && errno == EINTR);
+    } else {
+      // Child was already reaped by pump_pipe_data() when it detected
+      // the child exited while pipe fds were still held open by
+      // grandchildren.  Use the stored status.
+      status = early_exit_status_;
+    }
     stop_watchdog();
 
     auto return_code = -1;
@@ -2453,8 +2540,28 @@ class subprocess {
     read_write_to_buffer_with_threads(stdin_.get_buffer(), stdout_.get_buffer(),
                                       stderr_.get_buffer());
 #else
+    // Pass the child pid so the poll loop can detect when the direct child
+    // exits. This prevents hanging indefinitely when the child's grandchildren
+    // inherit and hold open the write ends of stdout/stderr pipes.
+    // Also pass a pointer to early_exit_status_ so that if the child is
+    // reaped during polling, wait_for_exit() can retrieve the status.
     read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
-                                  stderr_.get_buffer());
+                                  stderr_.get_buffer(), pid_,
+                                  &early_exit_status_);
+    // Check whether the child was reaped during the poll loop.  If it was,
+    // record that fact so wait_for_exit() can skip the waitpid call.
+    {
+      int status = 0;
+      pid_t result = ::waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
+      if (result > 0) {
+        // Child just exited — store status.
+        early_exit_status_ = status;
+        child_reaped_early_ = true;
+      } else if (result == -1 && errno == ECHILD) {
+        // Child was already reaped inside read_write_to_buffer_use_poll.
+        child_reaped_early_ = true;
+      }
+    }
 #endif
   }
 #if !defined(_WIN32)
@@ -2607,6 +2714,12 @@ class subprocess {
   NativeHandle pgid_{INVALID_NATIVE_HANDLE_VALUE};
   std::optional<NativeHandle> requested_pgid_{std::nullopt};
   bool background_explicit_{false};
+  // When the child is reaped early by pump_pipe_data() (because it exited
+  // while the poll loop was still draining pipe data), the exit status is
+  // stored here so that wait_for_exit() can return it without calling
+  // waitpid() again on the already-reaped child.
+  int early_exit_status_{0};
+  bool child_reaped_early_{false};
 #endif
 };
 
