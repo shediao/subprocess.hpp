@@ -222,16 +222,6 @@ TEST(BackgroundTest, StdinIsAttyUtility) {
               result == false);  // just verify it compiles & returns bool
   static_assert(std::is_same_v<decltype(result), bool>);
 }
-
-TEST(BackgroundTest, StdoutIsAttyUtility) {
-  auto result = subprocess::detail::stdout_is_atty();
-  EXPECT_TRUE(result == true || result == false);
-}
-
-TEST(BackgroundTest, StderrIsAttyUtility) {
-  auto result = subprocess::detail::stderr_is_atty();
-  EXPECT_TRUE(result == true || result == false);
-}
 #endif  // !_WIN32
 
 // =============================================================================

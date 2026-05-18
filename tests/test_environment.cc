@@ -18,6 +18,7 @@
 #include <string>
 
 #include "./utils.h"
+#include "environment/environment.hpp"
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
@@ -26,18 +27,18 @@ using subprocess::run;
 
 static std::optional<std::string> home() {
 #if defined(_WIN32)
-  auto user_profile = subprocess::detail::get_env("USERPROFILE");
+  auto user_profile = env::get("USERPROFILE");
   if (user_profile.has_value() && !user_profile->empty()) {
     return user_profile;
   }
-  auto home_drive = subprocess::detail::get_env("HOMEDRIVE");
-  auto homepath = subprocess::detail::get_env("HOMEPATH");
+  auto home_drive = env::get("HOMEDRIVE");
+  auto homepath = env::get("HOMEPATH");
   if (home_drive.has_value() && homepath.has_value() &&
       !home_drive.value().empty() && !homepath.value().empty()) {
     return home_drive.value() + homepath.value();
   }
 #else
-  auto home_dir = subprocess::detail::get_env("HOME");
+  auto home_dir = env::get("HOME");
   if (home_dir.has_value() && !home_dir->empty()) {
     return home_dir;
   }
@@ -165,11 +166,15 @@ TEST(EnvironmentTest, CwdSetAndReadRelativeFile) {
 TEST(EnvironmentTest, EnvOverrideCheckValue) {
   buffer stdout_buf;
 #if defined(_WIN32)
-  int exit_code = run("cmd.exe", "/c", "<nul set /p=%MY_TEST_VAR%&exit /b 0",
-                      env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
+  int exit_code =
+      run("cmd.exe", "/c", "<nul set /p=%MY_TEST_VAR%&exit /b 0",
+          subprocess::named_arguments::env = {{"MY_TEST_VAR", "is_set"}},
+          std_out > stdout_buf);
 #else
-  int exit_code = run("bash", "-c", "echo -n $MY_TEST_VAR",
-                      env = {{"MY_TEST_VAR", "is_set"}}, std_out > stdout_buf);
+  int exit_code =
+      run("bash", "-c", "echo -n $MY_TEST_VAR",
+          subprocess::named_arguments::env = {{"MY_TEST_VAR", "is_set"}},
+          std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(stdout_buf.to_string(), "is_set");
@@ -181,17 +186,20 @@ TEST(EnvironmentTest, EnvOverrideClearsOtherVars) {
   int exit_code = run(
       {"cmd.exe", "/c",
        R"(if "%ONLY_VAR%"=="visible" (<nul set /p=isolated& exit /b 0) else (<nul set /p=not_isolated& exit /b 0))"},
-      env = {{"ONLY_VAR", "visible"}}, std_out > stdout_buf);
+      subprocess::named_arguments::env = {{"ONLY_VAR", "visible"}},
+      std_out > stdout_buf);
 #else
-  int exit_code = run({"bash", "-c",
-                       R"(
+  int exit_code =
+      run({"bash", "-c",
+           R"(
 if [ "$ONLY_VAR" = "visible" ]; then
   echo -n isolated;
 else
   echo -n not_isolated;
 fi
 )"},
-                      env = {{"ONLY_VAR", "visible"}}, std_out > stdout_buf);
+          subprocess::named_arguments::env = {{"ONLY_VAR", "visible"}},
+          std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(stdout_buf.to_string(), "isolated");
@@ -200,13 +208,15 @@ fi
 TEST(EnvironmentTest, EnvVectorForm) {
   buffer out;
 #if !defined(_WIN32)
-  auto ret = run("/usr/bin/printenv", "env1", env = {{"env1", "value1"}},
+  auto ret = run("/usr/bin/printenv", "env1",
+                 subprocess::named_arguments::env = {{"env1", "value1"}},
                  std_out > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "value1\n");
 #else
   auto ret = run("cmd.exe", "/c", "<nul set /p=%env1%&exit /b 0",
-                 env = {{"env1", "value1"}}, std_out > out);
+                 subprocess::named_arguments::env = {{"env1", "value1"}},
+                 std_out > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "value1");
 #endif
@@ -223,13 +233,15 @@ TEST(EnvironmentTest, EnvAppendCheckValue) {
       run({"cmd.exe", "/c",
            "<nul set /p=%MY_APPEND_VAR%&if defined PATH (<nul set "
            "/p=_haspath)&exit /b 0"},
-          env += {{"MY_APPEND_VAR", "appended"}}, std_out > stdout_buf);
+          subprocess::named_arguments::env += {{"MY_APPEND_VAR", "appended"}},
+          std_out > stdout_buf);
 #else
   int exit_code =
       run({"bash", "-c",
            "echo -n $MY_APPEND_VAR; if [ -n \"$PATH\" ]; then echo -n "
            "_haspath; fi"},
-          env += {{"MY_APPEND_VAR", "appended"}}, std_out > stdout_buf);
+          subprocess::named_arguments::env += {{"MY_APPEND_VAR", "appended"}},
+          std_out > stdout_buf);
 #endif
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(stdout_buf.to_string(), "appended_haspath");

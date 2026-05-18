@@ -51,6 +51,9 @@ void drain_fd(int fd, buffer& drained) {
   }
   ::close(fd);
 }
+void drain_fd(subprocess::detail::unique_fd const& fd, buffer& drained) {
+  drain_fd(fd.get(), drained);
+}
 
 // Write |data| to a fd (blocking), then close it to signal EOF.
 // Used to feed data *into* the pipe for the multiplexer to read
@@ -69,6 +72,10 @@ void feed_and_close(int fd, const buffer& data) {
     }
   }
   ::close(fd);
+}
+void feed_and_close(subprocess::detail::unique_fd const& fd,
+                    const buffer& data) {
+  feed_and_close(fd.get(), data);
 }
 
 // Make a buffer pre-filled with |s|.

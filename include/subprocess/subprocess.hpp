@@ -296,20 +296,77 @@ inline bool stdin_is_atty() {
   return is_atty(STDIN_FILENO);
 #endif
 }
-inline bool stdout_is_atty() {
-#if defined(_WIN32)
-  return is_atty(GetStdHandle(STD_OUTPUT_HANDLE));
-#else
-  return is_atty(STDOUT_FILENO);
+
+class unique_fd {
+ public:
+  unique_fd() : handle_(INVALID_NATIVE_HANDLE_VALUE) {}
+  explicit unique_fd(NativeHandle handle) : handle_(handle) {}
+  ~unique_fd() { close_native_handle(handle_); }
+  unique_fd(unique_fd&& other) noexcept : handle_(other.handle_) {
+    other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
+  }
+  unique_fd& operator=(unique_fd&& other) noexcept {
+    if (this == &other) {
+      return *this;
+    }
+    close_native_handle(handle_);
+    handle_ = other.handle_;
+    other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
+    return *this;
+  }
+  unique_fd(const unique_fd&) = delete;
+  unique_fd& operator=(const unique_fd&) = delete;
+
+  NativeHandle get() const { return handle_; }
+  explicit operator bool() const { return !invalid_handle(handle_); }
+  NativeHandle release() {
+    auto handle = handle_;
+    handle_ = INVALID_NATIVE_HANDLE_VALUE;
+    return handle;
+  }
+  void reset(NativeHandle handle = INVALID_NATIVE_HANDLE_VALUE) {
+    close_native_handle(handle_);
+    handle_ = handle;
+  }
+
+  void close() { reset(INVALID_NATIVE_HANDLE_VALUE); }
+
+  unique_fd dup() const {
+    auto duped = dup_native_handle(handle_);
+    if (invalid_handle(duped)) {
+      return unique_fd{};
+    }
+    return unique_fd{duped};
+  }
+
+  bool is_atty() const { return detail::is_atty(handle_); }
+
+#if !defined(_WIN32)
+  void set_nonblocking() { detail::set_nonblocking(handle_); }
 #endif
-}
-inline bool stderr_is_atty() {
-#if defined(_WIN32)
-  return is_atty(GetStdHandle(STD_ERROR_HANDLE));
-#else
-  return is_atty(STDERR_FILENO);
-#endif
-}
+
+  friend bool operator==(unique_fd const& lhs, unique_fd const& rhs) {
+    return lhs.handle_ == rhs.handle_;
+  }
+  friend bool operator!=(unique_fd const& lhs, unique_fd const& rhs) {
+    return lhs.handle_ != rhs.handle_;
+  }
+  friend bool operator==(unique_fd const& lhs, NativeHandle rhs) {
+    return lhs.handle_ == rhs;
+  }
+  friend bool operator!=(unique_fd const& lhs, NativeHandle rhs) {
+    return lhs.handle_ != rhs;
+  }
+  friend bool operator==(NativeHandle lhs, unique_fd const& rhs) {
+    return lhs == rhs.handle_;
+  }
+  friend bool operator!=(NativeHandle lhs, unique_fd const& rhs) {
+    return lhs != rhs.handle_;
+  }
+
+ private:
+  NativeHandle handle_;
+};
 
 class buffer {
   using callback = std::function<void(const unsigned char*, size_t)>;
@@ -397,36 +454,6 @@ class buffer {
  private:
   std::vector<unsigned char> buf_{};
   callback callback_{nullptr};
-};
-
-class HandleGuard {
- public:
-  explicit HandleGuard(NativeHandle h = INVALID_NATIVE_HANDLE_VALUE)
-      : handle_(h) {}
-  ~HandleGuard() { Close(); }
-  HandleGuard(const HandleGuard&) = delete;
-  HandleGuard& operator=(const HandleGuard&) = delete;
-  HandleGuard(HandleGuard&& other) noexcept : handle_(other.handle_) {
-    other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
-  }
-  HandleGuard& operator=(HandleGuard&& other) noexcept {
-    if (this != &other) {
-      Close();
-      handle_ = other.handle_;
-      other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    return *this;
-  }
-
-  [[nodiscard]] NativeHandle get() const { return handle_; }
-  NativeHandle* p_get() { return &handle_; }
-
-  void Close() { close_native_handle(handle_); }
-
-  [[nodiscard]] bool IsValid() const { return !invalid_handle(handle_); }
-
- private:
-  NativeHandle handle_;
 };
 
 template <typename C, typename CharT>
@@ -599,11 +626,12 @@ inline std::string get_last_error_message() {
 }
 
 // return value: -1 on error, >=0 on success
-inline ssize_t write_some(NativeHandle fd, void const* data, std::size_t size) {
+inline ssize_t write_some(unique_fd const& fd, void const* data,
+                          std::size_t size) {
 #if defined(_WIN32)
   DWORD chunk = static_cast<DWORD>((std::min<std::size_t>)(0x7ffff000u, size));
   DWORD written{0};
-  BOOL ok = WriteFile(fd, data, chunk, &written, 0);
+  BOOL ok = WriteFile(fd.get(), data, chunk, &written, 0);
   if (!ok) {
     return -1;
   }
@@ -613,13 +641,13 @@ inline ssize_t write_some(NativeHandle fd, void const* data, std::size_t size) {
   const std::size_t chunk =
       std::min<std::size_t>(std::numeric_limits<ssize_t>::max(), size);
   do {
-    written = ::write(fd, data, chunk);
+    written = ::write(fd.get(), data, chunk);
   } while (written == -1 && errno == EINTR);
   return written;
 #endif
 }
 
-inline bool write_all(NativeHandle fd, void const* data, std::size_t size) {
+inline bool write_all(unique_fd const& fd, void const* data, std::size_t size) {
   auto* p = static_cast<std::byte const*>(data);
   while (size > 0) {
     const ssize_t written = write_some(fd, p, size);
@@ -632,14 +660,14 @@ inline bool write_all(NativeHandle fd, void const* data, std::size_t size) {
   return true;
 }
 
-inline ssize_t read_some(NativeHandle fd, void* data, std::size_t size) {
+inline ssize_t read_some(unique_fd const& fd, void* data, std::size_t size) {
   if (size == 0) {
     return 0;
   }
 #if defined(_WIN32)
   DWORD chunk = static_cast<DWORD>((std::min<std::size_t>)(0x7ffff000u, size));
   DWORD read{0};
-  BOOL ok = ReadFile(fd, data, chunk, &read, 0);
+  BOOL ok = ReadFile(fd.get(), data, chunk, &read, 0);
   if (!ok) {
     auto err = GetLastError();
     if (err == ERROR_BROKEN_PIPE || err == ERROR_NO_DATA) {
@@ -653,13 +681,13 @@ inline ssize_t read_some(NativeHandle fd, void* data, std::size_t size) {
   const std::size_t chunk =
       std::min<std::size_t>(std::numeric_limits<ssize_t>::max(), size);
   do {
-    read = ::read(fd, data, chunk);
+    read = ::read(fd.get(), data, chunk);
   } while (read == -1 && errno == EINTR);
   return read;
 #endif
 }
 
-inline bool read_exact(NativeHandle fd, void* data, std::size_t size) {
+inline bool read_exact(unique_fd const& fd, void* data, std::size_t size) {
   auto* p = static_cast<std::byte*>(data);
   while (size > 0) {
     const ssize_t read = read_some(fd, p, size);
@@ -711,96 +739,25 @@ inline bool is_executable(std::string const& f) {
 #endif
 }
 
-inline std::optional<std::string> get_env(std::string const& key) {
-#if defined(_WIN32)
-  auto wkey = utf8_to_utf16(key);
-  auto const size =
-      GetEnvironmentVariableW(wkey.c_str(), nullptr, static_cast<DWORD>(0));
-  if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
-    return std::nullopt;
-  }
-  std::vector<wchar_t> buf;
-  buf.resize(static_cast<size_t>(size));
-  GetEnvironmentVariableW(wkey.c_str(), buf.data(),
-                          static_cast<DWORD>(buf.size()));
-  return utf16_to_utf8(std::wstring{static_cast<const wchar_t*>(buf.data())});
-#else
-  if (auto* env = ::getenv(key.c_str())) {
-    return std::string(env);
-  }
-  return std::nullopt;
-#endif
-}
-
-#if defined(_WIN32)
-inline std::optional<std::wstring> get_env(std::wstring const& key) {
-  auto const size =
-      GetEnvironmentVariableW(key.c_str(), nullptr, static_cast<DWORD>(0));
-  if (size == 0 || GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
-    return std::nullopt;
-  }
-  std::vector<wchar_t> buf;
-  buf.resize(static_cast<size_t>(size));
-  GetEnvironmentVariableW(key.c_str(), buf.data(),
-                          static_cast<DWORD>(buf.size()));
-  return std::wstring(static_cast<const wchar_t*>(buf.data()));
-}
-#endif
-
+#if !defined(_WIN32)
 inline std::optional<std::string> find_command_in_path(
     std::string const& exe_file) {
-#ifdef _WIN32
-  char separator = '\\';
-  char path_env_sep = ';';
-#else
   char separator = '/';
   char path_env_sep = ':';
-#endif
 
   if (exe_file.find_last_of("/\\") != std::string::npos) {
     return std::nullopt;
   }
-  auto paths = split(get_env("PATH").value_or(""), path_env_sep);
-#ifdef _WIN32
-  auto path_exts = split(
-      get_env("PATHEXT").value_or(
-          ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"),
-      path_env_sep);
-  for (auto& ext : path_exts) {
-    std::transform(begin(ext), end(ext), ext.begin(), [](unsigned char c) {
-      return static_cast<char>(::tolower(c));
-    });
-  }
-  path_exts.insert(path_exts.begin(), "");
-#endif
+  auto paths = split(std::string(::getenv("PATH")), path_env_sep);
   for (auto& p : paths) {
-#ifdef _WIN32
-    std::string f = p + separator + exe_file;
-    if (get_file_extension(f).has_value()) {
-      if (is_executable(f)) {
-        return f;
-      }
-    } else {
-      for (auto ext : path_exts) {
-        std::string f_with_ext{f};
-        if (!ext.empty() && ext[0] != '.') {
-          f_with_ext += ".";
-        }
-        f_with_ext += ext;
-        if (is_executable(f_with_ext)) {
-          return f_with_ext;
-        }
-      }
-    }
-#else
     std::string f = p + separator + exe_file;
     if (is_executable(f)) {
       return f;
     }
-#endif
   }
   return std::nullopt;
 }
+#endif  // !_WIN32
 
 #if defined(_WIN32)
 inline std::map<std::wstring, std::wstring> get_all_env_vars() {
@@ -854,45 +811,49 @@ inline std::map<std::string, std::string> get_all_env_vars() {
   return envs;
 }
 #endif
+
 class Pipe {
  public:
   inline static Pipe create() {
     Pipe p;
-    p.create_native_pipe(*p.fds_);
+    p.create_native_pipe(*p.pair_);
     return p;
   }
-  void close_read() { close_native_handle(fds_->rfd()); }
-  void close_write() { close_native_handle(fds_->wfd()); }
+  void close_read() { pair_->rfd_.close(); }
+  void close_write() { pair_->wfd_.close(); }
   void close_all() {
     close_read();
     close_write();
   }
-  NativeHandle& rfd() { return fds_->rfd(); }
-  NativeHandle& wfd() { return fds_->wfd(); }
+  unique_fd const& rfd() const { return pair_->rfd_; }
+  unique_fd const& wfd() const { return pair_->wfd_; }
+
+  // TODO: remove
+  unique_fd& rfd() { return pair_->rfd_; }
+  unique_fd& wfd() { return pair_->wfd_; }
 
   ssize_t read_some(void* data, std::size_t size) const {
-    return detail::read_some(fds_->rfd(), data, size);
+    return detail::read_some(pair_->rfd_, data, size);
   }
   bool read_exact(void* data, std::size_t size) const {
-    return detail::read_exact(fds_->rfd(), data, size);
+    return detail::read_exact(pair_->rfd_, data, size);
   }
   ssize_t write_some(void const* data, std::size_t size) const {
-    return detail::write_some(fds_->wfd(), data, size);
+    return detail::write_some(pair_->wfd_, data, size);
   }
   bool write_all(void const* data, std::size_t size) const {
-    return detail::write_all(fds_->wfd(), data, size);
+    return detail::write_all(pair_->wfd_, data, size);
   }
 
   Pipe dup() const {
     Pipe p;
-    p.fds_->rfd() = dup_native_handle(fds_->rfd());
-    if (invalid_handle(p.fds_->rfd())) {
+    p.pair_->rfd_ = pair_->rfd_.dup();
+    if (!p.pair_->rfd_) {
       return p;
     }
-    p.fds_->wfd() = dup_native_handle(fds_->wfd());
-    if (invalid_handle(p.fds_->wfd())) {
-      close_native_handle(p.fds_->rfd());
-      p.fds_->rfd() = INVALID_NATIVE_HANDLE_VALUE;
+    p.pair_->wfd_ = pair_->wfd_.dup();
+    if (!p.pair_->wfd_) {
+      p.pair_->rfd_.close();
     }
     return p;
   }
@@ -900,32 +861,17 @@ class Pipe {
  private:
   Pipe() = default;
   struct pipe_pair {
-    pipe_pair() = default;
-    pipe_pair(pipe_pair const&) = delete;
-    pipe_pair& operator=(pipe_pair const&) = delete;
-    ~pipe_pair() {
-      if (!invalid_handle(fds_[0])) {
-        close_native_handle(fds_[0]);
-      }
-      if (!invalid_handle(fds_[1])) {
-        close_native_handle(fds_[1]);
-      }
-    }
-
-    NativeHandle& rfd() { return fds_[0]; }
-    NativeHandle& wfd() { return fds_[1]; }
-
-    NativeHandle fds_[2]{INVALID_NATIVE_HANDLE_VALUE,
-                         INVALID_NATIVE_HANDLE_VALUE};
+    unique_fd rfd_, wfd_;
   };
-  static inline void create_native_pipe(pipe_pair& fds) {
+  static inline void create_native_pipe(pipe_pair& pair) {
+    NativeHandle fds[2];
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES at;
     at.bInheritHandle = false;
     at.nLength = sizeof(SECURITY_ATTRIBUTES);
     at.lpSecurityDescriptor = nullptr;
 
-    if (!CreatePipe(&fds.rfd(), &fds.wfd(), &at, 64 * 1024)) {
+    if (!CreatePipe(&fds[0], &fds[1], &at, 64 * 1024)) {
       print_error(get_last_error_message());
       return;
     }
@@ -935,30 +881,32 @@ class Pipe {
     // on exec(). This prevents child processes' grandchildren from inheriting
     // the pipe write ends and keeping them open indefinitely, which would
     // cause pump_pipe_data() to hang waiting for EOF.
-    if (-1 == pipe2(fds.fds_, O_CLOEXEC)) {
+    if (-1 == pipe2(fds, O_CLOEXEC)) {
       print_error("pipe2() failed");
       return;
     }
 #else
-    if (-1 == pipe(fds.fds_)) {
+    if (-1 == pipe(fds)) {
       print_error("pipe() failed");
       return;
     }
     // Set close-on-exec manually on platforms without pipe2().
     // This prevents pipe fds from leaking into grandchildren via exec().
-    if (-1 == fcntl(fds.fds_[0], F_SETFD, FD_CLOEXEC) ||
-        -1 == fcntl(fds.fds_[1], F_SETFD, FD_CLOEXEC)) {
+    if (-1 == fcntl(fds[0], F_SETFD, FD_CLOEXEC) ||
+        -1 == fcntl(fds[1], F_SETFD, FD_CLOEXEC)) {
       print_error("fcntl(FD_CLOEXEC) failed");
-      close(fds.fds_[0]);
-      close(fds.fds_[1]);
-      fds.fds_[0] = INVALID_NATIVE_HANDLE_VALUE;
-      fds.fds_[1] = INVALID_NATIVE_HANDLE_VALUE;
+      close(fds[0]);
+      close(fds[1]);
+      fds[0] = INVALID_NATIVE_HANDLE_VALUE;
+      fds[1] = INVALID_NATIVE_HANDLE_VALUE;
       return;
     }
 #endif
 #endif
+    pair.rfd_.reset(fds[0]);
+    pair.wfd_.reset(fds[1]);
   }
-  std::shared_ptr<pipe_pair> fds_{std::make_shared<pipe_pair>()};
+  std::shared_ptr<pipe_pair> pair_{std::make_shared<pipe_pair>()};
 };
 
 struct File {
@@ -984,22 +932,14 @@ struct File {
 #endif
 
   File(File&& o) noexcept
-      : path_{std::move(o.path_)}, append_{o.append_}, fd_{o.fd_} {
-    o.path_.clear();
-    o.append_ = false;
-    o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
-  }
+      : path_{std::move(o.path_)}, append_{o.append_}, fd_{std::move(o.fd_)} {}
   File& operator=(File&& o) noexcept {
-    close();
+    fd_ = std::move(o.fd_);
     path_ = std::move(o.path_);
     append_ = o.append_;
-    fd_ = o.fd_;
-    o.path_.clear();
-    o.append_ = false;
-    o.fd_ = INVALID_NATIVE_HANDLE_VALUE;
     return *this;
   }
-  ~File() { close_native_handle(fd_); }
+  ~File() = default;
 
   void open_for_read() { open_impl(OpenType::ReadOnly); }
   void open_for_write() {
@@ -1009,8 +949,9 @@ struct File {
       open_impl(OpenType::WriteTruncate);
     }
   }
-  void close() { close_native_handle(fd_); }
-  [[nodiscard]] NativeHandle fd() const { return fd_; }
+  void close() { fd_.close(); }
+  [[nodiscard]] unique_fd const& fd() const { return fd_; }
+  [[nodiscard]] unique_fd& fd() { return fd_; }
 
   ssize_t read_some(void* data, std::size_t size) const {
     return detail::read_some(fd_, data, size);
@@ -1028,13 +969,13 @@ struct File {
   File dup() const {
     File f{path_};
     f.append_ = append_;
-    f.fd_ = dup_native_handle(fd_);
+    f.fd_ = fd_.dup();
     return f;
   }
 
  private:
   void open_impl(OpenType type) {
-    if (!invalid_handle(fd_)) {
+    if (fd_) {
       return;
     }
 #if defined(_WIN32)
@@ -1043,7 +984,7 @@ struct File {
     sa.lpSecurityDescriptor = nullptr;
     sa.bInheritHandle = FALSE;  // Default non-inheritable
 
-    fd_ = CreateFileW(
+    fd_.reset(CreateFileW(
         path_.c_str(),
         type == OpenType::ReadOnly
             ? GENERIC_READ
@@ -1054,21 +995,21 @@ struct File {
         type == OpenType::ReadOnly
             ? OPEN_EXISTING
             : (type == OpenType::WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
-        FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (fd_ == INVALID_HANDLE_VALUE) {
+        FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!fd_) {
       print_error("open failed: " + utf16_to_utf8(path_) +
                   ", error: " + std::to_string(GetLastError()));
       return;
     }
 #else
-    fd_ = (type == OpenType::ReadOnly)
-              ? open(path_.c_str(), O_RDONLY | O_CLOEXEC)
-              : open(path_.c_str(),
-                     (type == OpenType::WriteAppend)
-                         ? (O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC)
-                         : (O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC),
-                     0644);
-    if (fd_ == -1) {
+    fd_.reset((type == OpenType::ReadOnly)
+                  ? open(path_.c_str(), O_RDONLY | O_CLOEXEC)
+                  : open(path_.c_str(),
+                         (type == OpenType::WriteAppend)
+                             ? (O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC)
+                             : (O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC),
+                         0644));
+    if (!fd_) {
       print_error("open failed: " + path_);
       return;
     }
@@ -1080,7 +1021,7 @@ struct File {
   std::string path_;
 #endif
   bool append_{false};
-  NativeHandle fd_{INVALID_NATIVE_HANDLE_VALUE};
+  unique_fd fd_{INVALID_NATIVE_HANDLE_VALUE};
 };
 
 class FileHandler {
@@ -1088,11 +1029,9 @@ class FileHandler {
 
  public:
   explicit FileHandler(NativeHandle f) : fd_{f} {}
-  [[nodiscard]] NativeHandle fd() const { return fd_; }
-  void close() {
-    close_native_handle(fd_);
-    fd_ = INVALID_NATIVE_HANDLE_VALUE;
-  }
+  explicit FileHandler(unique_fd&& f) : fd_{std::move(f)} {}
+  [[nodiscard]] unique_fd const& fd() const { return fd_; }
+  void close() { fd_.close(); }
 
   ssize_t read_some(void* data, std::size_t size) const {
     return detail::read_some(fd_, data, size);
@@ -1108,11 +1047,12 @@ class FileHandler {
   }
 
   [[nodiscard]] FileHandler dup() const {
-    return FileHandler(dup_native_handle(fd_));
+    auto f = fd_.dup();
+    return FileHandler(f.release());
   }
 
  private:
-  NativeHandle fd_;
+  unique_fd fd_;
 };
 
 class Buffer {
@@ -1176,8 +1116,10 @@ class Buffer {
         *buf_);
   }
   Pipe& pipe() { return pipe_; }
-  NativeHandle& rfd() { return pipe_.rfd(); }
-  NativeHandle& wfd() { return pipe_.wfd(); }
+  unique_fd const& rfd() const { return pipe_.rfd(); }
+  unique_fd const& wfd() const { return pipe_.wfd(); }
+  unique_fd& rfd() { return pipe_.rfd(); }
+  unique_fd& wfd() { return pipe_.wfd(); }
 
   void close_write() { pipe_.close_write(); }
   void close_read() { pipe_.close_read(); }
@@ -1259,23 +1201,23 @@ inline void read_write_to_buffer_use_poll(
     std::optional<std::reference_wrapper<Buffer>> err, NativeHandle child_pid,
     int* child_status = nullptr) {
   if (in) {
-    set_nonblocking(in->get().wfd());
+    in->get().wfd().set_nonblocking();
   }
   if (out) {
-    set_nonblocking(out->get().rfd());
+    out->get().rfd().set_nonblocking();
   }
   if (err) {
-    set_nonblocking(err->get().rfd());
+    err->get().rfd().set_nonblocking();
   }
 
   struct pollfd fds[3]{
-      {.fd = in ? in->get().wfd() : INVALID_NATIVE_HANDLE_VALUE,
+      {.fd = in ? in->get().wfd().get() : INVALID_NATIVE_HANDLE_VALUE,
        .events = POLLOUT,
        .revents = 0},
-      {.fd = out ? out->get().rfd() : INVALID_NATIVE_HANDLE_VALUE,
+      {.fd = out ? out->get().rfd().get() : INVALID_NATIVE_HANDLE_VALUE,
        .events = POLLIN,
        .revents = 0},
-      {.fd = err ? err->get().rfd() : INVALID_NATIVE_HANDLE_VALUE,
+      {.fd = err ? err->get().rfd().get() : INVALID_NATIVE_HANDLE_VALUE,
        .events = POLLIN,
        .revents = 0}};
 
@@ -1453,19 +1395,19 @@ class Redirector {
     }
     std::visit(
         []<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<T, Pipe>) {
-            if (!invalid_handle(value.rfd())) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
+            if (value.rfd()) {
               std::cerr << ">> pipe read handle not closed!" << '\n';
             }
-            if (!invalid_handle(value.wfd())) {
+            if (value.wfd()) {
               std::cerr << ">> pipe write handle not closed!" << '\n';
             }
 
-          } else if constexpr (std::is_same_v<T, Buffer>) {
-            if (!invalid_handle(value.rfd())) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
+            if (value.rfd()) {
               std::cerr << ">> buffer pipe read handle not closed!" << '\n';
             }
-            if (!invalid_handle(value.wfd())) {
+            if (value.wfd()) {
               std::cerr << ">> buffer pipe write handle not closed!" << '\n';
             }
           }
@@ -1480,13 +1422,14 @@ class Redirector {
     return std::visit(
         []<typename T>(
             [[maybe_unused]] T& value) -> std::unique_ptr<value_type> {
-          if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
             return std::make_unique<value_type>(value.dup());
-          } else if constexpr (std::is_same_v<T, File>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
             return std::make_unique<value_type>(value.dup());
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                              FileHandler>) {
             return std::make_unique<value_type>(value.dup());
-          } else if constexpr (std::is_same_v<T, Buffer>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
             return std::make_unique<value_type>(value.dup());
           } else {
             return nullptr;
@@ -1503,16 +1446,17 @@ class Redirector {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
 #if defined(_WIN32)
             // Default is non-inheritable; make only the child end inheritable.
             // stdin  (fileno 0): child reads  -> rfd is the child end
             // stdout (fileno 1): child writes -> wfd is the child end
             // stderr (fileno 2): child writes -> wfd is the child end
-            if (NativeHandle inheritable_handle =
+            if (auto& inheritable_handle =
                     fileno() == 0 ? value.rfd() : value.wfd();
-                !invalid_handle(inheritable_handle)) {
-              if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
+                inheritable_handle) {
+              if (!SetHandleInformation(inheritable_handle.get(),
+                                        HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
                 print_error("SetHandleInformation failed: " +
                             std::to_string(GetLastError()));
@@ -1520,7 +1464,7 @@ class Redirector {
               }
             }
 #endif
-          } else if constexpr (std::is_same_v<T, File>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
             if (fileno() == 0) {
               value.open_for_read();
             } else {
@@ -1529,8 +1473,8 @@ class Redirector {
 #if defined(_WIN32)
             // File handles are now non-inheritable by default; make them
             // inheritable so the child can use them.
-            if (!invalid_handle(value.fd())) {
-              if (!SetHandleInformation(value.fd(), HANDLE_FLAG_INHERIT,
+            if (value.fd()) {
+              if (!SetHandleInformation(value.fd().get(), HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
                 print_error("SetHandleInformation failed: " +
                             std::to_string(GetLastError()));
@@ -1538,15 +1482,17 @@ class Redirector {
               }
             }
 #endif
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                              FileHandler>) {
             // do nothing
-          } else if constexpr (std::is_same_v<T, Buffer>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
 #if defined(_WIN32)
             // Default is non-inheritable; make only the child end inheritable.
-            if (NativeHandle inheritable_handle =
+            if (auto& inheritable_handle =
                     fileno() == 0 ? value.rfd() : value.wfd();
-                !invalid_handle(inheritable_handle)) {
-              if (!SetHandleInformation(inheritable_handle, HANDLE_FLAG_INHERIT,
+                inheritable_handle) {
+              if (!SetHandleInformation(inheritable_handle.get(),
+                                        HANDLE_FLAG_INHERIT,
                                         HANDLE_FLAG_INHERIT)) {
                 print_error("SetHandleInformation failed: " +
                             std::to_string(GetLastError()));
@@ -1565,21 +1511,22 @@ class Redirector {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
             // For child: fd 0 is the read end, parent should close it
             if (fileno() == 0) {
               value.close_read();
             } else {
               value.close_write();
             }
-          } else if constexpr (std::is_same_v<T, File>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
             // The redirected file was passed to the child, parent no longer
             // needs it
             value.close();
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                              FileHandler>) {
             // Handle provided by another program to the parent; may still be
             // useful, do nothing, let the original opener close it
-          } else if constexpr (std::is_same_v<T, Buffer>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
             // For child: fd 0 is the read end, parent should close it
             if (fileno() == 0) {
               value.close_read();
@@ -1590,20 +1537,21 @@ class Redirector {
         },
         *redirect_);
   }
-  void close_all() const {
+  void close_all() {
     if (!redirect_) {
       return;
     }
     std::visit(
         []<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
             value.close_all();
-          } else if constexpr (std::is_same_v<T, File>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
             value.close();
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                              FileHandler>) {
             // Handle provided by another program to the parent; may still be
             // useful, do nothing, let the original opener close it
-          } else if constexpr (std::is_same_v<T, Buffer>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
             value.pipe().close_all();
           }
         },
@@ -1617,14 +1565,15 @@ class Redirector {
     return std::visit(
         [this]<typename T>(
             [[maybe_unused]] T& value) -> std::optional<NativeHandle> {
-          if constexpr (std::is_same_v<T, Pipe>) {
-            return fileno() == 0 ? value.rfd() : value.wfd();
-          } else if constexpr (std::is_same_v<T, File>) {
-            return value.fd();
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
-            return value.fd();
-          } else if constexpr (std::is_same_v<T, Buffer>) {
-            return fileno() == 0 ? value.rfd() : value.wfd();
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
+            return fileno() == 0 ? value.rfd().get() : value.wfd().get();
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
+            return value.fd().get();
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                              FileHandler>) {
+            return value.fd().get();
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
+            return fileno() == 0 ? value.rfd().get() : value.wfd().get();
           }
         },
         *redirect_);
@@ -1638,26 +1587,30 @@ class Redirector {
     }
     std::visit(
         [this]<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<T, Pipe>) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
             // Child: dup stdin as the pipe's read end, stdout as the pipe's
             // write end
-            dup2(fileno() == 0 ? value.rfd() : value.wfd(), fileno());
+            dup2(fileno() == 0 ? value.rfd().get() : value.wfd().get(),
+                 fileno());
             value.close_all();
-          } else if constexpr (std::is_same_v<T, File>) {
-            if (value.fd() != fileno()) {
-              dup2(value.fd(), fileno());  // dup to the opened file handle
-              value.close();               // prevent leak
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
+            if (value.fd().get() != fileno()) {
+              dup2(value.fd().get(),
+                   fileno());  // dup to the opened file handle
+              value.close();   // prevent leak
             }
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
-            if (value.fd() != fileno()) {
-              dup2(value.fd(),
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                              FileHandler>) {
+            if (value.fd().get() != fileno()) {
+              dup2(value.fd().get(),
                    fileno());  // dup to the fd provided by the parent's program
               value.close();   // prevent leak
             }
-          } else if constexpr (std::is_same_v<T, Buffer>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
             // Child: dup stdin as the pipe's read end, stdout as the pipe's
             // write end
-            dup2(fileno() == 0 ? value.rfd() : value.wfd(), fileno());
+            dup2(fileno() == 0 ? value.rfd().get() : value.wfd().get(),
+                 fileno());
             value.pipe().close_all();
           }
         },
@@ -1671,7 +1624,7 @@ class Redirector {
     return std::visit(
         []<typename T>([[maybe_unused]] T& value)
             -> std::optional<std::reference_wrapper<Buffer>> {
-          if constexpr (std::is_same_v<T, Buffer>) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
             return std::ref(value);
           } else {
             return std::nullopt;
@@ -1682,18 +1635,19 @@ class Redirector {
   [[nodiscard]] virtual int fileno() const = 0;
   [[nodiscard]] bool inherit() const { return !redirect_; }
 
-  [[nodiscard]] std::optional<NativeHandle> get_file_fd() const {
+  [[nodiscard]] std::optional<std::reference_wrapper<const unique_fd>>
+  get_file_fd() const {
     if (!redirect_) {
       return std::nullopt;
     }
     return std::visit(
-        []<typename T>(
-            [[maybe_unused]] const T& value) -> std::optional<NativeHandle> {
+        []<typename T>([[maybe_unused]] const T& value)
+            -> std::optional<std::reference_wrapper<const unique_fd>> {
           if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            return value.fd();
+            return std::ref(value.fd());
           } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
                                               FileHandler>) {
-            return value.fd();
+            return std::ref(value.fd());
           } else {
             return std::nullopt;
           }
@@ -2198,7 +2152,7 @@ class subprocess {
     // This allows the watchdog to terminate all child processes (e.g., when
     // cmd.exe spawns ping.exe, terminating cmd.exe alone does not kill ping,
     // and ping would keep stdout/stderr pipes open, blocking pump_pipe_data).
-    if (!job_handle_->IsValid()) {
+    if (!(*job_handle_)) {
       HANDLE hJob = CreateJobObjectW(NULL, NULL);
       if (hJob) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
@@ -2206,8 +2160,7 @@ class subprocess {
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli,
                                 sizeof(jeli));
-        job_handle_->Close();
-        *job_handle_ = HandleGuard(hJob);
+        *job_handle_ = unique_fd(hJob);
       }
     }
 #else
@@ -2215,7 +2168,7 @@ class subprocess {
       if (stdin_.inherit() && !stdin_is_atty()) {
         requested_pgid_ = 0;
       } else if (const auto fd = stdin_.get_file_fd();
-                 fd.has_value() && !is_atty(fd.value())) {
+                 fd.has_value() && (*fd).get().is_atty()) {
         requested_pgid_ = 0;
       }
     }
@@ -2245,15 +2198,13 @@ class subprocess {
     };
 
 #if defined(_WIN32)
-    auto in = stdin_.child_inherit_handle();
     startup_info_.StartupInfo.hStdInput =
-        in.has_value() ? in.value() : GetStdHandle(STD_INPUT_HANDLE);
-    auto out = stdout_.child_inherit_handle();
+        stdin_.child_inherit_handle().value_or(GetStdHandle(STD_INPUT_HANDLE));
     startup_info_.StartupInfo.hStdOutput =
-        out.has_value() ? out.value() : GetStdHandle(STD_OUTPUT_HANDLE);
-    auto err = stderr_.child_inherit_handle();
+        stdout_.child_inherit_handle().value_or(
+            GetStdHandle(STD_OUTPUT_HANDLE));
     startup_info_.StartupInfo.hStdError =
-        err.has_value() ? err.value() : GetStdHandle(STD_ERROR_HANDLE);
+        stderr_.child_inherit_handle().value_or(GetStdHandle(STD_ERROR_HANDLE));
 
     startup_info_.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
 
@@ -2303,7 +2254,7 @@ class subprocess {
     startup_info_.lpAttributeList = nullptr;
 
     if (success) {
-      if (job_handle_->IsValid()) {
+      if (*job_handle_) {
         AssignProcessToJobObject(job_handle_->get(),
                                  process_information_.hProcess);
       }
@@ -2364,8 +2315,8 @@ class subprocess {
       return 127;
     }
     DWORD ret{127};
-    HandleGuard process_guard(process_information_.hProcess);
-    HandleGuard thread_guard(process_information_.hThread);
+    unique_fd process_guard(process_information_.hProcess);
+    unique_fd thread_guard(process_information_.hThread);
 
     WaitForSingleObject(process_information_.hProcess, INFINITE);
     GetExitCodeProcess(process_information_.hProcess, &ret);
@@ -2414,9 +2365,9 @@ class subprocess {
  private:
   void terminate() {
 #if defined(_WIN32)
-    if (job_handle_->IsValid()) {
+    if (*job_handle_) {
       TerminateJobObject(job_handle_->get(), 1);
-      job_handle_->Close();
+      job_handle_->close();
     }
 #else
     if (invalid_handle(pid_)) {
@@ -2555,7 +2506,7 @@ class subprocess {
   std::shared_ptr<WatchdogState> watchdog_state_{
       std::make_shared<WatchdogState>()};
 #if defined(_WIN32)
-  std::shared_ptr<HandleGuard> job_handle_{std::make_shared<HandleGuard>()};
+  std::shared_ptr<unique_fd> job_handle_{std::make_shared<unique_fd>()};
   PROCESS_INFORMATION process_information_;
   STARTUPINFOEXW startup_info_{};
   std::vector<unsigned char> proc_thread_attr_list_;

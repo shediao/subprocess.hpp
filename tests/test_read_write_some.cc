@@ -35,6 +35,7 @@ using subprocess::detail::Buffer;
 using subprocess::detail::File;
 using subprocess::detail::FileHandler;
 using subprocess::detail::Pipe;
+using subprocess::detail::unique_fd;
 
 // ===========================================================================
 // detail::read_some / detail::write_some — low-level free functions
@@ -58,15 +59,13 @@ TEST(ReadWriteSomeTest, DetailWriteSomeSizeZero) {
 
 TEST(ReadWriteSomeTest, DetailReadSomeInvalidHandle) {
   char buf[16];
-  auto n = subprocess::detail::read_some(
-      subprocess::detail::INVALID_NATIVE_HANDLE_VALUE, buf, sizeof(buf));
+  auto n = subprocess::detail::read_some(unique_fd{}, buf, sizeof(buf));
   ASSERT_EQ(n, -1);
 }
 
 TEST(ReadWriteSomeTest, DetailWriteSomeInvalidHandle) {
   const char data[] = "hello";
-  auto n = subprocess::detail::write_some(
-      subprocess::detail::INVALID_NATIVE_HANDLE_VALUE, data, sizeof(data));
+  auto n = subprocess::detail::write_some(unique_fd{}, data, sizeof(data));
   ASSERT_EQ(n, -1);
 }
 
@@ -276,7 +275,7 @@ TEST(ReadWriteSomeTest, FileHandlerReadWrite) {
   {
     File f(tmp.path());
     f.open_for_read();
-    FileHandler fh(f.fd());  // wrap the native handle
+    FileHandler fh(f.fd().release());  // wrap the native handle
 
     char buf[64] = {};
     auto r = fh.read_some(buf, sizeof(buf));
@@ -296,7 +295,7 @@ TEST(ReadWriteSomeTest, FileHandlerWriteAllReadExact) {
   {
     File f(tmp.path());
     f.open_for_write();
-    FileHandler fh(f.fd());
+    FileHandler fh(f.fd().release());
     const char data[] = "fh_exact";
     ASSERT_TRUE(fh.write_all(data, strlen(data)));
   }
@@ -304,7 +303,7 @@ TEST(ReadWriteSomeTest, FileHandlerWriteAllReadExact) {
   {
     File f(tmp.path());
     f.open_for_read();
-    FileHandler fh(f.fd());
+    FileHandler fh(f.fd().release());
     char buf[64] = {};
     ASSERT_TRUE(fh.read_exact(buf, strlen("fh_exact")));
     ASSERT_EQ(std::string(buf, strlen("fh_exact")), "fh_exact");

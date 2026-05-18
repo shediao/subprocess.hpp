@@ -37,9 +37,8 @@ using std::string_literals::operator""s;
 using subprocess::detail::ssize_t;
 #endif
 
-static void read_from_native_handle(subprocess::detail::NativeHandle& fd,
+static void read_from_native_handle(subprocess::detail::unique_fd const& fd,
                                     buffer& read_data) {
-  subprocess::detail::HandleGuard guard(fd);
   char buf[1024];
   ssize_t read;
   do {
@@ -48,7 +47,6 @@ static void read_from_native_handle(subprocess::detail::NativeHandle& fd,
       read_data.append(buf, static_cast<size_t>(read));
     }
   } while (read > 0);
-  fd = subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
 }
 // ===========================================================================
 // 1. Three-process manual pipe chain (explicit Pipe objects)

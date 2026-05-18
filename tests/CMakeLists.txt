@@ -30,6 +30,12 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(googletest)
 
+FetchContent_Declare(
+  environment
+  GIT_REPOSITORY https://github.com/shediao/environment.hpp
+  GIT_TAG v0.0.6)
+FetchContent_MakeAvailable(environment)
+
 # Suppress -Wcharacter-conversion for gtest/gmock when using Clang and C++20.
 # char8_t (C++20) to char32_t implicit conversion in gtest-printers.h triggers
 # this warning, which becomes an error under -WX.
@@ -158,8 +164,9 @@ function(add_subprocess_test_suite test_name)
     endif()
 
     # Link libraries
-    target_link_libraries(${target_name} PRIVATE subprocess::subprocess
-                                                 GTest::gtest GTest::gtest_main)
+    target_link_libraries(
+      ${target_name} PRIVATE subprocess::subprocess GTest::gtest
+                             GTest::gtest_main environment::environment)
 
     # Add to CTest
     add_test(NAME ${target_name} COMMAND ${target_name})
