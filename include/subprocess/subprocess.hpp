@@ -318,27 +318,30 @@ class buffer {
   buffer() = default;
   ~buffer() = default;
   buffer(const buffer&) = delete;
-  buffer(buffer&& other)
-      : buf_(std::move(other.buf_)), callback_(other.callback_) {}
-  buffer(callback&& cb) : callback_(std::move(cb)) {}
-  buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
+  buffer(buffer&& other) noexcept
+      : buf_(std::move(other.buf_)), callback_(std::move(other.callback_)) {}
+  explicit buffer(callback&& cb) : callback_(std::move(cb)) {}
+  explicit buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
   buffer(std::string_view const& str, callback&& cb)
       : buf_(str.begin(), str.end()), callback_(std::move(cb)) {}
-  buffer(std::string::iterator first, std::string::iterator last)
+  buffer(const std::string::iterator first, const std::string::iterator last)
       : buf_(first, last) {}
-  buffer(std::string::iterator first, std::string::iterator last, callback&& cb)
+  buffer(const std::string::iterator first, const std::string::iterator last,
+         callback&& cb)
       : buf_(first, last), callback_(std::move(cb)) {}
-  auto* data() const { return buf_.data(); }
-  auto size() const { return buf_.size(); }
-  auto span() const { return std::span(buf_.data(), buf_.size()); }
-  auto to_string() const {
+  [[nodiscard]] auto* data() const { return buf_.data(); }
+  [[nodiscard]] auto size() const { return buf_.size(); }
+  [[nodiscard]] auto span() const {
+    return std::span(buf_.data(), buf_.size());
+  }
+  [[nodiscard]] auto to_string() const {
     return std::string(buf_.data(), buf_.data() + buf_.size());
   }
-  auto empty() const { return buf_.empty(); }
+  [[nodiscard]] auto empty() const { return buf_.empty(); }
   auto clear() { return buf_.clear(); }
 
-  auto begin() const { return buf_.begin(); }
-  auto end() const { return buf_.end(); }
+  [[nodiscard]] auto begin() const { return buf_.begin(); }
+  [[nodiscard]] auto end() const { return buf_.end(); }
 
   void append(const char* data, size_t size) {
     buf_.insert(buf_.end(), data, data + size);
@@ -346,9 +349,6 @@ class buffer {
       callback_(reinterpret_cast<const unsigned char*>(data), size);
     }
   }
-
-  void shift(size_t size) { buf_.erase(buf_.begin(), buf_.begin() + size); }
-
   // operator== for test
   bool operator==(const buffer& other) const { return buf_ == other.buf_; }
   template <typename T>
@@ -418,12 +418,14 @@ class HandleGuard {
     return *this;
   }
 
-  NativeHandle get() const { return handle_; }
+  [[nodiscard]] NativeHandle get() const { return handle_; }
   NativeHandle* p_get() { return &handle_; }
 
   void Close() { close_native_handle(handle_); }
 
-  bool IsValid() const { return handle_ != INVALID_NATIVE_HANDLE_VALUE; }
+  [[nodiscard]] bool IsValid() const {
+    return handle_ != INVALID_NATIVE_HANDLE_VALUE;
+  }
 
  private:
   NativeHandle handle_;
@@ -588,10 +590,9 @@ inline std::string get_last_error_message() {
            std::to_string(error);
   }
 #else   // _WIN32
-  int error = errno;
-  auto* err_msg = strerror(error);
-  if (err_msg) {
-    return std::string(err_msg);
+  const int error = errno;
+  if (auto* err_msg = strerror(error)) {
+    return {err_msg};
   } else {
     return "Unknown error or strerror failed, error code: " +
            std::to_string(errno);
@@ -611,7 +612,7 @@ inline ssize_t write_some(NativeHandle fd, void const* data, std::size_t size) {
   return static_cast<ssize_t>(written);
 #else
   ssize_t written = -1;
-  std::size_t chunk =
+  const std::size_t chunk =
       std::min<std::size_t>(std::numeric_limits<ssize_t>::max(), size);
   do {
     written = ::write(fd, data, chunk);
@@ -623,7 +624,7 @@ inline ssize_t write_some(NativeHandle fd, void const* data, std::size_t size) {
 inline bool write_all(NativeHandle fd, void const* data, std::size_t size) {
   auto* p = static_cast<std::byte const*>(data);
   while (size > 0) {
-    ssize_t written = write_some(fd, p, size);
+    const ssize_t written = write_some(fd, p, size);
     if (written <= 0) {
       return false;
     }
@@ -651,7 +652,7 @@ inline ssize_t read_some(NativeHandle fd, void* data, std::size_t size) {
   return static_cast<ssize_t>(read);
 #else
   ssize_t read = -1;
-  std::size_t chunk =
+  const std::size_t chunk =
       std::min<std::size_t>(std::numeric_limits<ssize_t>::max(), size);
   do {
     read = ::read(fd, data, chunk);
@@ -663,7 +664,7 @@ inline ssize_t read_some(NativeHandle fd, void* data, std::size_t size) {
 inline bool read_exact(NativeHandle fd, void* data, std::size_t size) {
   auto* p = static_cast<std::byte*>(data);
   while (size > 0) {
-    ssize_t read = read_some(fd, p, size);
+    const ssize_t read = read_some(fd, p, size);
     if (read <= 0) {
       return false;
     }
@@ -706,7 +707,7 @@ inline bool is_executable(std::string const& f) {
   auto attr = GetFileAttributesW(utf8_to_utf16(f).c_str());
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 #else
-  struct stat sb;
+  struct stat sb{};
   return (stat(f.c_str(), &sb) == 0 && S_ISREG(sb.st_mode) &&
           access(f.c_str(), X_OK) == 0);
 #endif
@@ -726,8 +727,7 @@ inline std::optional<std::string> get_env(std::string const& key) {
                           static_cast<DWORD>(buf.size()));
   return utf16_to_utf8(std::wstring{static_cast<const wchar_t*>(buf.data())});
 #else
-  auto* env = ::getenv(key.c_str());
-  if (env) {
+  if (auto* env = ::getenv(key.c_str())) {
     return std::string(env);
   }
   return std::nullopt;
@@ -885,7 +885,7 @@ class Pipe {
     return detail::write_all(fds_->wfd(), data, size);
   }
 
-  Pipe dup() {
+  Pipe dup() const {
     Pipe p;
     p.fds_->rfd() = dup_native_handle(fds_->rfd());
     if (p.fds_->rfd() == INVALID_NATIVE_HANDLE_VALUE) {
@@ -900,9 +900,9 @@ class Pipe {
   }
 
  private:
-  Pipe() {}
+  Pipe() = default;
   struct pipe_pair {
-    pipe_pair() {}
+    pipe_pair() = default;
     pipe_pair(pipe_pair const&) = delete;
     pipe_pair& operator=(pipe_pair const&) = delete;
     ~pipe_pair() {
@@ -951,9 +951,9 @@ struct File {
   explicit File(std::string const& p, bool append = false)
       : path_{
 #if defined(_WIN32)
-            utf8_to_utf16(p)
+            utf8_to_utf16(std::move(p))
 #else
-            p
+            std::move(p)
 #endif
         },
         append_{append} {
@@ -990,7 +990,7 @@ struct File {
     }
   }
   void close() { close_native_handle(fd_); }
-  NativeHandle fd() const { return fd_; }
+  [[nodiscard]] NativeHandle fd() const { return fd_; }
 
   ssize_t read_some(void* data, std::size_t size) const {
     return detail::read_some(fd_, data, size);
@@ -1005,7 +1005,7 @@ struct File {
     return detail::write_all(fd_, data, size);
   }
 
-  File dup() {
+  File dup() const {
     File f{path_};
     f.append_ = append_;
     f.fd_ = dup_native_handle(fd_);
@@ -1068,7 +1068,7 @@ class FileHandler {
 
  public:
   explicit FileHandler(NativeHandle f) : fd_{f} {}
-  NativeHandle fd() const { return fd_; }
+  [[nodiscard]] NativeHandle fd() const { return fd_; }
   void close() {
     close_native_handle(fd_);
     fd_ = INVALID_NATIVE_HANDLE_VALUE;
@@ -1087,7 +1087,9 @@ class FileHandler {
     return detail::write_all(fd_, data, size);
   }
 
-  FileHandler dup() const { return FileHandler(dup_native_handle(fd_)); }
+  [[nodiscard]] FileHandler dup() const {
+    return FileHandler(dup_native_handle(fd_));
+  }
 
  private:
   NativeHandle fd_;
@@ -1099,14 +1101,14 @@ class Buffer {
                                   buffer_container_type>;
 
  public:
-  Buffer(buffer_container_type& buf)
+  explicit Buffer(buffer_container_type& buf)
       : buf_{std::make_shared<value_type>(std::ref(buf))},
         pipe_{Pipe::create()} {}
   Buffer()
       : buf_{std::make_shared<value_type>(buffer_container_type{})},
         pipe_{Pipe::create()} {}
 
-  ssize_t read_some() {
+  [[nodiscard]] ssize_t read_some() const {
     char tmp[1024];
     auto size = pipe_.read_some(tmp, sizeof(tmp));
     if (size > 0) {
@@ -1133,7 +1135,7 @@ class Buffer {
         *buf_);
   }
 
-  bool empty() const {
+  [[nodiscard]] bool empty() const {
     return std::visit(
         [this](buffer_container_type const& buf) {
           return buf.size() <= written_size_;
@@ -1160,11 +1162,11 @@ class Buffer {
   void close_write() { pipe_.close_write(); }
   void close_read() { pipe_.close_read(); }
 
-  Buffer dup() { return Buffer{buf_, pipe_.dup()}; }
+  Buffer dup() const { return Buffer{buf_, pipe_.dup()}; }
 
  private:
   Buffer(std::shared_ptr<value_type> buf, Pipe&& pipe)
-      : buf_{buf}, pipe_{std::move(pipe)} {}
+      : buf_{std::move(buf)}, pipe_{std::move(pipe)} {}
   std::shared_ptr<value_type> buf_;
   std::size_t written_size_{0};
   Pipe pipe_;
@@ -1281,8 +1283,9 @@ inline void read_write_to_buffer_use_poll(
     }
     if (fds[1].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[1].revents & POLLIN)) {
       ssize_t read_count;
-      while ((read_count = out->get().read_some()) > 0) {
-      }
+      do {
+        read_count = out->get().read_some();
+      } while (read_count > 0);
       if (read_count == 0) {
         out->get().close_read();
         fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
@@ -1300,8 +1303,9 @@ inline void read_write_to_buffer_use_poll(
     }
     if (fds[2].fd != INVALID_NATIVE_HANDLE_VALUE && (fds[2].revents & POLLIN)) {
       ssize_t read_count;
-      while ((read_count = err->get().read_some())) {
-      }
+      do {
+        read_count = err->get().read_some();
+      } while (read_count > 0);
       if (read_count == 0) {
         err->get().close_read();
         fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
@@ -1394,7 +1398,7 @@ class Redirector {
         *redirect_);
   }
 
-  std::unique_ptr<value_type> dup() {
+  [[nodiscard]] std::unique_ptr<value_type> dup() const {
     if (!redirect_) {
       return nullptr;
     }
@@ -1511,7 +1515,7 @@ class Redirector {
         },
         *redirect_);
   }
-  void close_all() {
+  void close_all() const {
     if (!redirect_) {
       return;
     }
@@ -1633,10 +1637,10 @@ class Redirector {
         },
         *redirect_);
   }
-  virtual int fileno() const = 0;
-  bool inherit() const { return !redirect_; }
+  [[nodiscard]] virtual int fileno() const = 0;
+  [[nodiscard]] bool inherit() const { return !redirect_; }
 
-  std::optional<NativeHandle> get_file_fd() const {
+  [[nodiscard]] std::optional<NativeHandle> get_file_fd() const {
     if (!redirect_) {
       return std::nullopt;
     }
@@ -1666,7 +1670,7 @@ class StdinRedirector : public Redirector {
   StdinRedirector& operator=(StdinRedirector&&) noexcept = default;
   StdinRedirector(StdinRedirector const&) = delete;
   StdinRedirector& operator=(StdinRedirector const&) = delete;
-  int fileno() const override { return 0; }
+  [[nodiscard]] int fileno() const override { return 0; }
 };
 class StdoutRedirector : public Redirector {
  public:
@@ -1675,7 +1679,7 @@ class StdoutRedirector : public Redirector {
   StdoutRedirector& operator=(StdoutRedirector&&) noexcept = default;
   StdoutRedirector(StdoutRedirector const&) = delete;
   StdoutRedirector& operator=(StdoutRedirector const&) = delete;
-  int fileno() const override { return 1; }
+  [[nodiscard]] int fileno() const override { return 1; }
 };
 class StderrRedirector : public Redirector {
  public:
@@ -1684,7 +1688,7 @@ class StderrRedirector : public Redirector {
   StderrRedirector& operator=(StderrRedirector&&) noexcept = default;
   StderrRedirector(StderrRedirector const&) = delete;
   StderrRedirector& operator=(StderrRedirector const&) = delete;
-  int fileno() const override { return 2; }
+  [[nodiscard]] int fileno() const override { return 2; }
 };
 
 struct stdin_redirector {
@@ -1793,7 +1797,7 @@ struct EnvItemAppend {
 #if defined(_WIN32)
     std::get<1>(kv) = utf8_to_utf16(val);
 #else
-    std::get<1>(kv) = val;
+    std::get<1>(kv) = std::move(val);
 #endif
     std::get<2>(kv) = true;
     return *this;
@@ -1802,7 +1806,7 @@ struct EnvItemAppend {
 #if defined(_WIN32)
     std::get<1>(kv) = utf8_to_utf16(val);
 #else
-    std::get<1>(kv) = val;
+    std::get<1>(kv) = std::move(val);
 #endif
     std::get<2>(kv) = false;
     return *this;
@@ -2168,7 +2172,7 @@ class subprocess {
     if (!group_id_.has_value() && !background_explicit_) {
       if (stdin_.inherit() && !stdin_is_atty()) {
         group_id_ = 0;
-      } else if (auto fd = stdin_.get_file_fd();
+      } else if (const auto fd = stdin_.get_file_fd();
                  fd.has_value() && !is_atty(fd.value())) {
         group_id_ = 0;
       }
@@ -2190,7 +2194,7 @@ class subprocess {
           std::unique_lock lock(state->mtx);
           if (state->cv.wait_for(lock, timeout_val,
                                  [&state] { return state->done; })) {
-            return;  // cancelled, process already finished
+            return;  // canceled, process already finished
           }
         }
         // Timeout expired — kill the entire process tree
@@ -2388,7 +2392,7 @@ class subprocess {
   }
 #endif
 
-  NativeHandle pid() const {
+  [[nodiscard]] NativeHandle pid() const {
 #if defined(_WIN32)
     return process_information_.hProcess;
 #else
@@ -2463,7 +2467,7 @@ class subprocess {
 
     std::string executable_path = cmd_[0];
     if (executable_path.find('/') == std::string::npos) {
-      auto resolved_path = find_command_in_path(executable_path);
+      const auto resolved_path = find_command_in_path(executable_path);
       if (resolved_path.has_value()) {
         executable_path = resolved_path.value();
       }
@@ -2600,7 +2604,7 @@ class subprocess {
 
 class pipeline {
  public:
-  pipeline(subprocess&& sub) { subs_.push_back(std::move(sub)); }
+  explicit pipeline(subprocess&& sub) { subs_.push_back(std::move(sub)); }
   pipeline(pipeline&&) = default;
   pipeline& operator=(pipeline&&) = default;
   pipeline(pipeline const&) = delete;
@@ -2647,7 +2651,7 @@ class pipeline {
   void terminate() { subs_[0].terminate(); }
 
   int exit_code() const { return exit_codes_.back(); }
-  std::vector<int> exit_codes() const { return exit_codes_; }
+  [[nodiscard]] std::vector<int> exit_codes() const { return exit_codes_; }
 
  private:
   std::vector<subprocess> subs_;
