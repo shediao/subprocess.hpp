@@ -123,10 +123,6 @@
 #include <limits.h>
 #include <poll.h>
 #include <pwd.h>
-
-#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
-#include <spawn.h>
-#endif
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/stat.h>
@@ -1667,39 +1663,6 @@ class Redirector {
         },
         *redirect_);
   }
-
-#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
-  void setup_stdio_for_posix_spawn(posix_spawn_file_actions_t& action) {
-    if (!redirect_) {
-      return;
-    }
-    std::visit(
-        [this, &action]<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<T, Pipe>) {
-            posix_spawn_file_actions_adddup2(
-                &action, fileno() == 0 ? value.rfd() : value.wfd(), fileno());
-            posix_spawn_file_actions_addclose(&action, value.rfd());
-            posix_spawn_file_actions_addclose(&action, value.wfd());
-          } else if constexpr (std::is_same_v<T, File>) {
-            if (value.fd() != fileno()) {
-              posix_spawn_file_actions_adddup2(&action, value.fd(), fileno());
-              posix_spawn_file_actions_addclose(&action, value.fd());
-            }
-          } else if constexpr (std::is_same_v<T, FileHandler>) {
-            if (value.fd() != fileno()) {
-              posix_spawn_file_actions_adddup2(&action, value.fd(), fileno());
-              posix_spawn_file_actions_addclose(&action, value.fd());
-            }
-          } else if constexpr (std::is_same_v<T, Buffer>) {
-            posix_spawn_file_actions_adddup2(
-                &action, fileno() == 0 ? value.rfd() : value.wfd(), fileno());
-            posix_spawn_file_actions_addclose(&action, value.rfd());
-            posix_spawn_file_actions_addclose(&action, value.wfd());
-          }
-        },
-        *redirect_);
-  }
-#endif  // SUBPROCESS_USE_POSIX_SPAWN
 #endif  // !_WIN32
   std::optional<std::reference_wrapper<Buffer>> get_buffer() {
     if (!redirect_) {
@@ -2354,48 +2317,6 @@ class subprocess {
       stderr_.close_all();
     }
 #else
-#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
-    posix_spawn_file_actions_t action;
-    if (0 != posix_spawn_file_actions_init(&action)) {
-      print_error("posix_spawn_file_actions_init failed: " +
-                  get_last_error_message());
-      return;
-    }
-    if (requested_pgid_.has_value()) {
-      posix_spawnattr_t attr;
-      if (0 != posix_spawnattr_init(&attr)) {
-        posix_spawn_file_actions_destroy(&action);
-        print_error("posix_spawnattr_init failed: " + get_last_error_message());
-        return;
-      }
-      // Create a new process group so that the watchdog can kill the entire
-      // process tree on timeout (including any grandchildren).
-      if (0 != posix_spawnattr_setpgroup(&attr, requested_pgid_.value())) {
-        posix_spawn_file_actions_destroy(&action);
-        posix_spawnattr_destroy(&attr);
-        print_error("posix_spawnattr_setpgroup failed: " +
-                    get_last_error_message());
-        return;
-      }
-      if (0 != posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP)) {
-        posix_spawn_file_actions_destroy(&action);
-        posix_spawnattr_destroy(&attr);
-        print_error("posix_spawnattr_setflags failed: " +
-                    get_last_error_message());
-        return;
-      }
-      add_posix_spawn_file_actions(action, &attr);
-      posix_spawn_file_actions_destroy(&action);
-      posix_spawnattr_destroy(&attr);
-      // Resolve the actual pgid: 0 means the child's pid becomes its own pgid.
-      pgid_ = (requested_pgid_.value() == 0) ? pid_ : requested_pgid_.value();
-    } else {
-      add_posix_spawn_file_actions(action, nullptr);
-      posix_spawn_file_actions_destroy(&action);
-    }
-    launch_watchdog();
-    pump_pipe_data();
-#else   // SUBPROCESS_USE_POSIX_SPAWN
     auto pid = fork();
     if (pid < 0) {
       print_error("fork() failed");
@@ -2416,7 +2337,6 @@ class subprocess {
       launch_watchdog();
       pump_pipe_data();
     }
-#endif  // !SUBPROCESS_USE_POSIX_SPAWN
 #endif  // !_WIN32
   }
 
@@ -2610,78 +2530,6 @@ class subprocess {
     }
     _Exit(127);
   }
-#if defined(SUBPROCESS_USE_POSIX_SPAWN) && SUBPROCESS_USE_POSIX_SPAWN
-#if defined(__APPLE__) && defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-  void add_posix_spawn_file_actions(posix_spawn_file_actions_t& action,
-                                    posix_spawnattr_t* attr) {
-    stdin_.setup_stdio_for_posix_spawn(action);
-    stdout_.setup_stdio_for_posix_spawn(action);
-    stderr_.setup_stdio_for_posix_spawn(action);
-
-    std::vector<char*> cmd{};
-    std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
-                   [](std::string& s) { return s.data(); });
-    cmd.push_back(nullptr);
-    if (!cwd_.empty()) {
-      int ret = -1;
-#if defined(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP)
-      ret = posix_spawn_file_actions_addchdir_np(&action, cwd_.data());
-#elif defined(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR)
-      ret = posix_spawn_file_actions_addchdir(&action, cwd_.data());
-#elif defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && \
-    __MAC_OS_X_VERSION_MIN_REQUIRED < 101500
-      ret = posix_spawn_file_actions_addchdir_np(&action, cwd_.data());
-#elif (defined(__GLIBC__) && __GLIBC_PREREQ(2, 29)) || defined(__APPLE__) || \
-    defined(__FreeBSD__) || defined(__ANDROID__) || defined(__musl__)
-      ret = posix_spawn_file_actions_addchdir_np(&action, cwd_.data());
-#else
-      ret = posix_spawn_file_actions_addchdir(&action, cwd_.data());
-#endif
-      if (-1 == ret) {
-        print_error("chdir failed: " + get_last_error_message());
-        return;
-      }
-    }
-
-    std::string executable_path = cmd_[0];
-    if (executable_path.find('/') == std::string::npos) {
-      auto resolved_path = find_command_in_path(executable_path);
-      if (resolved_path.has_value()) {
-        executable_path = resolved_path.value();
-      }
-    }
-
-    std::vector<char*> envs{};
-    if (!env_.empty()) {
-      std::vector<std::string> env_tmp{};
-
-      std::transform(
-          env_.begin(), env_.end(), std::back_inserter(env_tmp),
-          [](auto& entry) { return entry.first + "=" + entry.second; });
-
-      std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
-                     [](auto& s) { return s.data(); });
-      envs.push_back(nullptr);
-      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, attr,
-                             cmd.data(), envs.data());
-      if (ret != 0) {
-        pid_ = INVALID_NATIVE_HANDLE_VALUE;
-      }
-    } else {
-      auto ret = posix_spawn(&pid_, executable_path.c_str(), &action, attr,
-                             cmd.data(), nullptr);
-      if (ret != 0) {
-        pid_ = INVALID_NATIVE_HANDLE_VALUE;
-      }
-    }
-  }
-#if defined(__APPLE__) && defined(__clang__)
-#pragma clang diagnostic pop
-#endif
-#endif  // SUBPROCESS_USE_POSIX_SPAWN
 #endif  // !_WIN32
 
  private:
