@@ -2197,6 +2197,8 @@ class subprocess {
   subprocess(const subprocess&) = delete;
   subprocess& operator=(const subprocess&) = delete;
 
+  ~subprocess() { terminate(); }
+
   void async_run() {
     prepare_for_child();
 
@@ -2591,6 +2593,8 @@ class pipeline {
     return *this;
   }
 
+  ~pipeline() { terminate(); }
+
   int run() {
     std::vector<Pipe> pipes;
 
@@ -2625,7 +2629,12 @@ class pipeline {
     return exit_codes_.back();
   }
 
-  void terminate() { subs_[0].terminate(); }
+  void terminate() {
+    if (subs_.empty()) {
+      return;
+    }
+    subs_[0].terminate();
+  }
 
   int exit_code() const { return exit_codes_.back(); }
   [[nodiscard]] std::vector<int> exit_codes() const { return exit_codes_; }
