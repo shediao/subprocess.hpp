@@ -1,0 +1,163 @@
+# ==============================================================================
+#  clang-tidy configuration for subprocess.hpp
+#
+#  This project is a header-only, C++20, cross-platform (Windows/Linux/macOS)
+#  subprocess library with heavy resource management (pipes, handles, threads).
+#
+#  Philosophy:
+#    - Catch resource leaks, use-after-free, and ownership bugs early.
+#    - Enforce modern C++ best practices without being overly pedantic.
+#    - Respect that platform #ifdef blocks may produce unavoidable warnings.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Checks: curated from the union of what LLVM, Chromium, Google, and
+#         Mozilla run on their own codebases, plus extra resource-safety
+#         and C++-core-guideline checks.
+# ------------------------------------------------------------------------------
+Checks: >
+  -*,
+
+  # ---- Resource management (CRITICAL for this project) --------------------
+  cppcoreguidelines-owning-memory,
+  cppcoreguidelines-no-malloc,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-special-member-functions,
+  cppcoreguidelines-slicing,
+  hicpp-special-member-functions,
+
+  # ---- Bug-prone patterns ------------------------------------------------
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+
+  # ---- Modern C++ --------------------------------------------------------
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  -modernize-use-nodiscard,
+  -modernize-macro-to-enum,
+
+  # ---- Performance -------------------------------------------------------
+  performance-*,
+  -performance-avoid-endl,
+
+  # ---- Readability (less noisy subset) -----------------------------------
+  readability-container-contains,
+  readability-container-data-pointer,
+  readability-container-size-empty,
+  readability-delete-null-pointer,
+  readability-else-after-return,
+  readability-make-member-function-const,
+  readability-misleading-indentation,
+  readability-redundant-access-specifiers,
+  readability-redundant-control-flow,
+  readability-redundant-declaration,
+  readability-redundant-function-ptr-dereference,
+  readability-redundant-member-init,
+  readability-redundant-smartptr-get,
+  readability-redundant-string-cstr,
+  readability-redundant-string-init,
+  readability-simplify-boolean-expr,
+  readability-simplify-subscript-expr,
+  readability-static-accessed-through-instance,
+  readability-string-compare,
+  readability-uniqueptr-delete-release,
+  readability-use-anyofallof,
+
+  # ---- Miscellaneous safety ----------------------------------------------
+  cert-*,
+  -cert-err58-cpp,
+  -cert-msc30-c,
+  -cert-msc50-cpp,
+
+  # ---- Concurrency (threads are used in the I/O pump) --------------------
+  concurrency-*,
+
+  # ---- Portability -------------------------------------------------------
+  portability-*,
+
+  # ---- Misc helpers ------------------------------------------------------
+  misc-const-correctness,
+  misc-definitions-in-headers,
+  misc-misplaced-const,
+  misc-no-recursion,
+  misc-non-copyable-objects,
+  misc-redundant-expression,
+  misc-static-assert,
+  misc-throw-by-value-catch-by-reference,
+  misc-uniqueptr-reset-release,
+  misc-unused-parameters,
+  misc-unused-using-decls
+
+# --------------------------------------------------------------------------
+# Check-specific options
+# --------------------------------------------------------------------------
+CheckOptions:
+  # --- bugprone ---
+  - key: bugprone-argument-comment.StrictMode
+    value: false
+  - key: bugprone-exception-escape.IgnoredExceptions
+    value: ""
+  - key: bugprone-reserved-identifier.AllowedIdentifiers
+    value: "__SUBPROCESS_SUBPROCESS_HPP__"
+
+  # --- cert ---
+  - key: cert-dcl16-c.NewSuffixes
+    value: "L;LL;LU;LLU"
+
+  # --- cppcoreguidelines ---
+  - key: cppcoreguidelines-special-member-functions.AllowMissingMoveFunctions
+    value: true
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+
+  # --- misc ---
+  - key: misc-const-correctness.TransformValues
+    value: true
+  - key: misc-const-correctness.WarnOnUnwrittenParams
+    value: false
+
+  # --- modernize ---
+  - key: modernize-use-auto.MinTypeNameLength
+    value: "8"
+  - key: modernize-use-auto.RemoveStars
+    value: false
+  - key: modernize-use-nullptr.NullMacros
+    value: "NULL"
+
+  # --- performance ---
+  - key: performance-move-const-arg.CheckTriviallyCopyableMove
+    value: false
+  - key: performance-for-range-copy.WarnOnAllAutoCopies
+    value: true
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: "exception_ptr;error_code;error_condition;"
+
+  # --- readability ---
+  - key: readability-identifier-naming.IgnoreFailedSplit
+    value: true
+  - key: readability-implicit-bool-conversion.AllowIntegerConditions
+    value: true
+  - key: readability-implicit-bool-conversion.AllowPointerConditions
+    value: true
+  - key: readability-simplify-boolean-expr.ChainedConditionalReturn
+    value: true
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 80
+
+# --------------------------------------------------------------------------
+# Format style — must match .clang-format (Google style)
+# --------------------------------------------------------------------------
+FormatStyle: google
+
+# --------------------------------------------------------------------------
+# Header-filter: only our own headers
+# --------------------------------------------------------------------------
+HeaderFilterRegex: 'include/subprocess/.*\.hpp'
+
+# --------------------------------------------------------------------------
+# Global exclusions — generated files, test scaffolding, etc.
+# --------------------------------------------------------------------------
+ExcludeHeaderFilterRegex: ".*(gtest|gmock).*"

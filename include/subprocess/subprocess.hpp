@@ -124,7 +124,6 @@
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
-#include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -135,7 +134,6 @@
 #include <climits>
 #include <condition_variable>
 #include <cstddef>
-#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <iterator>
@@ -347,7 +345,7 @@ class basic_unique_fd {
     handle_ = handle;
   }
 
-  void swap(Derived& other) { std::swap(handle_, other.handle_); }
+  void swap(Derived& other) noexcept { std::swap(handle_, other.handle_); }
 
   friend bool operator==(Derived const& lhs, Derived const& rhs) {
     return lhs.handle_ == rhs.handle_;
@@ -368,7 +366,7 @@ class basic_unique_fd {
     return lhs != rhs.handle_;
   }
 
-  friend void swap(Derived& lhs, Derived& rhs) { lhs.swap(rhs); }
+  friend void swap(Derived& lhs, Derived& rhs) noexcept { lhs.swap(rhs); }
 
  private:
   NativeHandle handle_;
@@ -392,7 +390,7 @@ class unique_fd
   bool is_atty() const { return detail::is_atty(get()); }
 
 #if !defined(_WIN32)
-  void set_nonblocking() { detail::set_nonblocking(get()); }
+  void set_nonblocking() const { detail::set_nonblocking(get()); }
 #endif
 };
 
@@ -413,8 +411,14 @@ class buffer {
   buffer() = default;
   ~buffer() = default;
   buffer(const buffer&) = delete;
+  buffer& operator=(const buffer&) = delete;
   buffer(buffer&& other) noexcept
       : buf_(std::move(other.buf_)), callback_(std::move(other.callback_)) {}
+  buffer& operator=(buffer&& other) noexcept {
+    buf_ = std::move(other.buf_);
+    callback_ = std::move(other.callback_);
+    return *this;
+  }
   explicit buffer(callback&& cb) : callback_(std::move(cb)) {}
   explicit buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
   buffer(std::string_view const& str, callback&& cb)
@@ -424,6 +428,7 @@ class buffer {
   buffer(const std::string::iterator first, const std::string::iterator last,
          callback&& cb)
       : buf_(first, last), callback_(std::move(cb)) {}
+
   [[nodiscard]] auto* data() const { return buf_.data(); }
   [[nodiscard]] auto size() const { return buf_.size(); }
   [[nodiscard]] auto span() const {
@@ -454,24 +459,21 @@ class buffer {
     std::span<const unsigned char> other_span{
         reinterpret_cast<const unsigned char*>(other.data()),
         other.size() * sizeof(T)};
-    return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
-                      other_span.end());
+    return std::ranges::equal(buf_, other_span);
   }
   template <typename CharT>
   bool operator==(std::basic_string_view<CharT> other) const {
     std::span<const unsigned char> other_span{
         reinterpret_cast<const unsigned char*>(other.data()),
         other.size() * sizeof(CharT)};
-    return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
-                      other_span.end());
+    return std::ranges::equal(buf_, other_span);
   }
   template <typename CharT>
   bool operator==(const std::basic_string<CharT>& other) const {
     std::span<const unsigned char> other_span{
         reinterpret_cast<const unsigned char*>(other.data()),
         other.size() * sizeof(CharT)};
-    return std::equal(buf_.begin(), buf_.end(), other_span.begin(),
-                      other_span.end());
+    return std::ranges::equal(buf_, other_span);
   }
   bool operator==(const char* other) const {
     return this->operator==(std::string_view(other));
@@ -490,7 +492,7 @@ class buffer {
   }
 
  private:
-  std::vector<unsigned char> buf_{};
+  std::vector<unsigned char> buf_;
   callback callback_{nullptr};
 };
 
@@ -648,18 +650,17 @@ inline std::string get_last_error_message() {
     auto ret = utf16_to_utf8((wchar_t*)error_msg);
     LocalFree(error_msg);
     return ret;
-  } else {
-    return "Unknown error or FormatMessageW failed, error code: " +
-           std::to_string(error);
   }
-#else   // _WIN32
+  return "Unknown error or FormatMessageW failed, error code: " +
+         std::to_string(error);
+#else  // _WIN32
   const int error = errno;
   if (auto* err_msg = strerror(error)) {
     return {err_msg};
-  } else {
-    return "Unknown error or strerror failed, error code: " +
-           std::to_string(errno);
   }
+  return "Unknown error or strerror failed, error code: " +
+         std::to_string(errno);
+
 #endif  // !_WIN32
 }
 
@@ -780,16 +781,15 @@ inline bool is_executable(std::string const& f) {
 #if !defined(_WIN32)
 inline std::optional<std::string> find_command_in_path(
     std::string const& exe_file) {
-  char separator = '/';
-  char path_env_sep = ':';
+  constexpr char path_env_sep = ':';
 
   if (exe_file.find_last_of("/\\") != std::string::npos) {
     return std::nullopt;
   }
-  auto paths = split(std::string(::getenv("PATH")), path_env_sep);
-  for (auto& p : paths) {
-    std::string f = p + separator + exe_file;
-    if (is_executable(f)) {
+  for (const auto paths = split(std::string(::getenv("PATH")), path_env_sep);
+       auto& p : paths) {
+    constexpr char separator = '/';
+    if (std::string f = p + separator + exe_file; is_executable(f)) {
       return f;
     }
   }
@@ -862,12 +862,12 @@ class Pipe {
 
   inline static Pipe create() {
     Pipe p;
-    p.create_native_pipe(*p.pair_);
+    detail::Pipe::create_native_pipe(*p.pair_);
     return p;
   }
-  void close_read() { pair_->rfd_.close(); }
-  void close_write() { pair_->wfd_.close(); }
-  void close_all() {
+  void close_read() const { pair_->rfd_.close(); }
+  void close_write() const { pair_->wfd_.close(); }
+  void close_all() const {
     close_read();
     close_write();
   }
@@ -1142,12 +1142,12 @@ class Buffer {
 
   ssize_t write_some() {
     return std::visit(
-        [this](buffer_container_type& buf) {
+        [this](const buffer_container_type& buf) {
           if (buf.size() <= written_size_) {
             return static_cast<ssize_t>(0);  // EOF0;
           }
-          auto written = pipe_.write_some(buf.data() + written_size_,
-                                          buf.size() - written_size_);
+          const auto written = pipe_.write_some(buf.data() + written_size_,
+                                                buf.size() - written_size_);
           if (written > 0) {
             written_size_ += written;
           }
@@ -1167,10 +1167,12 @@ class Buffer {
   buffer& buf() {
     return std::visit(
         []<typename T>(T& value) -> buffer_container_type& {
-          if constexpr (std::is_same_v<T, buffer_container_type>) {
+          if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                       buffer_container_type>) {
             return value;
-          } else if constexpr (std::is_same_v<T, std::reference_wrapper<
-                                                     buffer_container_type>>) {
+          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
+                                              std::reference_wrapper<
+                                                  buffer_container_type>>) {
             return value.get();
           }
         },
@@ -1182,8 +1184,8 @@ class Buffer {
   unique_fd& rfd() { return pipe_.rfd(); }
   unique_fd& wfd() { return pipe_.wfd(); }
 
-  void close_write() { pipe_.close_write(); }
-  void close_read() { pipe_.close_read(); }
+  void close_write() const { pipe_.close_write(); }
+  void close_read() const { pipe_.close_read(); }
 
   Buffer dup() const { return Buffer{buf_, pipe_.dup()}; }
 
@@ -1217,7 +1219,7 @@ inline void read_write_to_buffer_with_threads(
   }
   if (out) {
     threads.emplace_back(
-        [](Buffer& buf) {
+        [](const Buffer& buf) {
           ssize_t read_size;
           do {
             read_size = buf.read_some();
@@ -1231,7 +1233,7 @@ inline void read_write_to_buffer_with_threads(
   }
   if (err) {
     threads.emplace_back(
-        [](Buffer& buf) {
+        [](const Buffer& buf) {
           ssize_t read_size;
           do {
             read_size = buf.read_some();
@@ -1326,7 +1328,7 @@ inline void read_write_to_buffer_use_poll(
     }
 
     // If the child exited and the drain deadline has passed, stop
-    // waiting for more pipe data — grandchildren may still be running
+    // waiting for more pipe data — grandchildren may still be running,
     // but we don't want to block the caller indefinitely.
     if (child_exited && std::chrono::steady_clock::now() >= drain_deadline) {
       break;
@@ -1670,7 +1672,7 @@ class Redirector {
         *redirect_);
   }
 #endif  // !_WIN32
-  std::optional<std::reference_wrapper<Buffer>> get_buffer() {
+  std::optional<std::reference_wrapper<Buffer>> get_buffer() const {
     if (!redirect_) {
       return std::nullopt;
     }
@@ -1720,6 +1722,7 @@ class StdinRedirector : public Redirector {
   StdinRedirector(StdinRedirector const&) = delete;
   StdinRedirector& operator=(StdinRedirector const&) = delete;
   [[nodiscard]] int fileno() const override { return 0; }
+  ~StdinRedirector() override {}
 };
 class StdoutRedirector : public Redirector {
  public:
@@ -1729,6 +1732,7 @@ class StdoutRedirector : public Redirector {
   StdoutRedirector(StdoutRedirector const&) = delete;
   StdoutRedirector& operator=(StdoutRedirector const&) = delete;
   [[nodiscard]] int fileno() const override { return 1; }
+  ~StdoutRedirector() override {}
 };
 class StderrRedirector : public Redirector {
  public:
@@ -1738,6 +1742,7 @@ class StderrRedirector : public Redirector {
   StderrRedirector(StderrRedirector const&) = delete;
   StderrRedirector& operator=(StderrRedirector const&) = delete;
   [[nodiscard]] int fileno() const override { return 2; }
+  ~StderrRedirector() override {}
 };
 
 struct stdin_redirector {
@@ -1957,9 +1962,9 @@ struct env_operator {
 
 namespace named_args {
 #if defined(_WIN32)
-[[maybe_unused]] inline const static auto devnull = std::string{"NUL"};
+[[maybe_unused]] inline static const auto devnull = std::string{"NUL"};
 #else
-[[maybe_unused]] inline const static auto devnull = std::string{"/dev/null"};
+[[maybe_unused]] inline static const auto devnull = std::string{"/dev/null"};
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector std_in;
 [[maybe_unused]] inline constexpr static stdout_redirector std_out;
@@ -2026,7 +2031,7 @@ struct get_char_type<CharT*> {
 };
 
 template <typename T>
-using get_char_type_t = typename get_char_type<T>::type;
+using get_char_type_t = get_char_type<T>::type;
 
 template <typename T>
 using to_string_view_t =
@@ -2077,7 +2082,7 @@ struct named_arg_type_list<Head, Tails...> {
       typename named_arg_type_list<Tails...>::type>;
 };
 template <typename... T>
-using named_arg_type_list_t = typename named_arg_type_list<T...>::type;
+using named_arg_type_list_t = named_arg_type_list<T...>::type;
 
 class subprocess {
   friend class pipeline;
@@ -2216,7 +2221,7 @@ class subprocess {
       if (stdin_.inherit() && !stdin_is_atty()) {
         requested_pgid_ = 0;
       } else if (const auto fd = stdin_.get_file_fd();
-                 fd.has_value() && (*fd).get().is_atty()) {
+                 fd.has_value() && fd->get().is_atty()) {
         requested_pgid_ = 0;
       }
     }
@@ -2323,7 +2328,8 @@ class subprocess {
     if (pid < 0) {
       print_error("fork() failed");
       return;
-    } else if (pid == 0) {
+    }
+    if (pid == 0) {
       if (requested_pgid_.has_value()) {
         setpgid(0, requested_pgid_.value());
       }
@@ -2494,8 +2500,8 @@ class subprocess {
     stderr_.close_parent_end();
 
     std::vector<char*> cmd{};
-    std::transform(cmd_.begin(), cmd_.end(), std::back_inserter(cmd),
-                   [](std::string& s) { return s.data(); });
+    std::ranges::transform(cmd_, std::back_inserter(cmd),
+                           [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() && (-1 == ::chdir(cwd_.data()))) {
       print_error("chdir failed: " + get_last_error_message() + "\n");
@@ -2513,13 +2519,13 @@ class subprocess {
     if (!env_.empty()) {
       std::vector<std::string> env_tmp{};
 
-      std::transform(
-          env_.begin(), env_.end(), std::back_inserter(env_tmp),
+      std::ranges::transform(
+          env_, std::back_inserter(env_tmp),
           [](auto& entry) { return entry.first + "=" + entry.second; });
 
       std::vector<char*> envs{};
-      std::transform(env_tmp.begin(), env_tmp.end(), std::back_inserter(envs),
-                     [](auto& s) { return s.data(); });
+      std::ranges::transform(env_tmp, std::back_inserter(envs),
+                             [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
       execve(executable_path.c_str(), cmd.data(), envs.data());
       print_error("execve(" + executable_path +
@@ -2533,14 +2539,13 @@ class subprocess {
   }
 #endif  // !_WIN32
 
- private:
 #if defined(_WIN32)
   std::vector<std::wstring> cmd_;
   std::wstring cwd_{};
   std::map<std::wstring, std::wstring> env_;
 #else
   std::vector<std::string> cmd_;
-  std::string cwd_{};
+  std::string cwd_;
   std::map<std::string, std::string> env_;
 #endif
   StdinRedirector stdin_;
