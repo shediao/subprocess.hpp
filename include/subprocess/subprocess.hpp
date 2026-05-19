@@ -397,8 +397,10 @@ class unique_fd
 };
 
 #if !defined(_WIN32)
+inline void noop_pid_deleter(pid_t&) {}
+
 class unique_pid
-    : public basic_unique_fd<NativeHandle, unique_pid, [](pid_t&) {}> {
+    : public basic_unique_fd<NativeHandle, unique_pid, noop_pid_deleter> {
  public:
   using basic_unique_fd::basic_unique_fd;
 };
