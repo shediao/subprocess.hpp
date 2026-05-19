@@ -2172,11 +2172,6 @@ class subprocess {
       }
     }
     env_ = environments;
-#if defined(_WIN32)
-    ZeroMemory(&process_information_, sizeof(process_information_));
-    ZeroMemory(&startup_info_, sizeof(startup_info_));
-    startup_info_.StartupInfo.cb = sizeof(startup_info_);
-#endif
   }
 
 #if defined(_WIN32)
@@ -2251,22 +2246,25 @@ class subprocess {
     };
 
 #if defined(_WIN32)
-    startup_info_.StartupInfo.hStdInput =
+    STARTUPINFOEXW startup_info{};
+    startup_info.StartupInfo.cb = sizeof(startup_info);
+
+    startup_info.StartupInfo.hStdInput =
         stdin_.child_inherit_handle().value_or(GetStdHandle(STD_INPUT_HANDLE));
-    startup_info_.StartupInfo.hStdOutput =
+    startup_info.StartupInfo.hStdOutput =
         stdout_.child_inherit_handle().value_or(
             GetStdHandle(STD_OUTPUT_HANDLE));
-    startup_info_.StartupInfo.hStdError =
+    startup_info.StartupInfo.hStdError =
         stderr_.child_inherit_handle().value_or(GetStdHandle(STD_ERROR_HANDLE));
 
-    startup_info_.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+    startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
 
     // Build explicit handle inheritance list so that the child only inherits
     // the handles we explicitly specify, rather than all inheritable handles.
     std::vector<HANDLE> handles_to_inherit = {
-        startup_info_.StartupInfo.hStdInput,
-        startup_info_.StartupInfo.hStdOutput,
-        startup_info_.StartupInfo.hStdError,
+        startup_info.StartupInfo.hStdInput,
+        startup_info.StartupInfo.hStdOutput,
+        startup_info.StartupInfo.hStdError,
     };
 
     // Set up PROC_THREAD_ATTRIBUTE_LIST for explicit handle inheritance.
@@ -2289,33 +2287,33 @@ class subprocess {
                   std::to_string(GetLastError()));
       return;
     }
-    startup_info_.lpAttributeList = attr_list;
+    startup_info.lpAttributeList = attr_list;
 
     auto command = argv_to_command_line_string(cmd_);
 
     auto env_block = create_environment_string_data(env_);
 
+    PROCESS_INFORMATION pi{};
     auto success = CreateProcessW(
         nullptr, command.data(), NULL, NULL, TRUE,
         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
         env_block.empty() ? nullptr : env_block.data(),
         cwd_.empty() ? nullptr : cwd_.data(),
-        reinterpret_cast<LPSTARTUPINFOW>(&startup_info_),
-        &process_information_);
+        reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &pi);
 
     DeleteProcThreadAttributeList(attr_list);
-    startup_info_.lpAttributeList = nullptr;
+    startup_info.lpAttributeList = nullptr;
 
     if (success) {
+      process_handle_.reset(pi.hProcess);
+      thread_handle_.reset(pi.hThread);
       if (*job_handle_) {
-        AssignProcessToJobObject(job_handle_->get(),
-                                 process_information_.hProcess);
+        AssignProcessToJobObject(job_handle_->get(), process_handle_.get());
       }
       launch_watchdog();
       pump_pipe_data();
     } else {
       std::wcerr << utf8_to_utf16(get_last_error_message()) << L'\n';
-      process_information_.hProcess = INVALID_NATIVE_HANDLE_VALUE;
       stdin_.close_all();
       stdout_.close_all();
       stderr_.close_all();
@@ -2363,18 +2361,17 @@ class subprocess {
 
 #if defined(_WIN32)
   int wait_for_exit() {
-    if (invalid_handle(process_information_.hProcess)) {
+    if (!process_handle_) {
       stop_watchdog();
       return 127;
     }
     DWORD ret{127};
-    unique_fd process_guard(process_information_.hProcess);
-    unique_fd thread_guard(process_information_.hThread);
-
-    WaitForSingleObject(process_information_.hProcess, INFINITE);
-    GetExitCodeProcess(process_information_.hProcess, &ret);
+    WaitForSingleObject(process_handle_.get(), INFINITE);
+    GetExitCodeProcess(process_handle_.get(), &ret);
 
     stop_watchdog();
+    process_handle_.close();
+    thread_handle_.close();
     return static_cast<int>(ret);
   }
 #else
@@ -2410,9 +2407,7 @@ class subprocess {
 #endif
 
 #if defined(_WIN32)
-  [[nodiscard]] NativeHandle pid() const {
-    return process_information_.hProcess;
-  }
+  [[nodiscard]] NativeHandle pid() const { return process_handle_.get(); }
 #else
   [[nodiscard]] pid_t pid() const { return pid_.get(); }
 #endif
@@ -2562,8 +2557,8 @@ class subprocess {
       std::make_shared<WatchdogState>()};
 #if defined(_WIN32)
   std::shared_ptr<unique_fd> job_handle_{std::make_shared<unique_fd>()};
-  PROCESS_INFORMATION process_information_;
-  STARTUPINFOEXW startup_info_{};
+  unique_fd process_handle_{INVALID_NATIVE_HANDLE_VALUE};
+  unique_fd thread_handle_{INVALID_NATIVE_HANDLE_VALUE};
   std::vector<unsigned char> proc_thread_attr_list_;
 #else
   unique_pid pid_{-1};
