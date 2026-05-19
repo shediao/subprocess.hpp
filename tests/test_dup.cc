@@ -41,7 +41,7 @@ namespace S = subprocess::detail;
 static void write_all_and_close(S::unique_fd& fd, buffer const& write_data) {
   auto write_span = write_data.span();
   S::write_all(fd, write_span.data(), write_span.size());
-  fd.reset();
+  fd.close();
 }
 
 static void read_from_native_handle(S::unique_fd const& fd, buffer& read_data) {

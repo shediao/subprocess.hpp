@@ -34,6 +34,14 @@ using subprocess::buffer;
 using subprocess::detail::Buffer;
 using subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
 
+static void read_write_to_buffer_use_poll(
+    std::optional<std::reference_wrapper<Buffer>> in,
+    std::optional<std::reference_wrapper<Buffer>> out,
+    std::optional<std::reference_wrapper<Buffer>> err) {
+  subprocess::detail::read_write_to_buffer_use_poll(
+      in, out, err, INVALID_NATIVE_HANDLE_VALUE);
+}
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -113,8 +121,7 @@ class MultiplexPollTest : public MultiplexTestBase {};
 
 TEST_F(MultiplexPollTest, AllHandlesNullopt) {
   // Should return immediately without side-effects.
-  subprocess::detail::read_write_to_buffer_use_poll(std::nullopt, std::nullopt,
-                                                    std::nullopt);
+  read_write_to_buffer_use_poll(std::nullopt, std::nullopt, std::nullopt);
   SUCCEED();
 }
 
@@ -126,8 +133,7 @@ TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
   buffer drained;
   std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
 
-  subprocess::detail::read_write_to_buffer_use_poll(std::ref(in_buf),
-                                                    std::nullopt, std::nullopt);
+  read_write_to_buffer_use_poll(std::ref(in_buf), std::nullopt, std::nullopt);
 
   drain_thread.join();
   EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
@@ -141,8 +147,7 @@ TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
 
   std::thread feeder([&]() { feed_and_close(out_buf.wfd(), out_data); });
 
-  subprocess::detail::read_write_to_buffer_use_poll(
-      std::nullopt, std::ref(out_buf), std::nullopt);
+  read_write_to_buffer_use_poll(std::nullopt, std::ref(out_buf), std::nullopt);
 
   feeder.join();
   EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
@@ -156,8 +161,7 @@ TEST_F(MultiplexPollTest, OnlyStderrActiveReadsData) {
 
   std::thread feeder([&]() { feed_and_close(err_buf.wfd(), err_data); });
 
-  subprocess::detail::read_write_to_buffer_use_poll(std::nullopt, std::nullopt,
-                                                    std::ref(err_buf));
+  read_write_to_buffer_use_poll(std::nullopt, std::nullopt, std::ref(err_buf));
 
   feeder.join();
   EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
@@ -181,8 +185,8 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   std::thread err_feeder(
       [&]() { feed_and_close(err_buf.wfd(), make_buf(err_str)); });
 
-  subprocess::detail::read_write_to_buffer_use_poll(
-      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
+  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
+                                std::ref(err_buf));
 
   drain_thread.join();
   out_feeder.join();
@@ -209,8 +213,8 @@ TEST_F(MultiplexPollTest, EmptyStdinBuffer) {
   // Pass an empty stdin Buffer (no data to write → immediately closes write
   // end).
   Buffer in_buf;  // default-constructed: empty buffer
-  subprocess::detail::read_write_to_buffer_use_poll(
-      std::ref(in_buf), std::ref(out_buf), std::nullopt);
+  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
+                                std::nullopt);
 
   feeder.join();
   EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
@@ -232,8 +236,8 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
   std::thread feeder(
       [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  subprocess::detail::read_write_to_buffer_use_poll(
-      std::ref(in_buf), std::ref(out_buf), std::nullopt);
+  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
+                                std::nullopt);
 
   drain_thread.join();
   feeder.join();

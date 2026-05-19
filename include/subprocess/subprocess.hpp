@@ -128,14 +128,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#if defined(__linux__)
-#include <sys/epoll.h>
-#endif
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
-    defined(__OpenBSD__)
-#include <sys/event.h>
-#endif
-#endif
+#endif  // !_WIN32
 
 #include <algorithm>
 #include <chrono>
@@ -297,76 +290,119 @@ inline bool stdin_is_atty() {
 #endif
 }
 
-class unique_fd {
- public:
-  unique_fd() : handle_(INVALID_NATIVE_HANDLE_VALUE) {}
-  explicit unique_fd(NativeHandle handle) : handle_(handle) {}
-  ~unique_fd() { close_native_handle(handle_); }
-  unique_fd(unique_fd&& other) noexcept : handle_(other.handle_) {
-    other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
+template <typename T>
+struct fd_traits;
+
+template <>
+struct fd_traits<NativeHandle> {
+  static NativeHandle invalid_value() {
+#if defined(_WIN32)
+    return INVALID_NATIVE_HANDLE_VALUE;
+#else
+    return -1;
+#endif
   }
-  unique_fd& operator=(unique_fd&& other) noexcept {
+};
+
+template <typename T, typename Derived, void (*deleter)(T&) = nullptr,
+          typename Trait = fd_traits<T>>
+class basic_unique_fd {
+ public:
+  basic_unique_fd() : handle_(Trait::invalid_value()) {}
+  explicit basic_unique_fd(NativeHandle handle) : handle_(handle) {}
+  ~basic_unique_fd() {
+    if (deleter) {
+      deleter(handle_);
+    }
+    handle_ = Trait::invalid_value();
+  }
+  basic_unique_fd(basic_unique_fd&& other) noexcept : handle_(other.handle_) {
+    other.handle_ = Trait::invalid_value();
+  }
+  basic_unique_fd& operator=(basic_unique_fd&& other) noexcept {
     if (this == &other) {
       return *this;
     }
-    close_native_handle(handle_);
+    if (deleter) {
+      deleter(handle_);
+    }
     handle_ = other.handle_;
-    other.handle_ = INVALID_NATIVE_HANDLE_VALUE;
+    other.handle_ = Trait::invalid_value();
     return *this;
   }
-  unique_fd(const unique_fd&) = delete;
-  unique_fd& operator=(const unique_fd&) = delete;
+  basic_unique_fd(const basic_unique_fd&) = delete;
+  basic_unique_fd& operator=(const basic_unique_fd&) = delete;
 
   NativeHandle get() const { return handle_; }
   explicit operator bool() const { return !invalid_handle(handle_); }
   NativeHandle release() {
     auto handle = handle_;
-    handle_ = INVALID_NATIVE_HANDLE_VALUE;
+    handle_ = Trait::invalid_value();
     return handle;
   }
-  void reset(NativeHandle handle = INVALID_NATIVE_HANDLE_VALUE) {
-    close_native_handle(handle_);
+  void reset(NativeHandle handle) {
+    if (deleter) {
+      deleter(handle_);
+    }
     handle_ = handle;
   }
 
-  void close() { reset(INVALID_NATIVE_HANDLE_VALUE); }
+  void swap(Derived& other) { std::swap(handle_, other.handle_); }
+
+  friend bool operator==(Derived const& lhs, Derived const& rhs) {
+    return lhs.handle_ == rhs.handle_;
+  }
+  friend bool operator!=(Derived const& lhs, Derived const& rhs) {
+    return lhs.handle_ != rhs.handle_;
+  }
+  friend bool operator==(Derived const& lhs, NativeHandle rhs) {
+    return lhs.handle_ == rhs;
+  }
+  friend bool operator!=(Derived const& lhs, NativeHandle rhs) {
+    return lhs.handle_ != rhs;
+  }
+  friend bool operator==(NativeHandle lhs, Derived const& rhs) {
+    return lhs == rhs.handle_;
+  }
+  friend bool operator!=(NativeHandle lhs, Derived const& rhs) {
+    return lhs != rhs.handle_;
+  }
+
+  friend void swap(Derived& lhs, Derived& rhs) { lhs.swap(rhs); }
+
+ private:
+  NativeHandle handle_;
+};
+
+class unique_fd
+    : public basic_unique_fd<NativeHandle, unique_fd, close_native_handle> {
+ public:
+  using basic_unique_fd::basic_unique_fd;
+
+  void close() { reset(fd_traits<NativeHandle>::invalid_value()); }
 
   unique_fd dup() const {
-    auto duped = dup_native_handle(handle_);
+    auto duped = dup_native_handle(get());
     if (invalid_handle(duped)) {
       return unique_fd{};
     }
     return unique_fd{duped};
   }
 
-  bool is_atty() const { return detail::is_atty(handle_); }
+  bool is_atty() const { return detail::is_atty(get()); }
 
 #if !defined(_WIN32)
-  void set_nonblocking() { detail::set_nonblocking(handle_); }
+  void set_nonblocking() { detail::set_nonblocking(get()); }
 #endif
-
-  friend bool operator==(unique_fd const& lhs, unique_fd const& rhs) {
-    return lhs.handle_ == rhs.handle_;
-  }
-  friend bool operator!=(unique_fd const& lhs, unique_fd const& rhs) {
-    return lhs.handle_ != rhs.handle_;
-  }
-  friend bool operator==(unique_fd const& lhs, NativeHandle rhs) {
-    return lhs.handle_ == rhs;
-  }
-  friend bool operator!=(unique_fd const& lhs, NativeHandle rhs) {
-    return lhs.handle_ != rhs;
-  }
-  friend bool operator==(NativeHandle lhs, unique_fd const& rhs) {
-    return lhs == rhs.handle_;
-  }
-  friend bool operator!=(NativeHandle lhs, unique_fd const& rhs) {
-    return lhs != rhs.handle_;
-  }
-
- private:
-  NativeHandle handle_;
 };
+
+#if !defined(_WIN32)
+class unique_pid
+    : public basic_unique_fd<NativeHandle, unique_pid, [](pid_t&) {}> {
+ public:
+  using basic_unique_fd::basic_unique_fd;
+};
+#endif
 
 class buffer {
   using callback = std::function<void(const unsigned char*, size_t)>;
@@ -814,6 +850,14 @@ inline std::map<std::string, std::string> get_all_env_vars() {
 
 class Pipe {
  public:
+  Pipe(Pipe&& other) = default;
+  Pipe& operator=(Pipe&& other) = default;
+
+  Pipe(Pipe const&) = default;
+  Pipe& operator=(Pipe const&) = default;
+
+  ~Pipe() = default;
+
   inline static Pipe create() {
     Pipe p;
     p.create_native_pipe(*p.pair_);
@@ -940,6 +984,8 @@ struct File {
     return *this;
   }
   ~File() = default;
+  File(File const&) = delete;
+  File& operator=(File const&) = delete;
 
   void open_for_read() { open_impl(OpenType::ReadOnly); }
   void open_for_write() {
@@ -1030,6 +1076,13 @@ class FileHandler {
  public:
   explicit FileHandler(NativeHandle f) : fd_{f} {}
   explicit FileHandler(unique_fd&& f) : fd_{std::move(f)} {}
+
+  FileHandler(FileHandler&& o) = default;
+  FileHandler& operator=(FileHandler&& o) = default;
+  ~FileHandler() = default;
+  FileHandler(FileHandler const&) = delete;
+  FileHandler& operator=(FileHandler const&) = delete;
+
   [[nodiscard]] unique_fd const& fd() const { return fd_; }
   void close() { fd_.close(); }
 
@@ -1067,6 +1120,12 @@ class Buffer {
   Buffer()
       : buf_{std::make_shared<value_type>(buffer_container_type{})},
         pipe_{Pipe::create()} {}
+
+  Buffer(Buffer&& o) = default;
+  Buffer& operator=(Buffer&& o) = default;
+  ~Buffer() = default;
+  Buffer(Buffer const&) = delete;
+  Buffer& operator=(Buffer const&) = delete;
 
   [[nodiscard]] ssize_t read_some() const {
     char tmp[1024];
@@ -1198,7 +1257,7 @@ inline void read_write_to_buffer_with_threads(
 inline void read_write_to_buffer_use_poll(
     std::optional<std::reference_wrapper<Buffer>> in,
     std::optional<std::reference_wrapper<Buffer>> out,
-    std::optional<std::reference_wrapper<Buffer>> err, NativeHandle child_pid,
+    std::optional<std::reference_wrapper<Buffer>> err, pid_t child_pid,
     int* child_status = nullptr) {
   if (in) {
     in->get().wfd().set_nonblocking();
@@ -1361,14 +1420,6 @@ inline void read_write_to_buffer_use_poll(
   }
 }
 
-// Convenience overload without child pid — blocks until pipes close naturally.
-[[maybe_unused]]
-inline void read_write_to_buffer_use_poll(
-    std::optional<std::reference_wrapper<Buffer>> in,
-    std::optional<std::reference_wrapper<Buffer>> out,
-    std::optional<std::reference_wrapper<Buffer>> err) {
-  read_write_to_buffer_use_poll(in, out, err, INVALID_NATIVE_HANDLE_VALUE);
-}
 #endif
 
 class Redirector {
@@ -2278,12 +2329,12 @@ class subprocess {
       }
       execute_command_in_child();
     } else {
-      pid_ = pid;
+      pid_.reset(pid);
       if (requested_pgid_.has_value()) {
         auto target_pgid =
             requested_pgid_.value() == 0 ? pid : requested_pgid_.value();
         (void)setpgid(pid, target_pgid);
-        pgid_ = target_pgid;
+        pgid_.reset(target_pgid);
       }
       launch_watchdog();
       pump_pipe_data();
@@ -2326,7 +2377,7 @@ class subprocess {
   }
 #else
   int wait_for_exit() {
-    if (invalid_handle(pid_)) {
+    if (!pid_) {
       stop_watchdog();
       return 127;
     }
@@ -2334,7 +2385,7 @@ class subprocess {
     if (!child_reaped_early_) {
       int wait_ret;
       do {
-        wait_ret = waitpid(pid_, &status, 0);
+        wait_ret = waitpid(pid_.get(), &status, 0);
       } while (wait_ret == -1 && errno == EINTR);
     } else {
       // Child was already reaped by pump_pipe_data() when it detected
@@ -2350,17 +2401,19 @@ class subprocess {
     } else if (WIFSIGNALED(status)) {
       return_code = 128 + (WTERMSIG(status));
     }
+
+    pid_.reset(-1);
     return return_code;
   }
 #endif
 
-  [[nodiscard]] NativeHandle pid() const {
 #if defined(_WIN32)
+  [[nodiscard]] NativeHandle pid() const {
     return process_information_.hProcess;
-#else
-    return pid_;
-#endif
   }
+#else
+  [[nodiscard]] pid_t pid() const { return pid_.get(); }
+#endif
 
  private:
   void terminate() {
@@ -2370,16 +2423,16 @@ class subprocess {
       job_handle_->close();
     }
 #else
-    if (invalid_handle(pid_)) {
+    if (-1 == pid_) {
       return;
     }
     // Only kill the entire process group when a group was explicitly
     // created AND the child is the process group leader (pid == pgid).
     // This prevents accidentally killing unrelated processes that may
     // share the same process group.
-    auto kill_pid = pid_;
-    if (!invalid_handle(pgid_) && pid_ == pgid_) {
-      kill_pid = -pid_;
+    auto kill_pid = pid_.get();
+    if ((-1 != pgid_) && pid_.get() == pgid_.get()) {
+      kill_pid = -pid_.get();
     }
     kill(kill_pid, SIGTERM);
     // Give the process group a short grace period to handle SIGTERM,
@@ -2416,7 +2469,7 @@ class subprocess {
     // Also pass a pointer to early_exit_status_ so that if the child is
     // reaped during polling, wait_for_exit() can retrieve the status.
     read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
-                                  stderr_.get_buffer(), pid_,
+                                  stderr_.get_buffer(), pid_.get(),
                                   &early_exit_status_);
     // Check whether the child was reaped during the poll loop.  If it was,
     // record that fact so wait_for_exit() can skip the waitpid call.
@@ -2424,7 +2477,7 @@ class subprocess {
       int status = 0;
       pid_t result;
       do {
-        result = ::waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
+        result = ::waitpid(pid_.get(), &status, WNOHANG);
       } while (result == -1 && errno == EINTR);
       if (result > 0) {
         // Child just exited — store status.
@@ -2511,9 +2564,9 @@ class subprocess {
   STARTUPINFOEXW startup_info_{};
   std::vector<unsigned char> proc_thread_attr_list_;
 #else
-  NativeHandle pid_{INVALID_NATIVE_HANDLE_VALUE};
-  NativeHandle pgid_{INVALID_NATIVE_HANDLE_VALUE};
-  std::optional<NativeHandle> requested_pgid_{std::nullopt};
+  unique_pid pid_{-1};
+  unique_pid pgid_{-1};
+  std::optional<pid_t> requested_pgid_{std::nullopt};
   bool background_explicit_{false};
   // When the child is reaped early by pump_pipe_data() (because it exited
   // while the poll loop was still draining pipe data), the exit status is
@@ -2553,7 +2606,7 @@ class pipeline {
       if (it == subs_.begin()) {
         it->requested_pgid_ = 0;
       } else {
-        it->requested_pgid_ = subs_.begin()->pid_;
+        it->requested_pgid_ = subs_.begin()->pid();
       }
 #endif
       it->async_run();
