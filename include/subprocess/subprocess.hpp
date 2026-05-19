@@ -116,8 +116,6 @@
 #if defined(_WIN32)
 #include <io.h>
 #include <windows.h>
-
-#include <locale>
 #else
 #include <fcntl.h>
 #include <limits.h>
@@ -192,7 +190,7 @@ inline std::wstring utf8_to_utf16(const std::string_view str) {
     return {};
   }
   std::wstring wstr(static_cast<size_t>(size_needed), 0);
-  MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstr[0],
+  MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), wstr.data(),
                       size_needed);
   return wstr;
 }
@@ -209,7 +207,7 @@ inline std::string utf16_to_utf8(const std::wstring_view wstr) {
     return {};
   }
   std::string str(static_cast<size_t>(size_needed), 0);
-  WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), &str[0],
+  WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), str.data(),
                       size_needed, NULL, NULL);
   return str;
 }
@@ -304,20 +302,20 @@ struct fd_traits<NativeHandle> {
 
 template <typename T, typename Derived, void (*deleter)(T&) = nullptr,
           typename Trait = fd_traits<T>>
-class basic_unique_fd {
+class unique_fd_base {
  public:
-  basic_unique_fd() : handle_(Trait::invalid_value()) {}
-  explicit basic_unique_fd(NativeHandle handle) : handle_(handle) {}
-  ~basic_unique_fd() {
+  unique_fd_base() : handle_(Trait::invalid_value()) {}
+  explicit unique_fd_base(NativeHandle handle) : handle_(handle) {}
+  ~unique_fd_base() {
     if (deleter) {
       deleter(handle_);
     }
     handle_ = Trait::invalid_value();
   }
-  basic_unique_fd(basic_unique_fd&& other) noexcept : handle_(other.handle_) {
+  unique_fd_base(unique_fd_base&& other) noexcept : handle_(other.handle_) {
     other.handle_ = Trait::invalid_value();
   }
-  basic_unique_fd& operator=(basic_unique_fd&& other) noexcept {
+  unique_fd_base& operator=(unique_fd_base&& other) noexcept {
     if (this == &other) {
       return *this;
     }
@@ -328,8 +326,8 @@ class basic_unique_fd {
     other.handle_ = Trait::invalid_value();
     return *this;
   }
-  basic_unique_fd(const basic_unique_fd&) = delete;
-  basic_unique_fd& operator=(const basic_unique_fd&) = delete;
+  unique_fd_base(const unique_fd_base&) = delete;
+  unique_fd_base& operator=(const unique_fd_base&) = delete;
 
   NativeHandle get() const { return handle_; }
   explicit operator bool() const { return !invalid_handle(handle_); }
@@ -373,9 +371,9 @@ class basic_unique_fd {
 };
 
 class unique_fd
-    : public basic_unique_fd<NativeHandle, unique_fd, close_native_handle> {
+    : public unique_fd_base<NativeHandle, unique_fd, close_native_handle> {
  public:
-  using basic_unique_fd::basic_unique_fd;
+  using unique_fd_base::unique_fd_base;
 
   void close() { reset(fd_traits<NativeHandle>::invalid_value()); }
 
@@ -398,9 +396,9 @@ class unique_fd
 inline void noop_pid_deleter(pid_t&) {}
 
 class unique_pid
-    : public basic_unique_fd<NativeHandle, unique_pid, noop_pid_deleter> {
+    : public unique_fd_base<NativeHandle, unique_pid, noop_pid_deleter> {
  public:
-  using basic_unique_fd::basic_unique_fd;
+  using unique_fd_base::unique_fd_base;
 };
 #endif
 
@@ -2543,7 +2541,7 @@ class subprocess {
 
 #if defined(_WIN32)
   std::vector<std::wstring> cmd_;
-  std::wstring cwd_{};
+  std::wstring cwd_;
   std::map<std::wstring, std::wstring> env_;
 #else
   std::vector<std::string> cmd_;
