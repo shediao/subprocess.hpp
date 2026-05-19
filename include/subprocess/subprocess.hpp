@@ -2423,7 +2423,7 @@ class subprocess {
  private:
   void terminate() {
 #if defined(_WIN32)
-    if (*job_handle_) {
+    if (job_handle_ && *job_handle_) {
       TerminateJobObject(job_handle_->get(), 1);
       job_handle_->close();
     }
