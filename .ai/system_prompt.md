@@ -101,6 +101,13 @@ gh run list --status failure --limit 5
 gh run view <run-id> --log --job <job-id>
 ```
 
+**When fetching logs with `gh` commands, always prefer getting only the key information rather than the full logs unless absolutely necessary.** For example:
+
+- Use `gh run view <run-id> --log --failed` to get only failed step logs (if supported).
+- Pipe through `grep` to filter for error messages, failed test names, or compilation errors: `gh run view <run-id> --log 2>&1 | grep -E '(error:|FAILED|failure)'`.
+- For test failures, look for the specific test output rather than the entire build log.
+- Only fetch full logs when the filtered output does not provide enough context to diagnose the issue.
+
 After getting the logs, identify the specific failure cause based on the error messages in the logs (compilation errors, test failures, environment issues, etc.), then make targeted fixes.
 
 **Fix Verification**: If the failure occurs on a platform different from the current machine (e.g., currently on macOS ARM64, but the failure is on Linux x86_64), and a corresponding cross-compilation environment `build/{platform}-{arch}/` exists locally, after fixing, you **must** verify the build through that cross-compilation environment to ensure the fix also passes on the target platform:
