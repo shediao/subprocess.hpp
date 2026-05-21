@@ -1,5 +1,19 @@
 set(CMAKE_CXX_STANDARD 20)
 
+# ── Coverage: validate LLVM toolchain when enabled ────────────────────
+if(SUBPROCESS_ENABLE_COVERAGE)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR
+      "SUBPROCESS_ENABLE_COVERAGE=ON requires Clang (LLVM) compiler. "
+      "Current compiler: ${CMAKE_CXX_COMPILER_ID}")
+  endif()
+  find_program(LLVM_PROFDATA_EXECUTABLE llvm-profdata REQUIRED)
+  find_program(LLVM_COV_EXECUTABLE llvm-cov REQUIRED)
+  message(STATUS "Coverage enabled")
+  message(STATUS "  llvm-profdata: ${LLVM_PROFDATA_EXECUTABLE}")
+  message(STATUS "  llvm-cov:      ${LLVM_COV_EXECUTABLE}")
+endif()
+
 # Default ENABLE_ASAN to ON only for Debug builds, unless user explicitly sets
 # it.
 if(NOT DEFINED SUBPROCESS_ENABLE_ASAN)
@@ -148,6 +162,13 @@ function(add_subprocess_test_suite test_name)
         "$<$<CONFIG:Debug>:${SUBPROCESS_SANITIZER_LINK_FLAGS}>")
     endif()
 
+    # Coverage flags (Clang source-based instrumentation)
+    if(SUBPROCESS_ENABLE_COVERAGE)
+      target_compile_options(${target_name}
+                             PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+      target_link_options(${target_name} PRIVATE -fprofile-instr-generate)
+    endif()
+
     # Set compile definitions for the UNICODE variant on Windows
     if(NOT variant STREQUAL "ansi")
       target_compile_definitions(${target_name} PRIVATE UNICODE _UNICODE)
@@ -188,3 +209,20 @@ foreach(test_source IN LISTS test_sources)
 endforeach()
 
 add_subprocess_test_suite(all_test "${test_sources}")
+
+# ── Coverage target ──────────────────────────────────────────────────
+if(SUBPROCESS_ENABLE_COVERAGE)
+  add_custom_target(coverage
+    COMMAND ${CMAKE_COMMAND}
+      -D "COVERAGE_BINARY_DIR=${CMAKE_BINARY_DIR}"
+      -D "ALL_TEST_BINARY=$<TARGET_FILE:all_test>"
+      -D "LLVM_PROFDATA=${LLVM_PROFDATA_EXECUTABLE}"
+      -D "LLVM_COV=${LLVM_COV_EXECUTABLE}"
+      -D "CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/run_coverage.cmake"
+    DEPENDS all_test
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    COMMENT "Running tests and generating code coverage reports..."
+    VERBATIM
+  )
+endif()

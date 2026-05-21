@@ -9,6 +9,7 @@ set("PROJECT_HOMEPAGE_URL" "https://github.com/shediao/subprocess.hpp")
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
   option(SUBPROCESS_BUILD_TESTS "Set to ON to build tests" ON)
+  option(SUBPROCESS_ENABLE_COVERAGE "Enable code coverage using LLVM toolchain" OFF)
 else()
   option(SUBPROCESS_BUILD_TESTS "Set to ON to build tests" OFF)
 endif()
