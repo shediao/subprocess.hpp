@@ -3,9 +3,10 @@ set(CMAKE_CXX_STANDARD 20)
 # ── Coverage: validate LLVM toolchain when enabled ────────────────────
 if(SUBPROCESS_ENABLE_COVERAGE)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR
-      "SUBPROCESS_ENABLE_COVERAGE=ON requires Clang (LLVM) compiler. "
-      "Current compiler: ${CMAKE_CXX_COMPILER_ID}")
+    message(
+      FATAL_ERROR
+        "SUBPROCESS_ENABLE_COVERAGE=ON requires Clang (LLVM) compiler. "
+        "Current compiler: ${CMAKE_CXX_COMPILER_ID}")
   endif()
   find_program(LLVM_PROFDATA_EXECUTABLE llvm-profdata REQUIRED)
   find_program(LLVM_COV_EXECUTABLE llvm-cov REQUIRED)
@@ -164,8 +165,8 @@ function(add_subprocess_test_suite test_name)
 
     # Coverage flags (Clang source-based instrumentation)
     if(SUBPROCESS_ENABLE_COVERAGE)
-      target_compile_options(${target_name}
-                             PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+      target_compile_options(${target_name} PRIVATE -fprofile-instr-generate
+                                                    -fcoverage-mapping)
       target_link_options(${target_name} PRIVATE -fprofile-instr-generate)
     endif()
 
@@ -212,17 +213,17 @@ add_subprocess_test_suite(all_test "${test_sources}")
 
 # ── Coverage target ──────────────────────────────────────────────────
 if(SUBPROCESS_ENABLE_COVERAGE)
-  add_custom_target(coverage
-    COMMAND ${CMAKE_COMMAND}
-      -D "COVERAGE_BINARY_DIR=${CMAKE_BINARY_DIR}"
-      -D "ALL_TEST_BINARY=$<TARGET_FILE:all_test>"
-      -D "LLVM_PROFDATA=${LLVM_PROFDATA_EXECUTABLE}"
-      -D "LLVM_COV=${LLVM_COV_EXECUTABLE}"
-      -D "CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/run_coverage.cmake"
+  add_custom_target(
+    coverage
+    COMMAND
+      ${CMAKE_COMMAND} -D "COVERAGE_BINARY_DIR=${CMAKE_BINARY_DIR}" -D
+      "ALL_TEST_BINARY=$<TARGET_FILE:all_test>" -D
+      "LLVM_PROFDATA=${LLVM_PROFDATA_EXECUTABLE}" -D
+      "LLVM_COV=${LLVM_COV_EXECUTABLE}" -D
+      "CTEST_COMMAND=${CMAKE_CTEST_COMMAND}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/run_coverage.cmake"
     DEPENDS all_test
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     COMMENT "Running tests and generating code coverage reports..."
-    VERBATIM
-  )
+    VERBATIM)
 endif()
