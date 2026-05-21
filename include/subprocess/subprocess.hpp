@@ -561,43 +561,35 @@ inline void append_windows_arg(std::vector<wchar_t>& cmd,
                                std::wstring const& arg) {
   bool needs_quoting =
       arg.empty() || arg.find_first_of(L" \t\n\v\"") != std::wstring::npos;
-  if (needs_quoting && (arg.size() > 1) && arg[0] == L'\"' &&
-      arg.find(L'\"') == (arg.size() - 1)) {
-    needs_quoting = false;
+  if (!cmd.empty()) {
+    cmd.push_back(L' ');
   }
   if (!needs_quoting) {
     cmd.insert(cmd.end(), arg.begin(), arg.end());
     return;
   }
   cmd.push_back(L'"');
+  size_t backslashes = 0;
   // Count backslashes and handle escaped quotes
   for (auto it = arg.begin(); it != arg.end(); ++it) {
     if (*it == L'\\') {
-      // Count consecutive backslashes
-      auto start = it;
-      while (it != arg.end() && *it == L'\\') {
-        ++it;
-      }
-      size_t backslash_count = static_cast<size_t>(it - start);
-      if (it == arg.end() || *it == L'"') {
-        // Backslashes before a quote or at end: double them
-        backslash_count *= 2;
-      }
-      cmd.insert(cmd.end(), backslash_count, L'\\');
-      if (it == arg.end()) {
-        break;
-      }
-      // Now handle the non-backslash character
-      if (*it == L'"') {
-        cmd.push_back(L'\\');
-      }
-      cmd.push_back(*it);
+      ++backslashes;
     } else if (*it == L'"') {
-      cmd.push_back(L'\\');
-      cmd.push_back(L'"');
+      for (size_t i = 0; i < backslashes * 2 +1; i++) {
+        cmd.push_back('\\');
+      }
+      backslashes = 0;
+      cmd.push_back('"');
     } else {
+      for (size_t i = 0; i < backslashes; i++) {
+        cmd.push_back('\\');
+      }
+      backslashes = 0;
       cmd.push_back(*it);
     }
+  }
+  for (size_t i = 0; i < backslashes * 2; i++) {
+    cmd.push_back('\\');
   }
   cmd.push_back(L'"');
 }
@@ -610,7 +602,6 @@ inline std::vector<wchar_t> argv_to_command_line_string(
   }
   append_windows_arg(command, cmds[0]);
   for (auto it = std::next(cmds.begin()); it != cmds.end(); ++it) {
-    command.push_back(L' ');
     append_windows_arg(command, *it);
   }
   command.push_back(L'\0');
