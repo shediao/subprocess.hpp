@@ -457,3 +457,96 @@ TEST(ReadWriteSomeTest, PipeLargeDataWriteAllReadExact) {
   ASSERT_TRUE(pipe.read_exact(out.data(), out.size()));
   ASSERT_EQ(out, large);
 }
+
+// ===========================================================================
+// read_write_to_buffer_with_threads — verify pipe fds are closed afterward
+//
+// Guards against regressions where close_read() / close_write() are
+// accidentally removed from the I/O pump function.
+// ===========================================================================
+
+TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdsForOutputBuffers) {
+  // Simulate stdout and stderr buffers that have data written to their
+  // pipes.  After the pump runs, the read ends must be closed.
+  Buffer out_buf;
+  Buffer err_buf;
+
+  // Write data into each buffer's pipe, then close the write end to signal
+  // EOF — exactly what happens when the child process exits.
+  const char out_data[] = "hello_stdout";
+  subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
+  out_buf.close_write();
+
+  const char err_data[] = "hello_stderr";
+  subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
+  err_buf.close_write();
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::nullopt, std::ref(out_buf), std::ref(err_buf));
+
+  // After the pump returns, read fds must be closed.
+  ASSERT_FALSE(out_buf.rfd()) << "stdout read fd should be closed after pump";
+  ASSERT_FALSE(err_buf.rfd()) << "stderr read fd should be closed after pump";
+
+  // Data should have been consumed correctly.
+  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
+  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+}
+
+TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdForEmptyOutputBuffer) {
+  // Even when there is no data (EOF immediately), the read fd must be closed.
+  Buffer out_buf;
+  out_buf.close_write();  // EOF before any data
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::nullopt, std::ref(out_buf), std::nullopt);
+
+  ASSERT_FALSE(out_buf.rfd())
+      << "read fd should be closed even for empty output";
+  ASSERT_TRUE(out_buf.buf().empty());
+}
+
+TEST(ReadWriteSomeTest, PumpThreadsClosesWriteFdForInputBuffer) {
+  // The stdin path must close the write end of the pipe after writing all
+  // data.  (close_write() was already present before the close_read() fix;
+  // this guards against future regressions.)
+  subprocess::buffer data{"stdin_data_for_pump"};
+  Buffer in_buf(data);
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::ref(in_buf), std::nullopt, std::nullopt);
+
+  ASSERT_FALSE(in_buf.wfd()) << "stdin write fd should be closed after pump";
+
+  // Read back what was written through the pipe.
+  char out[64] = {};
+  auto n = subprocess::detail::read_some(in_buf.rfd(), out, sizeof(out));
+  ASSERT_GT(n, 0);
+  ASSERT_EQ(std::string(out, static_cast<size_t>(n)), data.to_string());
+}
+
+TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
+  // Full scenario: stdin + stdout + stderr.
+  subprocess::buffer in_data{"pump_full_duplex"};
+  Buffer in_buf(in_data);
+
+  Buffer out_buf;
+  const char out_data[] = "full_duplex_out";
+  subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
+  out_buf.close_write();
+
+  Buffer err_buf;
+  const char err_data[] = "full_duplex_err";
+  subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
+  err_buf.close_write();
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
+
+  ASSERT_FALSE(in_buf.wfd()) << "stdin write fd should be closed";
+  ASSERT_FALSE(out_buf.rfd()) << "stdout read fd should be closed";
+  ASSERT_FALSE(err_buf.rfd()) << "stderr read fd should be closed";
+
+  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
+  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+}

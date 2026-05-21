@@ -1227,6 +1227,7 @@ inline void read_write_to_buffer_with_threads(
           do {
             read_size = buf.read_some();
           } while (read_size > 0);
+          buf.close_read();
           if (read_size == -1) {
             print_error("read_some() failed: " + get_last_error_message());
           }
