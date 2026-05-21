@@ -253,4 +253,120 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
   EXPECT_EQ(out_buf.buf(), output_str);
 }
 
+// ===========================================================================
+// Full lifecycle: close_child_end + pump (simulates pump_pipe_data)
+//
+// These tests verify that after the complete I/O pump cycle (simulating
+// close_child_end() followed by read_write_to_buffer_use_poll()), ALL
+// pipe handles for ALL three buffers are properly closed.  The Redirector
+// destructor previously printed cerr messages when handles were left open;
+// these tests replace that runtime check with explicit assertions.
+// ===========================================================================
+
+TEST_F(MultiplexPollTest, FullLifecycleStdoutBothEndsClosed) {
+  // stdout: child writes to wfd, parent reads from rfd.
+  // Simulates close_child_end (close child write end) + pump (close parent
+  // read end).
+  auto output_str = std::string("lifecycle_stdout_poll");
+  Buffer out_buf;
+
+  // Write data into the pipe first, then close the write end (child side).
+  auto out_data = make_buf(output_str);
+  feed_and_close(out_buf.wfd(), out_data);
+  out_buf.close_write();  // sync unique_fd state
+
+  read_write_to_buffer_use_poll(std::nullopt, std::ref(out_buf), std::nullopt);
+
+  // Both ends must be closed after the full cycle.
+  ASSERT_FALSE(out_buf.rfd()) << "stdout parent read fd should be closed";
+  ASSERT_FALSE(out_buf.wfd()) << "stdout child write fd should be closed";
+  ASSERT_EQ(out_buf.buf(), output_str);
+}
+
+TEST_F(MultiplexPollTest, FullLifecycleStderrBothEndsClosed) {
+  // stderr: child writes to wfd, parent reads from rfd.
+  auto err_str = std::string("lifecycle_stderr_poll");
+  Buffer err_buf;
+
+  auto err_data = make_buf(err_str);
+  feed_and_close(err_buf.wfd(), err_data);
+  err_buf.close_write();  // sync unique_fd state
+
+  read_write_to_buffer_use_poll(std::nullopt, std::nullopt, std::ref(err_buf));
+
+  ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd should be closed";
+  ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd should be closed";
+  ASSERT_EQ(err_buf.buf(), err_str);
+}
+
+TEST_F(MultiplexPollTest, FullLifecycleStdinBothEndsClosed) {
+  // stdin: parent writes to wfd, child reads from rfd.
+  auto input_str = std::string("lifecycle_stdin_poll");
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  // NOTE: do NOT close read end before the drain thread starts —
+  // in the real subprocess the child holds a dup'd copy of the read end
+  // and close_child_end() only closes the parent's copy.
+
+  buffer drained;
+  std::thread drain_thread([&]() {
+    drain_fd(in_buf.rfd(), drained);
+    in_buf.close_read();  // child closes its end after reading
+  });
+
+  read_write_to_buffer_use_poll(std::ref(in_buf), std::nullopt, std::nullopt);
+  drain_thread.join();
+
+  ASSERT_FALSE(in_buf.wfd()) << "stdin parent write fd should be closed";
+  ASSERT_FALSE(in_buf.rfd()) << "stdin child read fd should be closed";
+  ASSERT_EQ(drained, input_str);
+}
+
+TEST_F(MultiplexPollTest, FullLifecycleAllThreeAllHandlesClosed) {
+  // stdin + stdout + stderr, all with close_child_end simulation.
+  auto input_str = std::string("in_lifecycle_poll");
+  auto output_str = std::string("out_lifecycle_poll");
+  auto err_str = std::string("err_lifecycle_poll");
+
+  buffer in_data = make_buf(input_str);
+  Buffer in_buf(in_data);
+  Buffer out_buf;
+  Buffer err_buf;
+
+  // Feed stdout and stderr data, then close the write ends (child side).
+  auto out_data = make_buf(output_str);
+  feed_and_close(out_buf.wfd(), out_data);
+  out_buf.close_write();  // sync unique_fd
+
+  auto err_feeder_data = make_buf(err_str);
+  feed_and_close(err_buf.wfd(), err_feeder_data);
+  err_buf.close_write();  // sync unique_fd
+
+  // Drain thread for stdin (simulates child reading).
+  buffer drained;
+  std::thread drain_thread([&]() {
+    drain_fd(in_buf.rfd(), drained);
+    in_buf.close_read();
+  });
+
+  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
+                                std::ref(err_buf));
+
+  drain_thread.join();
+
+  // All six pipe handles must be closed.
+  ASSERT_FALSE(in_buf.wfd()) << "stdin parent write fd";
+  ASSERT_FALSE(in_buf.rfd()) << "stdin child read fd";
+  ASSERT_FALSE(out_buf.rfd()) << "stdout parent read fd";
+  ASSERT_FALSE(out_buf.wfd()) << "stdout child write fd";
+  ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd";
+  ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd";
+
+  yield_for_threads();
+
+  ASSERT_EQ(drained, input_str);
+  ASSERT_EQ(out_buf.buf(), output_str);
+  ASSERT_EQ(err_buf.buf(), err_str);
+}
+
 #endif  // !defined(_WIN32)

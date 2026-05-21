@@ -36,6 +36,9 @@ using subprocess::detail::File;
 using subprocess::detail::FileHandler;
 using subprocess::detail::Pipe;
 using subprocess::detail::unique_fd;
+#if defined(_WIN32)
+using subprocess::detail::ssize_t;
+#endif
 
 // ===========================================================================
 // detail::read_some / detail::write_some — low-level free functions
@@ -547,6 +550,122 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
   ASSERT_FALSE(out_buf.rfd()) << "stdout read fd should be closed";
   ASSERT_FALSE(err_buf.rfd()) << "stderr read fd should be closed";
 
+  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
+  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+}
+
+// ===========================================================================
+// Full lifecycle: close_child_end + pump (simulates pump_pipe_data)
+//
+// In the real subprocess flow, close_child_end() closes the child-facing
+// pipe end, then read_write_to_buffer_*() closes the parent-facing end.
+// After both, ALL pipe handles must be invalid — the Redirector destructor
+// previously verified this with cerr messages; now we verify it in tests.
+// ===========================================================================
+
+TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdoutBuffer) {
+  // stdout: child writes to wfd, parent reads from rfd
+  Buffer out_buf;
+  const char out_data[] = "lifecycle_stdout";
+  subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
+  out_buf.close_write();  // simulate child exit (close_child_end equivalent)
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::nullopt, std::ref(out_buf), std::nullopt);
+
+  ASSERT_FALSE(out_buf.rfd()) << "stdout parent read fd should be closed";
+  ASSERT_FALSE(out_buf.wfd()) << "stdout child write fd should be closed";
+  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
+}
+
+TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStderrBuffer) {
+  // stderr: child writes to wfd, parent reads from rfd
+  Buffer err_buf;
+  const char err_data[] = "lifecycle_stderr";
+  subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
+  err_buf.close_write();  // simulate child exit
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::nullopt, std::nullopt, std::ref(err_buf));
+
+  ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd should be closed";
+  ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd should be closed";
+  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+}
+
+TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdinBuffer) {
+  // stdin: parent writes to wfd, child reads from rfd.
+  // close_child_end() closes the parent's copy of the child read end,
+  // but the child still has its dup'd copy — simulate with a drain thread.
+  subprocess::buffer data{"lifecycle_stdin"};
+  Buffer in_buf(data);
+
+  subprocess::buffer drained;
+  std::thread drain_thread([&]() {
+    char buf[256];
+    ssize_t n;
+    while ((n = subprocess::detail::read_some(in_buf.rfd(), buf, sizeof(buf))) >
+           0) {
+      drained.append(buf, static_cast<size_t>(n));
+    }
+    in_buf.close_read();  // child closes its end after reading
+  });
+
+  // Parent closes its copy of the child read end (simulating close_child_end).
+  // The child's drain thread still holds the dup'd read end.
+  // NOTE: we skip close_read() here because the drain thread needs it.
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::ref(in_buf), std::nullopt, std::nullopt);
+
+  drain_thread.join();
+
+  ASSERT_FALSE(in_buf.wfd()) << "stdin parent write fd should be closed";
+  ASSERT_FALSE(in_buf.rfd()) << "stdin child read fd should be closed";
+  ASSERT_EQ(drained, data);
+}
+
+TEST(ReadWriteSomeTest, FullLifecycleAllThreeBuffersAllHandlesClosed) {
+  // stdin + stdout + stderr, all with close_child_end simulation.
+  subprocess::buffer in_data{"lifecycle_in"};
+  Buffer in_buf(in_data);
+
+  Buffer out_buf;
+  const char out_data[] = "lifecycle_out";
+  subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
+  out_buf.close_write();
+
+  Buffer err_buf;
+  const char err_data[] = "lifecycle_err";
+  subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
+  err_buf.close_write();
+
+  // Drain thread simulates the child reading from stdin.
+  subprocess::buffer drained;
+  std::thread drain_thread([&]() {
+    char buf[256];
+    ssize_t n;
+    while ((n = subprocess::detail::read_some(in_buf.rfd(), buf, sizeof(buf))) >
+           0) {
+      drained.append(buf, static_cast<size_t>(n));
+    }
+    in_buf.close_read();
+  });
+
+  subprocess::detail::read_write_to_buffer_with_threads(
+      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
+
+  drain_thread.join();
+
+  // All pipe handles must be closed — both parent and child ends.
+  ASSERT_FALSE(in_buf.wfd()) << "stdin parent write fd";
+  ASSERT_FALSE(in_buf.rfd()) << "stdin child read fd";
+  ASSERT_FALSE(out_buf.rfd()) << "stdout parent read fd";
+  ASSERT_FALSE(out_buf.wfd()) << "stdout child write fd";
+  ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd";
+  ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd";
+
+  ASSERT_EQ(drained, in_data);
   ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
   ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
 }

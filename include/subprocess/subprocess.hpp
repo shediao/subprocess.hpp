@@ -575,7 +575,7 @@ inline void append_windows_arg(std::vector<wchar_t>& cmd,
     if (*it == L'\\') {
       ++backslashes;
     } else if (*it == L'"') {
-      for (size_t i = 0; i < backslashes * 2 +1; i++) {
+      for (size_t i = 0; i < backslashes * 2 + 1; i++) {
         cmd.push_back('\\');
       }
       backslashes = 0;
@@ -1335,6 +1335,8 @@ inline void read_write_to_buffer_use_poll(
       if (write_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           print_error("write() error: " + std::to_string(errno));
+          in->get().close_write();
+          fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
           break;
         }
       }
@@ -1355,6 +1357,8 @@ inline void read_write_to_buffer_use_poll(
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           print_error(get_last_error_message());
+          out->get().close_read();
+          fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
           break;
         }
       }
@@ -1375,6 +1379,8 @@ inline void read_write_to_buffer_use_poll(
       if (read_count == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
           print_error(get_last_error_message());
+          err->get().close_read();
+          fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
           break;
         }
       }
@@ -1434,31 +1440,7 @@ class Redirector {
   Redirector& operator=(Redirector&&) noexcept = default;
   Redirector(Redirector const&) = delete;
   Redirector& operator=(Redirector const&) = delete;
-  virtual ~Redirector() {
-    if (!redirect_) {
-      return;
-    }
-    std::visit(
-        []<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
-            if (value.rfd()) {
-              std::cerr << ">> pipe read handle not closed!" << '\n';
-            }
-            if (value.wfd()) {
-              std::cerr << ">> pipe write handle not closed!" << '\n';
-            }
-
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
-            if (value.rfd()) {
-              std::cerr << ">> buffer pipe read handle not closed!" << '\n';
-            }
-            if (value.wfd()) {
-              std::cerr << ">> buffer pipe write handle not closed!" << '\n';
-            }
-          }
-        },
-        *redirect_);
-  }
+  virtual ~Redirector() = default;
 
   [[nodiscard]] std::unique_ptr<value_type> dup() const {
     if (!redirect_) {
