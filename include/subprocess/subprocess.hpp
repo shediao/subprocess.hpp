@@ -2111,7 +2111,9 @@ class subprocess {
                cwd_ = arg.cwd;
              }
              if constexpr (std::is_same_v<ArgType, Newgroup>) {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+               newgroup_ = arg.newgroup;
+#else
                if (arg.newgroup) {
                  requested_pgid_ = 0;
                } else {
@@ -2336,12 +2338,17 @@ class subprocess {
     auto env_block = create_environment_string_data(env_);
 
     PROCESS_INFORMATION pi{};
-    auto success = CreateProcessW(
-        app_path.empty() ? nullptr : app_path.c_str(), command.data(), NULL,
-        NULL, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-        env_block.empty() ? nullptr : env_block.data(),
-        cwd_.empty() ? nullptr : cwd_.data(),
-        reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &pi);
+    DWORD creation_flags =
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+    if (newgroup_) {
+      creation_flags |= CREATE_NEW_PROCESS_GROUP;
+    }
+    auto success =
+        CreateProcessW(app_path.empty() ? nullptr : app_path.c_str(),
+                       command.data(), NULL, NULL, TRUE, creation_flags,
+                       env_block.empty() ? nullptr : env_block.data(),
+                       cwd_.empty() ? nullptr : cwd_.data(),
+                       reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &pi);
 
     DeleteProcThreadAttributeList(attr_list);
     startup_info.lpAttributeList = nullptr;
@@ -2604,6 +2611,7 @@ class subprocess {
   unique_fd process_handle_{INVALID_NATIVE_HANDLE_VALUE};
   unique_fd thread_handle_{INVALID_NATIVE_HANDLE_VALUE};
   std::vector<unsigned char> proc_thread_attr_list_;
+  bool newgroup_{false};
 #else
   unique_pid pid_{-1};
   unique_pid pgid_{-1};

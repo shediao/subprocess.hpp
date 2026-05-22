@@ -20,6 +20,8 @@ using subprocess::run;
 #define CMD_EXIT_42 TEXT("cmd.exe"), TEXT("/c"), TEXT("exit /b 42")
 #define CMD_SLEEP_1 \
   TEXT("cmd.exe"), TEXT("/c"), TEXT("ping 127.0.0.1 -n 2 > nul")
+#define CMD_SLEEP_10 \
+  TEXT("cmd.exe"), TEXT("/c"), TEXT("ping 127.0.0.1 -n 11 > nul")
 #define CMD_CAT TEXT("cmd.exe"), TEXT("/c"), TEXT("more")
 #else
 #define CMD_TRUE "true"
@@ -238,3 +240,89 @@ TEST(NewgroupTest, CaptureRunUsesNewgroupMode) {
   EXPECT_EQ(out.to_string(), "hello\n");
 }
 #endif  // !_WIN32
+
+// =============================================================================
+//  Windows-specific newgroup tests
+//  CREATE_NEW_PROCESS_GROUP sets the child as the root of a new console
+//  process group; the job object (used for terminate) must still work.
+// =============================================================================
+
+#if defined(_WIN32)
+
+// 1. newgroup=true with timeout — job object must still terminate the child.
+TEST(NewgroupTest, NewgroupTrueTimeoutOnWindows) {
+  auto start = std::chrono::steady_clock::now();
+
+  auto exit_code = run(CMD_SLEEP_10, newgroup = true,
+                       $timeout = std::chrono::milliseconds(500));
+
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+  // Must return quickly (killed by timeout), not block for 10+ seconds.
+  EXPECT_LT(elapsed_ms, 4000);
+  EXPECT_NE(exit_code, 0);
+}
+
+// 2. newgroup=false with timeout — baseline for the test above.
+TEST(NewgroupTest, NewgroupFalseTimeoutOnWindows) {
+  auto start = std::chrono::steady_clock::now();
+
+  auto exit_code = run(CMD_SLEEP_10, newgroup = false,
+                       $timeout = std::chrono::milliseconds(500));
+
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+  EXPECT_LT(elapsed_ms, 4000);
+  EXPECT_NE(exit_code, 0);
+}
+
+// 3. capture_run (which forces newgroup=true) with timeout on Windows.
+TEST(NewgroupTest, CaptureRunNewgroupOnWindows) {
+  auto start = std::chrono::steady_clock::now();
+
+  auto [exit_code, out, err] =
+      capture_run(CMD_SLEEP_10, $timeout = std::chrono::milliseconds(500));
+
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+  EXPECT_LT(elapsed_ms, 4000);
+  EXPECT_NE(exit_code, 0);
+}
+
+// 4. newgroup=true with capture_run (produces output, exits successfully).
+TEST(NewgroupTest, CaptureRunNewgroupProducesOutput) {
+  auto [exit_code, out, err] =
+      capture_run(TEXT("cmd.exe"), TEXT("/c"),
+                  TEXT("<nul set /p=hello_newgroup&exit /b 0"));
+
+  ASSERT_EQ(exit_code, 0);
+  ASSERT_EQ(out.to_string(), "hello_newgroup");
+}
+
+// 5. Pipeline with newgroup=true — all children share a job object.
+//    Verify the pipeline runs correctly and exit codes propagate.
+TEST(NewgroupTest, PipelineWithNewgroupOnWindows) {
+  using std::string_literals::operator""s;
+  subprocess::buffer out;
+  auto pipeline = subprocess::detail::subprocess(
+                      {"cmd.exe"s, "/c", "echo hello_pipeline&exit /b 0"},
+                      newgroup = true) |
+                  subprocess::detail::subprocess(
+                      {"findstr.exe"s, "hello_pipeline"}, $stdout > out);
+
+  int ret = pipeline.run();
+  auto codes = pipeline.exit_codes();
+  EXPECT_EQ(ret, 0);
+  ASSERT_EQ(codes.size(), 2u);
+  EXPECT_EQ(codes[0], 0);
+  EXPECT_EQ(codes[1], 0);
+  ASSERT_EQ(out.to_string(), "hello_pipeline\r\n");
+}
+
+#endif  // _WIN32
