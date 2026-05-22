@@ -85,7 +85,8 @@ TEST(ExecutableResolutionTest, CommandWithRelativePath) {
 
   // Make it executable
   std::string chmod_cmd = "chmod +x " + temp.path();
-  system(chmod_cmd.c_str());
+  int rc = system(chmod_cmd.c_str());
+  (void)rc;
 
   int exit_code = run({temp.path()});
   ASSERT_EQ(exit_code, 99);
