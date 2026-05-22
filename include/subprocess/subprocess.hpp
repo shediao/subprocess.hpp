@@ -2434,7 +2434,8 @@ class subprocess {
     }
     auto rc = WaitForSingleObject(
         process_handle_.get(),
-        timeout_.has_value() ? timeout_.value().count() : INFINITE);
+        timeout_.has_value() ? static_cast<DWORD>(timeout_.value().count())
+                             : INFINITE);
     if (rc == WAIT_OBJECT_0) {
       DWORD ret{127};
       GetExitCodeProcess(process_handle_.get(), &ret);
