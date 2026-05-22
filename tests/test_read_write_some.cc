@@ -484,8 +484,11 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdsForOutputBuffers) {
   subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
   err_buf.close_write();
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::nullopt, std::ref(out_buf), std::ref(err_buf));
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   // After the pump returns, read fds must be closed.
   ASSERT_FALSE(out_buf.rfd()) << "stdout read fd should be closed after pump";
@@ -501,8 +504,11 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdForEmptyOutputBuffer) {
   Buffer out_buf;
   out_buf.close_write();  // EOF before any data
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::nullopt, std::ref(out_buf), std::nullopt);
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   ASSERT_FALSE(out_buf.rfd())
       << "read fd should be closed even for empty output";
@@ -516,8 +522,11 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesWriteFdForInputBuffer) {
   subprocess::buffer data{"stdin_data_for_pump"};
   Buffer in_buf(data);
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::ref(in_buf), std::nullopt, std::nullopt);
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   ASSERT_FALSE(in_buf.wfd()) << "stdin write fd should be closed after pump";
 
@@ -543,8 +552,11 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
   subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
   err_buf.close_write();
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   ASSERT_FALSE(in_buf.wfd()) << "stdin write fd should be closed";
   ASSERT_FALSE(out_buf.rfd()) << "stdout read fd should be closed";
@@ -570,8 +582,11 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdoutBuffer) {
   subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
   out_buf.close_write();  // simulate child exit (close_child_end equivalent)
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::nullopt, std::ref(out_buf), std::nullopt);
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   ASSERT_FALSE(out_buf.rfd()) << "stdout parent read fd should be closed";
   ASSERT_FALSE(out_buf.wfd()) << "stdout child write fd should be closed";
@@ -585,8 +600,11 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStderrBuffer) {
   subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
   err_buf.close_write();  // simulate child exit
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::nullopt, std::nullopt, std::ref(err_buf));
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd should be closed";
   ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd should be closed";
@@ -615,8 +633,11 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdinBuffer) {
   // The child's drain thread still holds the dup'd read end.
   // NOTE: we skip close_read() here because the drain thread needs it.
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::ref(in_buf), std::nullopt, std::nullopt);
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   drain_thread.join();
 
@@ -652,8 +673,11 @@ TEST(ReadWriteSomeTest, FullLifecycleAllThreeBuffersAllHandlesClosed) {
     in_buf.close_read();
   });
 
-  subprocess::detail::read_write_to_buffer_with_threads(
+  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
       std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
+  for (auto& t : _pump) {
+    t.join();
+  }
 
   drain_thread.join();
 

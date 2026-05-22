@@ -1208,7 +1208,10 @@ class Buffer {
 };
 
 [[maybe_unused]]
-inline void read_write_to_buffer_with_threads(
+// Launches I/O pump threads for stdin/stdout/stderr and returns them.
+// The caller is responsible for joining the threads after the child
+// process has exited or been terminated.
+inline std::vector<std::thread> read_write_to_buffer_with_threads(
     std::optional<std::reference_wrapper<Buffer>> in,
     std::optional<std::reference_wrapper<Buffer>> out,
     std::optional<std::reference_wrapper<Buffer>> err) {
@@ -1256,9 +1259,7 @@ inline void read_write_to_buffer_with_threads(
         std::ref(err.value()));
   }
 
-  for (auto& thread : threads) {
-    thread.join();
-  }
+  return threads;
 }
 
 #if !defined(_WIN32)
@@ -2235,7 +2236,7 @@ class subprocess {
     // Launch a watchdog thread if a timeout is set.
     // The watchdog kills the process after timeout expires, unblocking
     // pump_pipe_data() if it is stuck waiting for pipe I/O.
-    auto launch_watchdog = [this]() {
+    [[maybe_unused]] auto launch_watchdog = [this]() {
       if (!timeout_.has_value()) {
         return;
       }
@@ -2374,7 +2375,6 @@ class subprocess {
       if (*job_handle_) {
         AssignProcessToJobObject(job_handle_->get(), process_handle_.get());
       }
-      launch_watchdog();
       pump_pipe_data();
     } else {
       std::wcerr << utf8_to_utf16(get_last_error_message()) << L'\n';
@@ -2429,17 +2429,25 @@ class subprocess {
 #if defined(_WIN32)
   int wait_for_exit() {
     if (!process_handle_) {
-      stop_watchdog();
+      join_pump_threads();
       return 127;
     }
-    DWORD ret{127};
-    WaitForSingleObject(process_handle_.get(), INFINITE);
-    GetExitCodeProcess(process_handle_.get(), &ret);
-
-    stop_watchdog();
-    process_handle_.close();
-    thread_handle_.close();
-    return static_cast<int>(ret);
+    auto rc = WaitForSingleObject(
+        process_handle_.get(),
+        timeout_.has_value() ? timeout_.value().count() : INFINITE);
+    if (rc == WAIT_OBJECT_0) {
+      DWORD ret{127};
+      GetExitCodeProcess(process_handle_.get(), &ret);
+      join_pump_threads();
+      return static_cast<int>(ret);
+    }
+    if (rc == WAIT_TIMEOUT) {
+      terminate();  // close_all() unblocks I/O threads
+      join_pump_threads();
+      return 127;
+    }
+    join_pump_threads();
+    return 127;
   }
 #else
   int wait_for_exit() {
@@ -2482,9 +2490,14 @@ class subprocess {
  private:
   void terminate() {
 #if defined(_WIN32)
+    // Kill the process FIRST. This closes the child's inherited pipe handles,
+    // which unblocks any pump threads blocked on ReadFile. Only then is it
+    // safe to close our end of the pipes via close_all().
     if (job_handle_ && *job_handle_) {
       TerminateJobObject(job_handle_->get(), 1);
       job_handle_->close();
+    } else if (process_handle_) {
+      TerminateProcess(process_handle_.get(), 1);
     }
 #else
     if (-1 == pid_) {
@@ -2511,7 +2524,22 @@ class subprocess {
     }
     kill(kill_pid, SIGKILL);
 #endif
+    stdin_.close_all();
+    stdout_.close_all();
+    stderr_.close_all();
   }
+
+#if defined(_WIN32)
+  void join_pump_threads() {
+    for (auto& t : pump_threads_) {
+      if (t.joinable()) {
+        t.join();
+      }
+    }
+    pump_threads_.clear();
+  }
+#endif
+
   void prepare_for_child() {
     stdin_.prepare_for_child();
     stdout_.prepare_for_child();
@@ -2524,8 +2552,8 @@ class subprocess {
     stderr_.close_child_end();
 
 #if defined(_WIN32)
-    read_write_to_buffer_with_threads(stdin_.get_buffer(), stdout_.get_buffer(),
-                                      stderr_.get_buffer());
+    pump_threads_ = read_write_to_buffer_with_threads(
+        stdin_.get_buffer(), stdout_.get_buffer(), stderr_.get_buffer());
 #else
     // Pass the child pid so the poll loop can detect when the direct child
     // exits. This prevents hanging indefinitely when the child's grandchildren
@@ -2626,6 +2654,7 @@ class subprocess {
   unique_fd process_handle_{INVALID_NATIVE_HANDLE_VALUE};
   unique_fd thread_handle_{INVALID_NATIVE_HANDLE_VALUE};
   std::vector<unsigned char> proc_thread_attr_list_;
+  std::vector<std::thread> pump_threads_;
   bool newgroup_{false};
 #else
   unique_pid pid_{-1};
