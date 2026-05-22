@@ -270,22 +270,6 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
 }
 #endif
 
-inline bool is_atty(NativeHandle f) {
-#if defined(_WIN32)
-  return GetFileType(f) == FILE_TYPE_CHAR;
-#else
-  return isatty(f);
-#endif
-}
-
-inline bool stdin_is_atty() {
-#if defined(_WIN32)
-  return is_atty(GetStdHandle(STD_INPUT_HANDLE));
-#else
-  return is_atty(STDIN_FILENO);
-#endif
-}
-
 template <typename T>
 struct fd_traits;
 
@@ -384,8 +368,6 @@ class unique_fd
     }
     return unique_fd{duped};
   }
-
-  bool is_atty() const { return detail::is_atty(get()); }
 
 #if !defined(_WIN32)
   void set_nonblocking() const { detail::set_nonblocking(get()); }
@@ -2206,10 +2188,7 @@ class subprocess {
     }
 #else
     if (!requested_pgid_.has_value()) {
-      if (stdin_.inherit() && !stdin_is_atty()) {
-        requested_pgid_ = 0;
-      } else if (const auto fd = stdin_.get_file_fd();
-                 fd.has_value() && fd->get().is_atty()) {
+      if (stdin_.inherit() && !unique_fd{open("/dev/tty", O_RDONLY)}) {
         requested_pgid_ = 0;
       } else {
         requested_pgid_ = INVALID_NATIVE_HANDLE_VALUE;

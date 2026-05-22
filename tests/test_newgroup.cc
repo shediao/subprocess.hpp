@@ -202,29 +202,6 @@ TEST(NewgroupTest, PidAccessorNoNewgroupNoProcessGroup) {
 #endif  // !_WIN32
 
 // =============================================================================
-//  is_atty utility tests
-// =============================================================================
-
-#if !defined(_WIN32)
-TEST(NewgroupTest, IsAttyUtilityForRegularFile) {
-  // Open a regular file and verify is_atty returns false.
-  int fd = open("/dev/null", O_RDONLY);
-  ASSERT_GE(fd, 0);
-  EXPECT_FALSE(subprocess::detail::is_atty(fd));
-  close(fd);
-}
-
-TEST(NewgroupTest, StdinIsAttyUtility) {
-  // Just verify the utility functions exist and return a boolean.
-  // The actual return value depends on the test environment.
-  auto result = subprocess::detail::stdin_is_atty();
-  EXPECT_TRUE(result == true ||
-              result == false);  // just verify it compiles & returns bool
-  static_assert(std::is_same_v<decltype(result), bool>);
-}
-#endif  // !_WIN32
-
-// =============================================================================
 //  capture_run always uses newgroup = true and stdin → /dev/null
 // =============================================================================
 
