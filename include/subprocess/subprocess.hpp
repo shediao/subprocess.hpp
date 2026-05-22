@@ -819,6 +819,17 @@ inline std::map<std::wstring, std::wstring> get_all_env_vars() {
   FreeEnvironmentStringsW(env_block);
   return envs;
 }
+
+inline std::optional<std::wstring> get_env(std::wstring const& name) {
+  DWORD const size = GetEnvironmentVariableW(name.data(), nullptr, 0);
+  if (size == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+    return std::nullopt;
+  }
+  std::wstring ret(size, L'\0');
+  DWORD const copied = GetEnvironmentVariableW(name.data(), ret.data(), size);
+  ret.resize(copied);
+  return ret;
+}
 #else
 inline std::map<std::string, std::string> get_all_env_vars() {
   std::map<std::string, std::string> envs;
@@ -2268,14 +2279,63 @@ class subprocess {
     }
     startup_info.lpAttributeList = attr_list;
 
+    auto search_path =
+        [](std::wstring const& cmd,
+           std::wstring const& ext) -> std::optional<std::wstring> {
+      DWORD const size =
+          SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
+                      0, nullptr, nullptr);
+      if (size == 0) {
+        return std::nullopt;
+      }
+      std::wstring result(size, L'\0');
+      DWORD const copied =
+          SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
+                      size, result.data(), nullptr);
+      // copied does not include the null terminator
+      result.resize(copied);
+      return result;
+    };
+
+    auto is_file = [](std::wstring const& path) {
+      DWORD const attr = GetFileAttributesW(path.c_str());
+      return attr != INVALID_FILE_ATTRIBUTES &&
+             !(attr & FILE_ATTRIBUTE_DIRECTORY);
+    };
+
+    std::wstring app_path;
+    if (cmd_[0].find_last_of(L"/\\") != std::wstring::npos) {
+      if (is_file(cmd_[0])) {
+        app_path = cmd_[0];
+      }
+    } else {
+      if (auto dot = cmd_[0].find_last_of(L'.');
+          dot != std::wstring::npos && dot > 0) {
+        if (auto ret = search_path(cmd_[0], L""); ret) {
+          app_path = *ret;
+        }
+      } else {
+        for (auto ext : split(
+                 get_env(L"PATHEXT").value_or(L".COM;.EXE;.BAT;.CMD"), L';')) {
+          if (ext.empty()) {
+            continue;
+          }
+          if (auto ret = search_path(cmd_[0], ext); ret) {
+            app_path = *ret;
+            break;
+          }
+        }
+      }
+    }
+
     auto command = argv_to_command_line_string(cmd_);
 
     auto env_block = create_environment_string_data(env_);
 
     PROCESS_INFORMATION pi{};
     auto success = CreateProcessW(
-        nullptr, command.data(), NULL, NULL, TRUE,
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+        app_path.empty() ? nullptr : app_path.c_str(), command.data(), NULL,
+        NULL, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
         env_block.empty() ? nullptr : env_block.data(),
         cwd_.empty() ? nullptr : cwd_.data(),
         reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &pi);
