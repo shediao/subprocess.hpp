@@ -161,6 +161,11 @@ class StdinRedirector;
 class StdoutRedirector;
 class StderrRedirector;
 
+template <typename... T>
+struct visitor : T... {
+  using T::operator()...;
+};
+
 #if defined(_WIN32)
 using ssize_t = std::ptrdiff_t;
 #endif
@@ -1116,7 +1121,14 @@ class Buffer {
     auto size = pipe_.read_some(tmp, sizeof(tmp));
     if (size > 0) {
       std::visit(
-          [tmp, size](buffer_container_type& buf) { buf.append(tmp, size); },
+          visitor{
+              [tmp, size](buffer_container_type& buf) {
+                buf.append(tmp, size);
+              },
+              [tmp, size](std::reference_wrapper<buffer_container_type> ref) {
+                ref.get().append(tmp, size);
+              },
+          },
           *buf_);
     }
     return size;
@@ -1124,39 +1136,55 @@ class Buffer {
 
   ssize_t write_some() {
     return std::visit(
-        [this](const buffer_container_type& buf) {
-          if (buf.size() <= written_size_) {
-            return static_cast<ssize_t>(0);  // EOF0;
-          }
-          const auto written = pipe_.write_some(buf.data() + written_size_,
-                                                buf.size() - written_size_);
-          if (written > 0) {
-            written_size_ += written;
-          }
-          return written;
+        visitor{
+            [this](const buffer_container_type& buf) {
+              if (buf.size() <= written_size_) {
+                return static_cast<ssize_t>(0);  // EOF0;
+              }
+              const auto written = pipe_.write_some(buf.data() + written_size_,
+                                                    buf.size() - written_size_);
+              if (written > 0) {
+                written_size_ += written;
+              }
+              return written;
+            },
+            [this](const std::reference_wrapper<buffer_container_type> ref) {
+              const auto& buf = ref.get();
+              if (buf.size() <= written_size_) {
+                return static_cast<ssize_t>(0);  // EOF0;
+              }
+              const auto written = pipe_.write_some(buf.data() + written_size_,
+                                                    buf.size() - written_size_);
+              if (written > 0) {
+                written_size_ += written;
+              }
+              return written;
+            },
         },
         *buf_);
   }
 
   [[nodiscard]] bool empty() const {
     return std::visit(
-        [this](buffer_container_type const& buf) {
-          return buf.size() <= written_size_;
+        visitor{
+            [this](buffer_container_type const& buf) {
+              return buf.size() <= written_size_;
+            },
+            [this](std::reference_wrapper<buffer_container_type> const ref) {
+              return ref.get().size() <= written_size_;
+            },
         },
         *buf_);
   }
 
   buffer& buf() {
     return std::visit(
-        []<typename T>(T& value) -> buffer_container_type& {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                       buffer_container_type>) {
-            return value;
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              std::reference_wrapper<
-                                                  buffer_container_type>>) {
-            return value.get();
-          }
+        visitor{
+            [](buffer_container_type& value) -> buffer_container_type& {
+              return value;
+            },
+            [](std::reference_wrapper<buffer_container_type>& value)
+                -> buffer_container_type& { return value.get(); },
         },
         *buf_);
   }
@@ -1440,20 +1468,19 @@ class Redirector {
       return nullptr;
     }
     return std::visit(
-        []<typename T>(
-            [[maybe_unused]] T& value) -> std::unique_ptr<value_type> {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
-            return std::make_unique<value_type>(value.dup());
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            return std::make_unique<value_type>(value.dup());
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              FileHandler>) {
-            return std::make_unique<value_type>(value.dup());
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
-            return std::make_unique<value_type>(value.dup());
-          } else {
-            return nullptr;
-          }
+        visitor{
+            [](Pipe& value) -> std::unique_ptr<value_type> {
+              return std::make_unique<value_type>(value.dup());
+            },
+            [](File& value) -> std::unique_ptr<value_type> {
+              return std::make_unique<value_type>(value.dup());
+            },
+            [](FileHandler& value) -> std::unique_ptr<value_type> {
+              return std::make_unique<value_type>(value.dup());
+            },
+            [](Buffer& value) -> std::unique_ptr<value_type> {
+              return std::make_unique<value_type>(value.dup());
+            },
         },
         *redirect_);
   }
@@ -1465,62 +1492,67 @@ class Redirector {
       return;
     }
     std::visit(
-        [this]<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
+        visitor{
+            [this]([[maybe_unused]] Pipe& value) {
+              (void)this;
 #if defined(_WIN32)
-            // Default is non-inheritable; make only the child end inheritable.
-            // stdin  (fileno 0): child reads  -> rfd is the child end
-            // stdout (fileno 1): child writes -> wfd is the child end
-            // stderr (fileno 2): child writes -> wfd is the child end
-            if (auto& inheritable_handle =
-                    fileno() == 0 ? value.rfd() : value.wfd();
-                inheritable_handle) {
-              if (!SetHandleInformation(inheritable_handle.get(),
-                                        HANDLE_FLAG_INHERIT,
-                                        HANDLE_FLAG_INHERIT)) {
-                print_error("SetHandleInformation failed: " +
-                            std::to_string(GetLastError()));
-                return;
+              // Default is non-inheritable; make only the child end
+              // inheritable. stdin  (fileno 0): child reads  -> rfd is the
+              // child end stdout (fileno 1): child writes -> wfd is the child
+              // end stderr (fileno 2): child writes -> wfd is the child end
+              if (auto& inheritable_handle =
+                      fileno() == 0 ? value.rfd() : value.wfd();
+                  inheritable_handle) {
+                if (!SetHandleInformation(inheritable_handle.get(),
+                                          HANDLE_FLAG_INHERIT,
+                                          HANDLE_FLAG_INHERIT)) {
+                  print_error("SetHandleInformation failed: " +
+                              std::to_string(GetLastError()));
+                  return;
+                }
               }
-            }
 #endif
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            if (fileno() == 0) {
-              value.open_for_read();
-            } else {
-              value.open_for_write();
-            }
+            },
+            [this](File& value) {
+              if (fileno() == 0) {
+                value.open_for_read();
+              } else {
+                value.open_for_write();
+              }
 #if defined(_WIN32)
-            // File handles are now non-inheritable by default; make them
-            // inheritable so the child can use them.
-            if (value.fd()) {
-              if (!SetHandleInformation(value.fd().get(), HANDLE_FLAG_INHERIT,
-                                        HANDLE_FLAG_INHERIT)) {
-                print_error("SetHandleInformation failed: " +
-                            std::to_string(GetLastError()));
-                return;
+              // File handles are now non-inheritable by default; make them
+              // inheritable so the child can use them.
+              if (value.fd()) {
+                if (!SetHandleInformation(value.fd().get(), HANDLE_FLAG_INHERIT,
+                                          HANDLE_FLAG_INHERIT)) {
+                  print_error("SetHandleInformation failed: " +
+                              std::to_string(GetLastError()));
+                  return;
+                }
               }
-            }
 #endif
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              FileHandler>) {
-            // do nothing
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
+            },
+            []([[maybe_unused]] FileHandler& value) {
+              // do nothing
+            },
+            [this]([[maybe_unused]] Buffer& value) {
+              (void)this;
 #if defined(_WIN32)
-            // Default is non-inheritable; make only the child end inheritable.
-            if (auto& inheritable_handle =
-                    fileno() == 0 ? value.rfd() : value.wfd();
-                inheritable_handle) {
-              if (!SetHandleInformation(inheritable_handle.get(),
-                                        HANDLE_FLAG_INHERIT,
-                                        HANDLE_FLAG_INHERIT)) {
-                print_error("SetHandleInformation failed: " +
-                            std::to_string(GetLastError()));
-                return;
+              // Default is non-inheritable; make only the child end
+              // inheritable.
+              if (auto& inheritable_handle =
+                      fileno() == 0 ? value.rfd() : value.wfd();
+                  inheritable_handle) {
+                if (!SetHandleInformation(inheritable_handle.get(),
+                                          HANDLE_FLAG_INHERIT,
+                                          HANDLE_FLAG_INHERIT)) {
+                  print_error("SetHandleInformation failed: " +
+                              std::to_string(GetLastError()));
+                  return;
+                }
               }
-            }
 #endif
-          }
+            },
         },
         *redirect_);
   }
@@ -1529,53 +1561,51 @@ class Redirector {
     if (!redirect_) {
       return;
     }
-    std::visit(
-        [this]<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
-            // For child: fd 0 is the read end, parent should close it
-            if (fileno() == 0) {
-              value.close_read();
-            } else {
-              value.close_write();
-            }
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            // The redirected file was passed to the child, parent no longer
-            // needs it
-            value.close();
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              FileHandler>) {
-            // Handle provided by another program to the parent; may still be
-            // useful, do nothing, let the original opener close it
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
-            // For child: fd 0 is the read end, parent should close it
-            if (fileno() == 0) {
-              value.close_read();
-            } else {
-              value.close_write();
-            }
-          }
-        },
-        *redirect_);
+    std::visit(visitor{
+                   [this](Pipe& value) {
+                     // For child: fd 0 is the read end, parent should close it
+                     if (fileno() == 0) {
+                       value.close_read();
+                     } else {
+                       value.close_write();
+                     }
+                   },
+                   [](File& value) {
+                     // The redirected file was passed to the child, parent no
+                     // longer needs it
+                     value.close();
+                   },
+                   []([[maybe_unused]] FileHandler& value) {
+                     // Handle provided by another program to the parent; may
+                     // still be useful, do nothing, let the original opener
+                     // close it
+                   },
+                   [this](Buffer& value) {
+                     // For child: fd 0 is the read end, parent should close it
+                     if (fileno() == 0) {
+                       value.close_read();
+                     } else {
+                       value.close_write();
+                     }
+                   },
+               },
+               *redirect_);
   }
   void close_all() {
     if (!redirect_) {
       return;
     }
-    std::visit(
-        []<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
-            value.close_all();
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            value.close();
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              FileHandler>) {
-            // Handle provided by another program to the parent; may still be
-            // useful, do nothing, let the original opener close it
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
-            value.pipe().close_all();
-          }
-        },
-        *redirect_);
+    std::visit(visitor{
+                   [](Pipe& value) { value.close_all(); },
+                   [](File& value) { value.close(); },
+                   []([[maybe_unused]] FileHandler& value) {
+                     // Handle provided by another program to the parent; may
+                     // still be useful, do nothing, let the original opener
+                     // close it
+                   },
+                   [](Buffer& value) { value.pipe().close_all(); },
+               },
+               *redirect_);
   }
 #if defined(_WIN32)
   std::optional<NativeHandle> child_inherit_handle() {
@@ -1583,18 +1613,19 @@ class Redirector {
       return std::nullopt;
     }
     return std::visit(
-        [this]<typename T>(
-            [[maybe_unused]] T& value) -> std::optional<NativeHandle> {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
-            return fileno() == 0 ? value.rfd().get() : value.wfd().get();
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            return value.fd().get();
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              FileHandler>) {
-            return value.fd().get();
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
-            return fileno() == 0 ? value.rfd().get() : value.wfd().get();
-          }
+        visitor{
+            [this](Pipe& value) -> std::optional<NativeHandle> {
+              return fileno() == 0 ? value.rfd().get() : value.wfd().get();
+            },
+            [](File& value) -> std::optional<NativeHandle> {
+              return value.fd().get();
+            },
+            [](FileHandler& value) -> std::optional<NativeHandle> {
+              return value.fd().get();
+            },
+            [this](Buffer& value) -> std::optional<NativeHandle> {
+              return fileno() == 0 ? value.rfd().get() : value.wfd().get();
+            },
         },
         *redirect_);
   }
@@ -1605,36 +1636,38 @@ class Redirector {
     if (!redirect_) {
       return;
     }
-    std::visit(
-        [this]<typename T>([[maybe_unused]] T& value) {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Pipe>) {
-            // Child: dup stdin as the pipe's read end, stdout as the pipe's
-            // write end
-            dup2(fileno() == 0 ? value.rfd().get() : value.wfd().get(),
-                 fileno());
-            value.close_all();
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            if (value.fd().get() != fileno()) {
-              dup2(value.fd().get(),
-                   fileno());  // dup to the opened file handle
-              value.close();   // prevent leak
-            }
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              FileHandler>) {
-            if (value.fd().get() != fileno()) {
-              dup2(value.fd().get(),
-                   fileno());  // dup to the fd provided by the parent's program
-              value.close();   // prevent leak
-            }
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
-            // Child: dup stdin as the pipe's read end, stdout as the pipe's
-            // write end
-            dup2(fileno() == 0 ? value.rfd().get() : value.wfd().get(),
-                 fileno());
-            value.pipe().close_all();
-          }
-        },
-        *redirect_);
+    std::visit(visitor{
+                   [this](Pipe& value) {
+                     // Child: dup stdin as the pipe's read end, stdout as the
+                     // pipe's write end
+                     dup2(fileno() == 0 ? value.rfd().get() : value.wfd().get(),
+                          fileno());
+                     value.close_all();
+                   },
+                   [this](File& value) {
+                     if (value.fd().get() != fileno()) {
+                       dup2(value.fd().get(),
+                            fileno());  // dup to the opened file handle
+                       value.close();   // prevent leak
+                     }
+                   },
+                   [this](FileHandler& value) {
+                     if (value.fd().get() != fileno()) {
+                       dup2(value.fd().get(),
+                            fileno());  // dup to the fd provided by the
+                                        // parent's program
+                       value.close();   // prevent leak
+                     }
+                   },
+                   [this](Buffer& value) {
+                     // Child: dup stdin as the pipe's read end, stdout as the
+                     // pipe's write end
+                     dup2(fileno() == 0 ? value.rfd().get() : value.wfd().get(),
+                          fileno());
+                     value.pipe().close_all();
+                   },
+               },
+               *redirect_);
   }
 #endif  // !_WIN32
   std::optional<std::reference_wrapper<Buffer>> get_buffer() const {
@@ -1642,13 +1675,13 @@ class Redirector {
       return std::nullopt;
     }
     return std::visit(
-        []<typename T>([[maybe_unused]] T& value)
-            -> std::optional<std::reference_wrapper<Buffer>> {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, Buffer>) {
-            return std::ref(value);
-          } else {
-            return std::nullopt;
-          }
+        visitor{
+            [](Buffer& value) -> std::optional<std::reference_wrapper<Buffer>> {
+              return std::ref(value);
+            },
+            [](auto&) -> std::optional<std::reference_wrapper<Buffer>> {
+              return std::nullopt;
+            },
         },
         *redirect_);
   }
@@ -1661,16 +1694,19 @@ class Redirector {
       return std::nullopt;
     }
     return std::visit(
-        []<typename T>([[maybe_unused]] const T& value)
-            -> std::optional<std::reference_wrapper<const unique_fd>> {
-          if constexpr (std::is_same_v<std::remove_cv_t<T>, File>) {
-            return std::ref(value.fd());
-          } else if constexpr (std::is_same_v<std::remove_cv_t<T>,
-                                              FileHandler>) {
-            return std::ref(value.fd());
-          } else {
-            return std::nullopt;
-          }
+        visitor{
+            [](const File& value)
+                -> std::optional<std::reference_wrapper<const unique_fd>> {
+              return std::ref(value.fd());
+            },
+            [](const FileHandler& value)
+                -> std::optional<std::reference_wrapper<const unique_fd>> {
+              return std::ref(value.fd());
+            },
+            [](const auto&)
+                -> std::optional<std::reference_wrapper<const unique_fd>> {
+              return std::nullopt;
+            },
         },
         *redirect_);
   }
