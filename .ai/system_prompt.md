@@ -125,7 +125,7 @@ This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) fo
 
 ### Core class: `detail::subprocess`
 
-The main implementation class. Holds the command vector, I/O redirectors, environment, cwd, timeout, and background flags. Key methods:
+The main implementation class. Holds the command vector, I/O redirectors, environment, cwd, timeout, and newgroup flags. Key methods:
 
 - `async_run()` — spawns the child process (CreateProcessW on Windows, fork+exec or posix_spawn on Unix), then enters `pump_pipe_data()` to shuttle I/O between parent and child.
 - `run()` — calls `async_run()` then `wait_for_exit()`.
@@ -149,12 +149,12 @@ Defined in `detail::named_args` and re-exported in `subprocess::named_arguments`
 
 - `$stdin < source`, `$stdout > target`, `$stderr > target` — produce `StdinRedirector` / `StdoutRedirector` / `StderrRedirector`.
 - `$cwd = path` → `Cwd`, `$env = map` → `Env`, `$env += map` → `EnvAppend`, `$env["KEY"] += val` → `EnvItemAppend`.
-- `$timeout = duration` → `Timeout`, `$background = true` → `Background`.
+- `$timeout = duration` → `Timeout`, `$newgroup = true` → `Newgroup`.
 
 ### Public API functions
 
 - **`run(...)`** — variadic template that partitions arguments into command parts (string-like) and named arguments (typed wrappers). Returns `int` exit code.
-- **`capture_run(...)`** — like `run()` but returns `std::tuple<int, buffer, buffer>` (exit_code, stdout, stderr). Internally forces `$stdin < $devnull` and `$background = true`, then attaches stdout/stderr to buffers.
+- **`capture_run(...)`** — like `run()` but returns `std::tuple<int, buffer, buffer>` (exit_code, stdout, stderr). Internally forces `$stdin < $devnull` and `$newgroup = true`, then attaches stdout/stderr to buffers.
 - **`$(...)`** — alias for `run()` (controlled by `USE_DOLLAR_NAMED_VARIABLES` macro).
 
 ### Pipeline support

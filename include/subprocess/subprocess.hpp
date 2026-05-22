@@ -1874,12 +1874,12 @@ struct Timeout {
   std::chrono::milliseconds timeout;
 };
 
-struct Background {
-  bool background{false};
+struct Newgroup {
+  bool newgroup{false};
 };
 
-struct background_operator {
-  Background operator=(bool b) const { return Background{b}; }
+struct newgroup_operator {
+  Newgroup operator=(bool b) const { return Newgroup{b}; }
 };
 
 struct timeout_operator {
@@ -1956,7 +1956,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static env_operator env;
 [[maybe_unused]] inline constexpr static timeout_operator timeout;
 [[maybe_unused]] inline constexpr static int timeout_infinite = INT_MAX;
-[[maybe_unused]] inline constexpr static background_operator background;
+[[maybe_unused]] inline constexpr static newgroup_operator newgroup;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
@@ -1971,7 +1971,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static env_operator $env;
 [[maybe_unused]] inline constexpr static timeout_operator $timeout;
 [[maybe_unused]] inline constexpr static int $timeout_infinite = INT_MAX;
-[[maybe_unused]] inline constexpr static background_operator $background;
+[[maybe_unused]] inline constexpr static newgroup_operator $newgroup;
 #endif
 }  // namespace named_args
 template <typename T>
@@ -1981,7 +1981,7 @@ concept named_argument_type = std::same_as<Env, std::decay_t<T>> ||
                               std::same_as<StderrRedirector, std::decay_t<T>> ||
                               std::same_as<Cwd, std::decay_t<T>> ||
                               std::same_as<Timeout, std::decay_t<T>> ||
-                              std::same_as<Background, std::decay_t<T>> ||
+                              std::same_as<Newgroup, std::decay_t<T>> ||
                               std::same_as<EnvAppend, std::decay_t<T>> ||
                               std::same_as<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
@@ -2110,10 +2110,10 @@ class subprocess {
              if constexpr (std::is_same_v<ArgType, Cwd>) {
                cwd_ = arg.cwd;
              }
-             if constexpr (std::is_same_v<ArgType, Background>) {
+             if constexpr (std::is_same_v<ArgType, Newgroup>) {
 #if !defined(_WIN32)
-               background_explicit_ = true;
-               if (arg.background) {
+               newgroup_explicit_ = true;
+               if (arg.newgroup) {
                  requested_pgid_ = 0;
                }
 #endif
@@ -2202,7 +2202,7 @@ class subprocess {
       }
     }
 #else
-    if (!requested_pgid_.has_value() && !background_explicit_) {
+    if (!requested_pgid_.has_value() && !newgroup_explicit_) {
       if (stdin_.inherit() && !stdin_is_atty()) {
         requested_pgid_ = 0;
       } else if (const auto fd = stdin_.get_file_fd();
@@ -2603,7 +2603,7 @@ class subprocess {
   unique_pid pid_{-1};
   unique_pid pgid_{-1};
   std::optional<pid_t> requested_pgid_{std::nullopt};
-  bool background_explicit_{false};
+  bool newgroup_explicit_{false};
   // When the child is reaped early by pump_pipe_data() (because it exited
   // while the poll loop was still draining pipe data), the exit status is
   // stored here so that wait_for_exit() can return it without calling
@@ -2692,20 +2692,20 @@ using detail::buffer;
 
 namespace named_arguments {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-using detail::named_args::$background;
 using detail::named_args::$cwd;
 using detail::named_args::$devnull;
 using detail::named_args::$env;
+using detail::named_args::$newgroup;
 using detail::named_args::$stderr;
 using detail::named_args::$stdin;
 using detail::named_args::$stdout;
 using detail::named_args::$timeout;
 using detail::named_args::$timeout_infinite;
 #endif
-using detail::named_args::background;
 using detail::named_args::cwd;
 using detail::named_args::devnull;
 using detail::named_args::env;
+using detail::named_args::newgroup;
 using detail::named_args::std_err;
 using detail::named_args::std_in;
 using detail::named_args::std_out;
@@ -2794,7 +2794,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), StdinRedirector(File{devnull}),
                    std::forward<T>(args)..., StdoutRedirector{std_out_},
-                   StderrRedirector{std_err_}, Background{true});
+                   StderrRedirector{std_err_}, Newgroup{true});
   return result;
 }
 #if defined(_WIN32)
@@ -2807,7 +2807,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ = run(std::move(cmd), StdinRedirector(File{devnull}),
                    std::forward<T>(args)..., StdoutRedirector{std_out_},
-                   StderrRedirector{std_err_}, Background{true});
+                   StderrRedirector{std_err_}, Newgroup{true});
   return result;
 }
 #endif  // _WIN32

@@ -29,43 +29,42 @@ using subprocess::run;
 #endif
 
 // =============================================================================
-// Tests for the Background named argument
+// Tests for the Newgroup named argument
 // =============================================================================
 
-// 1. Explicit background = true runs successfully
-TEST(BackgroundTest, ExplicitBackgroundTrue) {
-  auto exit_code = run(CMD_TRUE, background = true);
+// 1. Explicit newgroup = true runs successfully
+TEST(NewgroupTest, ExplicitNewgroupTrue) {
+  auto exit_code = run(CMD_TRUE, newgroup = true);
   ASSERT_EQ(exit_code, 0);
 }
 
-// 2. Explicit background = false runs successfully
-TEST(BackgroundTest, ExplicitBackgroundFalse) {
-  auto exit_code = run(CMD_TRUE, background = false);
+// 2. Explicit newgroup = false runs successfully
+TEST(NewgroupTest, ExplicitNewgroupFalse) {
+  auto exit_code = run(CMD_TRUE, newgroup = false);
   ASSERT_EQ(exit_code, 0);
 }
 
-// 3. Background = true with exit code
-TEST(BackgroundTest, BackgroundTrueWithExitCode) {
-  auto exit_code = run(CMD_EXIT_42, background = true);
+// 3. Newgroup = true with exit code
+TEST(NewgroupTest, NewgroupTrueWithExitCode) {
+  auto exit_code = run(CMD_EXIT_42, newgroup = true);
   ASSERT_EQ(exit_code, 42);
 }
 
-// 4. Background = false with exit code
-TEST(BackgroundTest, BackgroundFalseWithExitCode) {
-  auto exit_code = run(CMD_EXIT_42, background = false);
+// 4. Newgroup = false with exit code
+TEST(NewgroupTest, NewgroupFalseWithExitCode) {
+  auto exit_code = run(CMD_EXIT_42, newgroup = false);
   ASSERT_EQ(exit_code, 42);
 }
 
-// 5. Background combined with timeout — kill process group via SIGTERM
+// 5. Newgroup combined with timeout — kill process group via SIGTERM
 //    Same scenario as ProcessTreeKilledOnTimeout but explicitly setting
-//    background = true.
+//    newgroup = true.
 #if !defined(_WIN32)
-TEST(BackgroundTest, BackgroundTrueTimeoutKillsProcessTree) {
+TEST(NewgroupTest, NewgroupTrueTimeoutKillsProcessTree) {
   auto start = std::chrono::steady_clock::now();
 
-  auto exit_code =
-      run("sh", "-c", "sleep 10 & sleep 10; wait", background = true,
-          $timeout = std::chrono::milliseconds(500));
+  auto exit_code = run("sh", "-c", "sleep 10 & sleep 10; wait", newgroup = true,
+                       $timeout = std::chrono::milliseconds(500));
 
   auto elapsed = std::chrono::steady_clock::now() - start;
   auto elapsed_ms =
@@ -76,37 +75,36 @@ TEST(BackgroundTest, BackgroundTrueTimeoutKillsProcessTree) {
 }
 #endif  // !_WIN32
 
-// 6. Background = false skips process group creation — use timeout to
+// 6. Newgroup = false skips process group creation — use timeout to
 //    verify the direct child is killed but a grandchild holding a pipe open
 //    would cause a hang. We just verify basic functioning here.
 #if !defined(_WIN32)
-TEST(BackgroundTest, BackgroundFalseNoProcessGroup) {
-  auto exit_code = run("sh", "-c", "sleep 0.1", background = false,
+TEST(NewgroupTest, NewgroupFalseNoProcessGroup) {
+  auto exit_code = run("sh", "-c", "sleep 0.1", newgroup = false,
                        $timeout = std::chrono::seconds(5));
   EXPECT_EQ(exit_code, 0);
 }
 #endif  // !_WIN32
 
-// 7. Background with $background (dollar-style named argument)
-TEST(BackgroundTest, DollarBackgroundSyntax) {
+// 7. Newgroup with $newgroup (dollar-style named argument)
+TEST(NewgroupTest, DollarNewgroupSyntax) {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-  auto exit_code = run(CMD_TRUE, $background = true);
+  auto exit_code = run(CMD_TRUE, $newgroup = true);
   ASSERT_EQ(exit_code, 0);
 #else
-  GTEST_SKIP()
-      << "$background not available without USE_DOLLAR_NAMED_VARIABLES";
+  GTEST_SKIP() << "$newgroup not available without USE_DOLLAR_NAMED_VARIABLES";
 #endif
 }
 
 // =============================================================================
-//  Background stdin → /dev/null tests
+//  Newgroup stdin → /dev/null tests
 // =============================================================================
 
 // capture_run always passes std_in < devnull, so the child's stdin is
-// redirected to /dev/null regardless of whether background is explicitly
+// redirected to /dev/null regardless of whether newgroup is explicitly
 // set.  Reading from stdin should return EOF immediately.
 #if !defined(_WIN32)
-TEST(BackgroundTest, CaptureRunStdinIsDevNull) {
+TEST(NewgroupTest, CaptureRunStdinIsDevNull) {
   // Try to read from stdin — should get immediate EOF (empty output)
   auto [exit_code, out, err] =
       capture_run("cat", $timeout = std::chrono::seconds(3));
@@ -116,14 +114,14 @@ TEST(BackgroundTest, CaptureRunStdinIsDevNull) {
   EXPECT_TRUE(out.to_string().empty());
 }
 
-// When background = false, the library does NOT auto-redirect stdin to
+// When newgroup = false, the library does NOT auto-redirect stdin to
 // /dev/null.  The inherited stdin (test-runner pipe) may already be at EOF
 // in CI, so we provide explicit input via a buffer and verify the child
 // reads it correctly — proving that stdin is functional, not /dev/null.
-TEST(BackgroundTest, BackgroundFalseStdinNotReplaced) {
+TEST(NewgroupTest, NewgroupFalseStdinNotReplaced) {
   subprocess::buffer in("hello_stdin");
   subprocess::buffer out;
-  auto exit_code = run("cat", background = false, std_in<in, std_out> out,
+  auto exit_code = run("cat", newgroup = false, std_in<in, std_out> out,
                        $timeout = std::chrono::seconds(3));
 
   EXPECT_EQ(exit_code, 0);
@@ -131,13 +129,13 @@ TEST(BackgroundTest, BackgroundFalseStdinNotReplaced) {
 }
 
 // With the removal of the implicit constructor-side stdin→/dev/null
-// redirection, run() with background=true also does NOT auto-redirect
+// redirection, run() with newgroup=true also does NOT auto-redirect
 // stdin.  Provide explicit input via a buffer and verify the child reads
 // it correctly — proving that stdin is functional, not /dev/null.
-TEST(BackgroundTest, BackgroundTrueRunDoesNotAutoRedirectStdin) {
+TEST(NewgroupTest, NewgroupTrueRunDoesNotAutoRedirectStdin) {
   subprocess::buffer in("hello_stdin_bg");
   subprocess::buffer out;
-  auto exit_code = run("cat", background = true, std_in<in, std_out> out,
+  auto exit_code = run("cat", newgroup = true, std_in<in, std_out> out,
                        $timeout = std::chrono::seconds(3));
 
   EXPECT_EQ(exit_code, 0);
@@ -150,7 +148,7 @@ TEST(BackgroundTest, BackgroundTrueRunDoesNotAutoRedirectStdin) {
 // =============================================================================
 
 #if !defined(_WIN32)
-TEST(BackgroundTest, PidAccessorReturnsValidPid) {
+TEST(NewgroupTest, PidAccessorReturnsValidPid) {
   subprocess::detail::subprocess proc({CMD_SLEEP_1});
 
   proc.async_run();
@@ -166,8 +164,8 @@ TEST(BackgroundTest, PidAccessorReturnsValidPid) {
   EXPECT_EQ(exit_code, 0);
 }
 
-TEST(BackgroundTest, PidAccessorInBackgroundMode) {
-  subprocess::detail::subprocess proc({CMD_SLEEP_1}, background = true);
+TEST(NewgroupTest, PidAccessorInNewgroupMode) {
+  subprocess::detail::subprocess proc({CMD_SLEEP_1}, newgroup = true);
 
   proc.async_run();
   auto pid = proc.pid();
@@ -175,7 +173,7 @@ TEST(BackgroundTest, PidAccessorInBackgroundMode) {
   EXPECT_GT(pid, 0);
   EXPECT_EQ(kill(pid, 0), 0);
 
-  // In background mode the process should be in its own process group.
+  // In newgroup mode the process should be in its own process group.
   // getpgid(pid) should equal pid (since the child called setpgid(0,0)).
   EXPECT_EQ(getpgid(pid), pid);
 
@@ -183,15 +181,15 @@ TEST(BackgroundTest, PidAccessorInBackgroundMode) {
   EXPECT_EQ(exit_code, 0);
 }
 
-TEST(BackgroundTest, PidAccessorNoBackgroundNoProcessGroup) {
-  subprocess::detail::subprocess proc({CMD_SLEEP_1}, background = false);
+TEST(NewgroupTest, PidAccessorNoNewgroupNoProcessGroup) {
+  subprocess::detail::subprocess proc({CMD_SLEEP_1}, newgroup = false);
 
   proc.async_run();
   auto pid = proc.pid();
 
   EXPECT_GT(pid, 0);
 
-  // Without background mode the process inherits our process group.
+  // Without newgroup mode the process inherits our process group.
   auto pgid = getpgid(pid);
   auto my_pgid = getpgid(getpid());
   EXPECT_EQ(pgid, my_pgid);
@@ -206,7 +204,7 @@ TEST(BackgroundTest, PidAccessorNoBackgroundNoProcessGroup) {
 // =============================================================================
 
 #if !defined(_WIN32)
-TEST(BackgroundTest, IsAttyUtilityForRegularFile) {
+TEST(NewgroupTest, IsAttyUtilityForRegularFile) {
   // Open a regular file and verify is_atty returns false.
   int fd = open("/dev/null", O_RDONLY);
   ASSERT_GE(fd, 0);
@@ -214,7 +212,7 @@ TEST(BackgroundTest, IsAttyUtilityForRegularFile) {
   close(fd);
 }
 
-TEST(BackgroundTest, StdinIsAttyUtility) {
+TEST(NewgroupTest, StdinIsAttyUtility) {
   // Just verify the utility functions exist and return a boolean.
   // The actual return value depends on the test environment.
   auto result = subprocess::detail::stdin_is_atty();
@@ -225,12 +223,12 @@ TEST(BackgroundTest, StdinIsAttyUtility) {
 #endif  // !_WIN32
 
 // =============================================================================
-//  capture_run always uses background = true and stdin → /dev/null
+//  capture_run always uses newgroup = true and stdin → /dev/null
 // =============================================================================
 
 #if !defined(_WIN32)
-TEST(BackgroundTest, CaptureRunUsesBackgroundMode) {
-  // capture_run always passes background=true and std_in<devnull,
+TEST(NewgroupTest, CaptureRunUsesNewgroupMode) {
+  // capture_run always passes newgroup=true and std_in<devnull,
   // so the child process should be in its own process group and have
   // its stdin closed.  A background grandchild won't keep stdout/stderr
   // pipes open because the process group is cleaned up.
