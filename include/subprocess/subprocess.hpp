@@ -2112,9 +2112,10 @@ class subprocess {
              }
              if constexpr (std::is_same_v<ArgType, Newgroup>) {
 #if !defined(_WIN32)
-               newgroup_explicit_ = true;
                if (arg.newgroup) {
                  requested_pgid_ = 0;
+               } else {
+                 requested_pgid_ = INVALID_NATIVE_HANDLE_VALUE;
                }
 #endif
              }
@@ -2202,12 +2203,14 @@ class subprocess {
       }
     }
 #else
-    if (!requested_pgid_.has_value() && !newgroup_explicit_) {
+    if (!requested_pgid_.has_value()) {
       if (stdin_.inherit() && !stdin_is_atty()) {
         requested_pgid_ = 0;
       } else if (const auto fd = stdin_.get_file_fd();
                  fd.has_value() && fd->get().is_atty()) {
         requested_pgid_ = 0;
+      } else {
+        requested_pgid_ = INVALID_NATIVE_HANDLE_VALUE;
       }
     }
 #endif
@@ -2364,13 +2367,15 @@ class subprocess {
       return;
     }
     if (pid == 0) {
-      if (requested_pgid_.has_value()) {
+      if (!invalid_handle(
+              requested_pgid_.value_or(INVALID_NATIVE_HANDLE_VALUE))) {
         setpgid(0, requested_pgid_.value());
       }
       execute_command_in_child();
     } else {
       pid_.reset(pid);
-      if (requested_pgid_.has_value()) {
+      if (!invalid_handle(
+              requested_pgid_.value_or(INVALID_NATIVE_HANDLE_VALUE))) {
         auto target_pgid =
             requested_pgid_.value() == 0 ? pid : requested_pgid_.value();
         (void)setpgid(pid, target_pgid);
@@ -2603,7 +2608,6 @@ class subprocess {
   unique_pid pid_{-1};
   unique_pid pgid_{-1};
   std::optional<pid_t> requested_pgid_{std::nullopt};
-  bool newgroup_explicit_{false};
   // When the child is reaped early by pump_pipe_data() (because it exited
   // while the poll loop was still draining pipe data), the exit status is
   // stored here so that wait_for_exit() can return it without calling
