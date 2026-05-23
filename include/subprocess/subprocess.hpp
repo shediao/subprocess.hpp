@@ -897,7 +897,8 @@ class Pipe {
     unique_fd rfd_, wfd_;
   };
   static inline void create_native_pipe(pipe_pair& pair) {
-    NativeHandle fds[2];
+    NativeHandle fds[2] = {INVALID_NATIVE_HANDLE_VALUE,
+                           INVALID_NATIVE_HANDLE_VALUE};
 #if defined(_WIN32)
     SECURITY_ATTRIBUTES at;
     at.bInheritHandle = false;
@@ -2202,7 +2203,12 @@ class subprocess {
   subprocess(const subprocess&) = delete;
   subprocess& operator=(const subprocess&) = delete;
 
-  ~subprocess() { terminate(); }
+  ~subprocess() {
+    terminate();
+#if defined(_WIN32)
+    join_pump_threads();
+#endif
+  }
 
   void async_run() {
     prepare_for_child();
@@ -2260,45 +2266,67 @@ class subprocess {
     STARTUPINFOEXW startup_info{};
     startup_info.StartupInfo.cb = sizeof(startup_info);
 
-    startup_info.StartupInfo.hStdInput =
-        stdin_.child_inherit_handle().value_or(GetStdHandle(STD_INPUT_HANDLE));
-    startup_info.StartupInfo.hStdOutput =
-        stdout_.child_inherit_handle().value_or(
-            GetStdHandle(STD_OUTPUT_HANDLE));
-    startup_info.StartupInfo.hStdError =
-        stderr_.child_inherit_handle().value_or(GetStdHandle(STD_ERROR_HANDLE));
-
     startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
 
     // Build explicit handle inheritance list so that the child only inherits
     // the handles we explicitly specify, rather than all inheritable handles.
-    std::vector<HANDLE> handles_to_inherit = {
-        startup_info.StartupInfo.hStdInput,
-        startup_info.StartupInfo.hStdOutput,
-        startup_info.StartupInfo.hStdError,
+    // std handles from GetStdHandle() are included to ensure proper
+    // inheritance when PROC_THREAD_ATTRIBUTE_HANDLE_LIST is active.
+    std::vector<HANDLE> handles_to_inherit;
+    auto add_unique_handle = [&](HANDLE h) {
+      if (h == nullptr || h == INVALID_HANDLE_VALUE) {
+        return;
+      }
+      for (auto existing : handles_to_inherit) {
+        if (existing == h) {
+          return;
+        }
+      }
+      handles_to_inherit.push_back(h);
     };
 
-    // Set up PROC_THREAD_ATTRIBUTE_LIST for explicit handle inheritance.
-    SIZE_T attr_list_size = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_list_size);
-    proc_thread_attr_list_.resize(attr_list_size);
-    auto* attr_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
-        proc_thread_attr_list_.data());
-    if (!InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_list_size)) {
-      print_error("InitializeProcThreadAttributeList failed: " +
-                  std::to_string(GetLastError()));
-      return;
+    auto stdin_handle = stdin_.child_inherit_handle();
+    auto stdout_handle = stdout_.child_inherit_handle();
+    auto stderr_handle = stderr_.child_inherit_handle();
+
+    startup_info.StartupInfo.hStdInput =
+        stdin_handle.value_or(GetStdHandle(STD_INPUT_HANDLE));
+    startup_info.StartupInfo.hStdOutput =
+        stdout_handle.value_or(GetStdHandle(STD_OUTPUT_HANDLE));
+    startup_info.StartupInfo.hStdError =
+        stderr_handle.value_or(GetStdHandle(STD_ERROR_HANDLE));
+
+    add_unique_handle(startup_info.StartupInfo.hStdInput);
+    add_unique_handle(startup_info.StartupInfo.hStdOutput);
+    add_unique_handle(startup_info.StartupInfo.hStdError);
+
+    // Set up PROC_THREAD_ATTRIBUTE_LIST for explicit handle inheritance
+    // only when there are real inheritable handles. An empty list would
+    // cause UpdateProcThreadAttribute to fail with ERROR_BAD_LENGTH.
+    LPPROC_THREAD_ATTRIBUTE_LIST attr_list = nullptr;
+    if (!handles_to_inherit.empty()) {
+      SIZE_T attr_list_size = 0;
+      InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_list_size);
+      proc_thread_attr_list_.resize(attr_list_size);
+      attr_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
+          proc_thread_attr_list_.data());
+      if (!InitializeProcThreadAttributeList(attr_list, 1, 0,
+                                             &attr_list_size)) {
+        print_error("InitializeProcThreadAttributeList failed: " +
+                    std::to_string(GetLastError()));
+        return;
+      }
+      if (!UpdateProcThreadAttribute(
+              attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+              handles_to_inherit.data(),
+              handles_to_inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
+        DeleteProcThreadAttributeList(attr_list);
+        print_error("UpdateProcThreadAttribute failed: " +
+                    std::to_string(GetLastError()));
+        return;
+      }
+      startup_info.lpAttributeList = attr_list;
     }
-    if (!UpdateProcThreadAttribute(
-            attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            handles_to_inherit.data(),
-            handles_to_inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
-      DeleteProcThreadAttributeList(attr_list);
-      print_error("UpdateProcThreadAttribute failed: " +
-                  std::to_string(GetLastError()));
-      return;
-    }
-    startup_info.lpAttributeList = attr_list;
 
     auto search_path =
         [](std::wstring const& cmd,
@@ -2354,8 +2382,10 @@ class subprocess {
     auto env_block = create_environment_string_data(env_);
 
     PROCESS_INFORMATION pi{};
-    DWORD creation_flags =
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+    DWORD creation_flags = CREATE_UNICODE_ENVIRONMENT;
+    if (attr_list != nullptr) {
+      creation_flags |= EXTENDED_STARTUPINFO_PRESENT;
+    }
     if (newgroup_) {
       creation_flags |= CREATE_NEW_PROCESS_GROUP;
     }
@@ -2366,7 +2396,9 @@ class subprocess {
                        cwd_.empty() ? nullptr : cwd_.data(),
                        reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &pi);
 
-    DeleteProcThreadAttributeList(attr_list);
+    if (attr_list != nullptr) {
+      DeleteProcThreadAttributeList(attr_list);
+    }
     startup_info.lpAttributeList = nullptr;
 
     if (success) {
