@@ -151,6 +151,32 @@ run("printenv", $env += {{"NEW_VAR", "hello"}});
 run("my_program", $env["PATH"] += "/opt/my_app/bin");
 ```
 
+### 6. Timeout Control
+
+Use the `$timeout` argument to set a time limit for the child process.
+
+```cpp
+// 5-second timeout (using an integer for seconds)
+run("some_command", $timeout = 5);
+
+// Timeout using chrono milliseconds
+using namespace std::chrono_literals;
+run("some_command", $timeout = 5000ms);
+
+// Disable timeout (default)
+run("some_command", $timeout = $timeout_infinite);
+```
+
+### 7. Process Group Control
+
+Use the `$newgroup` argument to control whether the child process is placed in a new process group. When enabled, timeout termination will kill the entire process tree.
+
+```cpp
+run("some_command", $newgroup = true);
+```
+
+> **Note**: `capture_run` enables `$newgroup` internally by default, so manual specification is unnecessary.
+
 ## 📚 API Reference
 
 ### Core Functions
@@ -188,6 +214,14 @@ Named arguments are used to control various aspects of process execution.
 - **`$env["VAR"] += value`**: Append `value` to the end of the environment variable named `VAR` (useful for `PATH`, etc.).
 - **`$env["VAR"] <<= value`**: Prepend `value` to the beginning of the environment variable named `VAR`.
 
+- **`$timeout = duration`**: Set a timeout for the child process.
+  - `duration` can be:
+    - `int`: Seconds, e.g., `$timeout = 5`.
+    - `std::chrono::milliseconds`: Milliseconds, e.g., `$timeout = 5000ms`.
+    - `$timeout_infinite`: Disable timeout (default).
+
+- **`$newgroup = bool`**: Place the child process in a new process group. When enabled, timeout termination kills the entire process tree. `capture_run` enables this by default.
+
 ### The `subprocess::buffer` Type
 
 A simple buffer class for exchanging data with subprocesses.
@@ -199,20 +233,3 @@ A simple buffer class for exchanging data with subprocesses.
 - `size()`: Gets the buffer size.
 - `empty()`: Checks if the buffer is empty.
 - `clear()`: Clears the buffer.
-
-### Helper Functions
-
-The `subprocess` namespace also provides several useful cross-platform helper functions, which are aliased under the `process` namespace for convenience.
-
-- `process::getenv(name)`: Gets an environment variable.
-- `process::environ()`: Gets all environment variables.
-- `process::getcwd()`: Gets the current working directory.
-- `process::chdir(path)`: Changes the current working directory.
-- `process::home()`: Gets the user's home directory.
-- `process::pid()`: Gets the current process ID.
-
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shediao/subprocess.hpp)
-
----
-
-Happy Coding!
