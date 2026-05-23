@@ -2239,29 +2239,6 @@ class subprocess {
     }
 #endif
 
-    // Launch a watchdog thread if a timeout is set.
-    // The watchdog kills the process after timeout expires, unblocking
-    // pump_pipe_data() if it is stuck waiting for pipe I/O.
-    [[maybe_unused]] auto launch_watchdog = [this]() {
-      if (!timeout_.has_value()) {
-        return;
-      }
-      auto timeout_val = *timeout_;
-      auto state = watchdog_state_;
-      watchdog_thread_.emplace([timeout_val, state, this]() {
-        // Wait for timeout or early cancellation via stop_watchdog().
-        {
-          std::unique_lock lock(state->mtx);
-          if (state->cv.wait_for(lock, timeout_val,
-                                 [&state] { return state->done; })) {
-            return;  // canceled, process already finished
-          }
-        }
-        // Timeout expired — kill the entire process tree
-        terminate();
-      });
-    };
-
 #if defined(_WIN32)
     STARTUPINFOEXW startup_info{};
     startup_info.StartupInfo.cb = sizeof(startup_info);
@@ -2435,6 +2412,7 @@ class subprocess {
         (void)setpgid(pid, target_pgid);
         pgid_.reset(target_pgid);
       }
+
       launch_watchdog();
       pump_pipe_data();
     }
@@ -2445,6 +2423,27 @@ class subprocess {
     async_run();
     return wait_for_exit();
   }
+
+#if !defined(_WIN32)
+  void launch_watchdog() {
+    if (!timeout_.has_value()) {
+      return;
+    }
+    auto timeout_val = *timeout_;
+    auto state = watchdog_state_;
+    watchdog_thread_.emplace([timeout_val, state, this]() {
+      // Wait for timeout or early cancellation via stop_watchdog().
+      {
+        std::unique_lock lock(state->mtx);
+        if (state->cv.wait_for(lock, timeout_val,
+                               [&state] { return state->done; })) {
+          return;  // canceled, process already finished
+        }
+      }
+      // Timeout expired — kill the entire process tree
+      terminate();
+    });
+  };
 
   void stop_watchdog() {
     if (watchdog_thread_.has_value()) {
@@ -2457,6 +2456,7 @@ class subprocess {
       watchdog_thread_.reset();
     }
   }
+#endif  // !_WIN32
 
 #if defined(_WIN32)
   int wait_for_exit() {
