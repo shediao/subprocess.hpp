@@ -275,6 +275,38 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
 }
 #endif
 
+template <typename F>
+class scope_exit {
+ public:
+  explicit scope_exit(F&& f) noexcept(std::is_nothrow_move_constructible_v<F>)
+      : fn_(std::forward<F>(f)) {}
+
+  scope_exit(scope_exit&& other) noexcept
+      : fn_(std::move(other.fn_)), active_(other.active_) {
+    other.active_ = false;
+  }
+
+  scope_exit(const scope_exit&) = delete;
+  scope_exit& operator=(const scope_exit&) = delete;
+  scope_exit& operator=(scope_exit&&) = delete;
+
+  ~scope_exit() {
+    if (active_) {
+      fn_();
+    }
+  }
+  void release() noexcept { active_ = false; }
+
+ private:
+  F fn_;
+  bool active_ = true;
+};
+
+template <typename F>
+auto make_scope_exit(F&& f) {
+  return scope_exit<std::decay_t<F>>{std::forward<F>(f)};
+}
+
 template <typename T>
 struct fd_traits;
 
@@ -2460,8 +2492,9 @@ class subprocess {
 
 #if defined(_WIN32)
   int wait_for_exit() {
+    auto threads_guard =
+        detail::make_scope_exit([this] { join_pump_threads(); });
     if (!process_handle_) {
-      join_pump_threads();
       return 127;
     }
     auto rc = WaitForSingleObject(
@@ -2471,21 +2504,18 @@ class subprocess {
     if (rc == WAIT_OBJECT_0) {
       DWORD ret{127};
       GetExitCodeProcess(process_handle_.get(), &ret);
-      join_pump_threads();
       return static_cast<int>(ret);
     }
     if (rc == WAIT_TIMEOUT) {
       terminate();  // close_all() unblocks I/O threads
-      join_pump_threads();
       return 127;
     }
-    join_pump_threads();
     return 127;
   }
 #else
   int wait_for_exit() {
+    auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
     if (!pid_) {
-      stop_watchdog();
       return 127;
     }
     int status = 0;
@@ -2500,7 +2530,6 @@ class subprocess {
       // grandchildren.  Use the stored status.
       status = early_exit_status_;
     }
-    stop_watchdog();
 
     auto return_code = -1;
     if (WIFEXITED(status)) {
