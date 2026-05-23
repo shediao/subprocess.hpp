@@ -295,7 +295,7 @@ class scope_exit {
   scope_exit& operator=(const scope_exit&) = delete;
   scope_exit& operator=(scope_exit&&) = delete;
 
-  ~scope_exit() {
+  ~scope_exit() noexcept(std::is_nothrow_invocable_v<F>) {
     if (active_) {
       fn_();
     }
