@@ -2247,7 +2247,7 @@ class subprocess {
 
 #if defined(_WIN32)
     // Create a Job Object to manage the entire process tree.
-    // This allows the watchdog to terminate all child processes (e.g., when
+    // This allows the parent to terminate all child processes (e.g., when
     // cmd.exe spawns ping.exe, terminating cmd.exe alone does not kill ping,
     // and ping would keep stdout/stderr pipes open, blocking pump_pipe_data).
     if (!(*job_handle_)) {
