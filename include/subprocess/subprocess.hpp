@@ -2423,7 +2423,7 @@ class subprocess {
       }
       pump_pipe_data();
     } else {
-      std::wcerr << utf8_to_utf16(get_last_error_message()) << L'\n';
+      print_error(get_last_error_message());
       stdin_.close_all();
       stdout_.close_all();
       stderr_.close_all();
