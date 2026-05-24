@@ -175,18 +175,6 @@ struct visitor : T... {
 using ssize_t = std::ptrdiff_t;
 #endif
 
-inline void print_error(std::string_view msg) {
-  if (msg.empty()) {
-    return;
-  }
-#if defined(_WIN32)
-  (void)WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg.data(),
-                  static_cast<DWORD>(msg.size()), NULL, NULL);
-#else
-  [[maybe_unused]] auto ret = write(STDERR_FILENO, msg.data(), msg.size());
-#endif
-}
-
 #if defined(_WIN32)
 // Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
 inline std::wstring utf8_to_utf16(const std::string_view str) {
@@ -196,7 +184,6 @@ inline std::wstring utf8_to_utf16(const std::string_view str) {
   int size_needed =
       MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
   if (size_needed <= 0) {
-    print_error("MultiByteToWideChar error: " + std::to_string(GetLastError()));
     return {};
   }
   std::wstring wstr(static_cast<size_t>(size_needed), 0);
@@ -213,13 +200,45 @@ inline std::string utf16_to_utf8(const std::wstring_view wstr) {
   int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
                                         (int)wstr.size(), NULL, 0, NULL, NULL);
   if (size_needed <= 0) {
-    print_error("WideCharToMultiByte error: " + std::to_string(GetLastError()));
     return {};
   }
   std::string str(static_cast<size_t>(size_needed), 0);
   WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), str.data(),
                       size_needed, NULL, NULL);
   return str;
+}
+inline void print_error(std::wstring_view msg) {
+  if (msg.empty()) {
+    return;
+  }
+
+  auto stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
+  if (stderr_handle == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  DWORD mode;
+  if (GetConsoleMode(stderr_handle, &mode)) {
+    if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+      (void)WriteConsoleW(stderr_handle, msg.data(),
+                          static_cast<DWORD>(msg.size()), NULL, NULL);
+      return;
+    }
+  }
+  // Not a VT-enabled console (or not a console at all) — fall back to
+  // WriteFile with UTF-8 encoded data.
+  auto utf8_msg = utf16_to_utf8(msg);
+  (void)WriteFile(stderr_handle, utf8_msg.data(),
+                  static_cast<DWORD>(utf8_msg.size()), NULL, NULL);
+}
+#else
+inline void print_error(std::string_view const msg) {
+  if (msg.empty()) {
+    return;
+  }
+  ssize_t ret;
+  do {
+    ret = write(STDERR_FILENO, msg.data(), msg.size());
+  } while (ret == -1 && errno == EINTR);
 }
 #endif  // _WIN32
 
@@ -442,8 +461,8 @@ class buffer {
     return *this;
   }
   explicit buffer(callback&& cb) : callback_(std::move(cb)) {}
-  explicit buffer(std::string_view const& str) : buf_(str.begin(), str.end()) {}
-  buffer(std::string_view const& str, callback&& cb)
+  explicit buffer(std::string_view str) : buf_(str.begin(), str.end()) {}
+  buffer(std::string_view const str, callback&& cb)
       : buf_(str.begin(), str.end()), callback_(std::move(cb)) {}
   buffer(const std::string::iterator first, const std::string::iterator last)
       : buf_(first, last) {}
@@ -650,8 +669,8 @@ inline std::vector<wchar_t> create_environment_string_data(
 
 #endif
 
-inline std::string get_last_error_message() {
 #if defined(_WIN32)
+inline std::wstring get_last_error_message() {
   DWORD error = GetLastError();
   LPVOID error_msg{NULL};
 
@@ -660,22 +679,23 @@ inline std::string get_last_error_message() {
                  NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                  (LPWSTR)&error_msg, 0, NULL);
   if (error_msg) {
-    auto ret = utf16_to_utf8((wchar_t*)error_msg);
+    auto ret = std::wstring{static_cast<wchar_t*>(error_msg)};
     LocalFree(error_msg);
     return ret;
   }
-  return "Unknown error or FormatMessageW failed, error code: " +
-         std::to_string(error);
-#else  // _WIN32
+  return L"Unknown error or FormatMessageW failed, error code: " +
+         std::to_wstring(error);
+}
+#else   // _WIN32
+inline std::string get_last_error_message() {
   const int error = errno;
   if (auto* err_msg = strerror(error)) {
     return {err_msg};
   }
   return "Unknown error or strerror failed, error code: " +
          std::to_string(errno);
-
-#endif  // !_WIN32
 }
+#endif  // !_WIN32
 
 // return value: -1 on error, >=0 on success
 inline ssize_t write_some(unique_fd const& fd, void const* data,
@@ -752,57 +772,25 @@ inline bool read_exact(unique_fd const& fd, void* data, std::size_t size) {
   return true;
 }
 
-#if defined(_WIN32)
-inline std::optional<std::string> get_file_extension(std::string const& f) {
-  auto const dot_pos = f.rfind('.');
-  if (dot_pos == std::string::npos) {
-    return std::nullopt;
-  }
-
-  if (dot_pos == f.length() - 1) {
-    return std::nullopt;
-  }
-
-  auto const separator_pos = f.find_last_of("/\\");
-  if (separator_pos != std::string::npos) {
-    if (separator_pos > dot_pos) {
-      return std::nullopt;
-    }
-    if (dot_pos == separator_pos + 1) {
-      return std::nullopt;
-    }
-  } else {
-    if (dot_pos == 0) {
-      return std::nullopt;
-    }
-  }
-  return f.substr(dot_pos + 1);
-}
-#endif  // !_WIN32
-
-inline bool is_executable(std::string const& f) {
-#if defined(_WIN32)
-  auto attr = GetFileAttributesW(utf8_to_utf16(f).c_str());
-  return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
-#else
-  struct stat sb{};
-  return (stat(f.c_str(), &sb) == 0 && S_ISREG(sb.st_mode) &&
-          access(f.c_str(), X_OK) == 0);
-#endif
-}
-
 #if !defined(_WIN32)
 inline std::optional<std::string> find_command_in_path(
-    std::string const& exe_file) {
+    std::string_view exe_file) {
   constexpr char path_env_sep = ':';
 
-  if (exe_file.find_last_of("/\\") != std::string::npos) {
+  if (exe_file.find_last_of("/\\") != std::string_view::npos) {
     return std::nullopt;
   }
+
+  auto is_executable = [](std::string const& f) {
+    struct stat sb{};
+    return (stat(f.c_str(), &sb) == 0 && S_ISREG(sb.st_mode) &&
+            access(f.c_str(), X_OK) == 0);
+  };
   for (const auto paths = split(std::string(::getenv("PATH")), path_env_sep);
        auto& p : paths) {
     constexpr char separator = '/';
-    if (std::string f = p + separator + exe_file; is_executable(f)) {
+    if (std::string f = p + separator + std::string(exe_file);
+        is_executable(f)) {
       return f;
     }
   }
@@ -987,18 +975,18 @@ struct File {
     WriteAppend,
   };
 
-  explicit File(std::string const& p, bool append = false)
+  explicit File(std::string_view p, bool append = false)
       : path_{
 #if defined(_WIN32)
-            utf8_to_utf16(std::move(p))
+            utf8_to_utf16(p)
 #else
-            std::move(p)
+            p
 #endif
         },
         append_{append} {
   }
 #if defined(_WIN32)
-  explicit File(std::wstring const& p, bool append = false)
+  explicit File(std::wstring_view p, bool append = false)
       : path_{p}, append_{append} {}
 #endif
 
@@ -1070,8 +1058,8 @@ struct File {
             : (type == OpenType::WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
         FILE_ATTRIBUTE_NORMAL, nullptr));
     if (!fd_) {
-      print_error("open failed: " + utf16_to_utf8(path_) +
-                  ", error: " + std::to_string(GetLastError()));
+      print_error(L"open failed: " + path_ + L", error: " +
+                  std::to_wstring(GetLastError()));
       return;
     }
 #else
@@ -1245,10 +1233,6 @@ class Buffer {
   Pipe pipe_;
 };
 
-[[maybe_unused]]
-// Launches I/O pump threads for stdin/stdout/stderr and returns them.
-// The caller is responsible for joining the threads after the child
-// process has exited or been terminated.
 inline std::vector<std::thread> read_write_to_buffer_with_threads(
     std::optional<std::reference_wrapper<Buffer>> in,
     std::optional<std::reference_wrapper<Buffer>> out,
@@ -1263,7 +1247,7 @@ inline std::vector<std::thread> read_write_to_buffer_with_threads(
           } while (write_size > 0);
           buf.close_write();
           if (write_size == -1) {
-            print_error("write_some() failed");
+            print_error(get_last_error_message());
           }
         },
         std::ref(in.value()));
@@ -1277,7 +1261,7 @@ inline std::vector<std::thread> read_write_to_buffer_with_threads(
           } while (read_size > 0);
           buf.close_read();
           if (read_size == -1) {
-            print_error("read_some() failed: " + get_last_error_message());
+            print_error(get_last_error_message());
           }
         },
         std::ref(out.value()));
@@ -1291,7 +1275,7 @@ inline std::vector<std::thread> read_write_to_buffer_with_threads(
           } while (read_size > 0);
           buf.close_read();
           if (read_size == -1) {
-            print_error("read_some() failed: " + get_last_error_message());
+            print_error(get_last_error_message());
           }
         },
         std::ref(err.value()));
@@ -1545,8 +1529,8 @@ class Redirector {
                 if (!SetHandleInformation(inheritable_handle.get(),
                                           HANDLE_FLAG_INHERIT,
                                           HANDLE_FLAG_INHERIT)) {
-                  print_error("SetHandleInformation failed: " +
-                              std::to_string(GetLastError()));
+                  print_error(L"SetHandleInformation failed: " +
+                              std::to_wstring(GetLastError()));
                   return;
                 }
               }
@@ -1564,8 +1548,8 @@ class Redirector {
               if (value.fd()) {
                 if (!SetHandleInformation(value.fd().get(), HANDLE_FLAG_INHERIT,
                                           HANDLE_FLAG_INHERIT)) {
-                  print_error("SetHandleInformation failed: " +
-                              std::to_string(GetLastError()));
+                  print_error(L"SetHandleInformation failed: " +
+                              std::to_wstring(GetLastError()));
                   return;
                 }
               }
@@ -1585,8 +1569,8 @@ class Redirector {
                 if (!SetHandleInformation(inheritable_handle.get(),
                                           HANDLE_FLAG_INHERIT,
                                           HANDLE_FLAG_INHERIT)) {
-                  print_error("SetHandleInformation failed: " +
-                              std::to_string(GetLastError()));
+                  print_error(L"SetHandleInformation failed: " +
+                              std::to_wstring(GetLastError()));
                   return;
                 }
               }
@@ -1789,11 +1773,11 @@ struct stdin_redirector {
   StdinRedirector operator<(Pipe p) const {
     return StdinRedirector{std::move(p)};
   }
-  StdinRedirector operator<(std::string const& file) const {
+  StdinRedirector operator<(std::string_view file) const {
     return StdinRedirector{File{file}};
   }
 #if defined(_WIN32)
-  StdinRedirector operator<(std::wstring const& file) const {
+  StdinRedirector operator<(std::wstring_view file) const {
     return StdinRedirector{File{file}};
   }
 #endif
@@ -1804,11 +1788,11 @@ struct stdout_redirector {
   StdoutRedirector operator>(Pipe const& p) const {
     return StdoutRedirector{p};
   }
-  StdoutRedirector operator>(std::string const& file) const {
+  StdoutRedirector operator>(std::string_view file) const {
     return StdoutRedirector{File{file}};
   }
 #if defined(_WIN32)
-  StdoutRedirector operator>(std::wstring const& file) const {
+  StdoutRedirector operator>(std::wstring_view file) const {
     return StdoutRedirector{File{file}};
   }
 #endif
@@ -1820,11 +1804,11 @@ struct stdout_redirector {
     return StdoutRedirector{buf};
   }
 
-  StdoutRedirector operator>>(std::string const& file) const {
+  StdoutRedirector operator>>(std::string_view file) const {
     return StdoutRedirector{File{file, true}};
   }
 #if defined(_WIN32)
-  StdoutRedirector operator>>(std::wstring const& file) const {
+  StdoutRedirector operator>>(std::wstring_view file) const {
     return StdoutRedirector{File{file, true}};
   }
 #endif
@@ -1834,11 +1818,11 @@ struct stderr_redirector {
   StderrRedirector operator>(Pipe p) const {
     return StderrRedirector{std::move(p)};
   }
-  StderrRedirector operator>(std::string const& file) const {
+  StderrRedirector operator>(std::string_view file) const {
     return StderrRedirector{File{file}};
   }
 #if defined(_WIN32)
-  StderrRedirector operator>(std::wstring const& file) const {
+  StderrRedirector operator>(std::wstring_view file) const {
     return StderrRedirector{File{file}};
   }
 #endif
@@ -1849,11 +1833,11 @@ struct stderr_redirector {
   StderrRedirector operator>>(buffer& buf) const {
     return StderrRedirector{buf};
   }
-  StderrRedirector operator>>(std::string const& file) const {
+  StderrRedirector operator>>(std::string_view file) const {
     return StderrRedirector{File{file, true}};
   }
 #if defined(_WIN32)
-  StderrRedirector operator>>(std::wstring const& file) const {
+  StderrRedirector operator>>(std::wstring_view file) const {
     return StderrRedirector{File{file, true}};
   }
 #endif
@@ -1887,7 +1871,7 @@ struct EnvAppend {
 
 // Append or prepend a value to a specific environment variable, e.g., PATH.
 struct EnvItemAppend {
-  EnvItemAppend& operator+=(std::string val) {
+  EnvItemAppend& operator+=(std::string_view val) {
 #if defined(_WIN32)
     std::get<1>(kv) = utf8_to_utf16(val);
 #else
@@ -1896,7 +1880,7 @@ struct EnvItemAppend {
     std::get<2>(kv) = true;
     return *this;
   }
-  EnvItemAppend& operator<<=(std::string val) {
+  EnvItemAppend& operator<<=(std::string_view val) {
 #if defined(_WIN32)
     std::get<1>(kv) = utf8_to_utf16(val);
 #else
@@ -1907,12 +1891,12 @@ struct EnvItemAppend {
   }
 
 #if defined(_WIN32)
-  EnvItemAppend& operator+=(std::wstring val) {
+  EnvItemAppend& operator+=(std::wstring_view val) {
     std::get<1>(kv) = val;
     std::get<2>(kv) = true;
     return *this;
   }
-  EnvItemAppend& operator<<=(std::wstring val) {
+  EnvItemAppend& operator<<=(std::wstring_view val) {
     std::get<1>(kv) = val;
     std::get<2>(kv) = false;
     return *this;
@@ -1947,15 +1931,15 @@ struct timeout_operator {
 };
 
 struct cwd_operator {
-  Cwd operator=(std::string const& p) const {
+  Cwd operator=(std::string_view p) const {
 #if defined(_WIN32)
     return Cwd{utf8_to_utf16(p)};
 #else
-    return Cwd{p};
+    return Cwd{std::string(p)};
 #endif
   }
 #if defined(_WIN32)
-  Cwd operator=(std::wstring const& p) const { return Cwd{p}; }
+  Cwd operator=(std::wstring_view p) const { return Cwd{std::wstring{p}}; }
 #endif
 };
 struct env_operator {
@@ -1991,20 +1975,21 @@ struct env_operator {
     return EnvAppend{std::move(env)};
   }
 #endif
-  EnvItemAppend operator[](std::string key) const {
+  EnvItemAppend operator[](std::string_view key) const {
 #if defined(_WIN32)
     return EnvItemAppend{{utf8_to_utf16(key), L"", true}};
 #else
-    return EnvItemAppend{{key, "", true}};
+    return EnvItemAppend{{std::string(key), "", true}};
 #endif
   }
 };
 
 namespace named_args {
 #if defined(_WIN32)
-[[maybe_unused]] inline static const auto devnull = std::string{"NUL"};
+[[maybe_unused]] inline static const auto devnull = std::wstring_view{L"NUL"};
 #else
-[[maybe_unused]] inline static const auto devnull = std::string{"/dev/null"};
+[[maybe_unused]] inline static const auto devnull =
+    std::string_view{"/dev/null"};
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector std_in;
 [[maybe_unused]] inline constexpr static stdout_redirector std_out;
@@ -2017,9 +2002,10 @@ namespace named_args {
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
-[[maybe_unused]] inline const static auto $devnull = std::string{"NUL"};
+[[maybe_unused]] inline const static auto $devnull = std::wstring_view{L"NUL"};
 #else
-[[maybe_unused]] inline const static auto $devnull = std::string{"/dev/null"};
+[[maybe_unused]] inline const static auto $devnull =
+    std::string_view{"/dev/null"};
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector $stdin;
 [[maybe_unused]] inline constexpr static stdout_redirector $stdout;
@@ -2326,8 +2312,8 @@ class subprocess {
           proc_thread_attr_list_.data());
       if (!InitializeProcThreadAttributeList(attr_list, 1, 0,
                                              &attr_list_size)) {
-        print_error("InitializeProcThreadAttributeList failed: " +
-                    std::to_string(GetLastError()));
+        print_error(L"InitializeProcThreadAttributeList failed: " +
+                    std::to_wstring(GetLastError()));
         return;
       }
       if (!UpdateProcThreadAttribute(
@@ -2335,8 +2321,8 @@ class subprocess {
               handles_to_inherit.data(),
               handles_to_inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
         DeleteProcThreadAttributeList(attr_list);
-        print_error("UpdateProcThreadAttribute failed: " +
-                    std::to_string(GetLastError()));
+        print_error(L"UpdateProcThreadAttribute failed: " +
+                    std::to_wstring(GetLastError()));
         return;
       }
       startup_info.lpAttributeList = attr_list;
