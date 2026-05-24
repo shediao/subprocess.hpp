@@ -983,10 +983,10 @@ struct File {
     WriteAppend,
   };
 
-  explicit File(Device const& dev, bool append = false)
-      : path_{dev.name_}, append_{append} {}
+  explicit File(Device const& dev, OpenType read_or_write = OpenType::ReadOnly)
+      : path_{dev.name_}, open_type_{read_or_write} {}
 
-  explicit File(std::string_view p, bool append = false)
+  explicit File(std::string_view p, OpenType read_or_write = OpenType::ReadOnly)
       : path_{
 #if defined(_WIN32)
             utf8_to_utf16(p)
@@ -994,32 +994,43 @@ struct File {
             p
 #endif
         },
-        append_{append} {
+        open_type_{read_or_write} {
   }
 #if defined(_WIN32)
-  explicit File(std::wstring_view p, bool append = false)
-      : path_{p}, append_{append} {}
+  explicit File(std::wstring_view p,
+                OpenType read_or_write = OpenType::ReadOnly)
+      : path_{p}, open_type_{read_or_write} {}
 #endif
 
   File(File&& o) noexcept
-      : path_{std::move(o.path_)}, append_{o.append_}, fd_{std::move(o.fd_)} {}
+      : path_{std::move(o.path_)},
+        open_type_{o.open_type_},
+        fd_{std::move(o.fd_)} {}
   File& operator=(File&& o) noexcept {
     fd_ = std::move(o.fd_);
     path_ = std::move(o.path_);
-    append_ = o.append_;
+    open_type_ = o.open_type_;
     return *this;
   }
   ~File() = default;
   File(File const&) = delete;
   File& operator=(File const&) = delete;
 
-  void open_for_read() { open_impl(OpenType::ReadOnly); }
-  void open_for_write() {
-    if (append_) {
-      open_impl(OpenType::WriteAppend);
-    } else {
-      open_impl(OpenType::WriteTruncate);
+  void open_for_read() {
+    if (fd_) {
+      return;
     }
+    open_type_ = OpenType::ReadOnly;
+    open_impl();
+  }
+  void open_for_write() {
+    if (fd_) {
+      return;
+    }
+    if (open_type_ == OpenType::ReadOnly) {
+      open_type_ = OpenType::WriteTruncate;
+    }
+    open_impl();
   }
   void close() { fd_.close(); }
   [[nodiscard]] unique_fd const& fd() const { return fd_; }
@@ -1039,14 +1050,13 @@ struct File {
   }
 
   File dup() const {
-    File f{path_};
-    f.append_ = append_;
+    File f{path_, open_type_};
     f.fd_ = fd_.dup();
     return f;
   }
 
  private:
-  void open_impl(OpenType type) {
+  void open_impl() {
     if (fd_) {
       return;
     }
@@ -1056,31 +1066,46 @@ struct File {
     sa.lpSecurityDescriptor = nullptr;
     sa.bInheritHandle = FALSE;  // Default non-inheritable
 
-    fd_.reset(CreateFileW(
-        path_.c_str(),
-        type == OpenType::ReadOnly
-            ? GENERIC_READ
-            : (type == OpenType::WriteAppend ? FILE_APPEND_DATA
-                                             : GENERIC_WRITE),
-        FILE_SHARE_READ,
-        &sa,  // Security attributes
-        type == OpenType::ReadOnly
-            ? OPEN_EXISTING
-            : (type == OpenType::WriteAppend ? OPEN_ALWAYS : CREATE_ALWAYS),
-        FILE_ATTRIBUTE_NORMAL, nullptr));
+    DWORD dwDesiredAccess;
+    DWORD dwCreationDisposition;
+    switch (open_type_) {
+      case OpenType::ReadOnly:
+        dwDesiredAccess = GENERIC_READ;
+        dwCreationDisposition = OPEN_EXISTING;
+        break;
+      case OpenType::WriteTruncate:
+        dwDesiredAccess = GENERIC_WRITE;
+        dwCreationDisposition = CREATE_ALWAYS;
+        break;
+      case OpenType::WriteAppend:
+        dwDesiredAccess = FILE_APPEND_DATA;
+        dwCreationDisposition = OPEN_ALWAYS;
+        break;
+    }
+    fd_.reset(CreateFileW(path_.c_str(), dwDesiredAccess, FILE_SHARE_READ, &sa,
+                          dwCreationDisposition, FILE_ATTRIBUTE_NORMAL,
+                          nullptr));
     if (!fd_) {
       print_error(L"open failed: " + path_ + L", error: " +
                   std::to_wstring(GetLastError()));
       return;
     }
 #else
-    fd_.reset((type == OpenType::ReadOnly)
-                  ? open(path_.c_str(), O_RDONLY | O_CLOEXEC)
-                  : open(path_.c_str(),
-                         (type == OpenType::WriteAppend)
-                             ? (O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC)
-                             : (O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC),
-                         0644));
+    int flag = O_CLOEXEC;
+    switch (open_type_) {
+      case OpenType::ReadOnly:
+        flag |= O_RDONLY;
+        break;
+      case OpenType::WriteTruncate:
+        flag |= O_WRONLY | O_CREAT | O_TRUNC;
+        break;
+      case OpenType::WriteAppend:
+        flag |= O_WRONLY | O_CREAT | O_APPEND;
+        break;
+    }
+    fd_.reset((open_type_ == OpenType::ReadOnly)
+                  ? ::open(path_.c_str(), flag)
+                  : ::open(path_.c_str(), flag, 0644));
     if (!fd_) {
       print_error("open failed: " + path_);
       return;
@@ -1092,7 +1117,7 @@ struct File {
 #else
   std::string path_;
 #endif
-  bool append_{false};
+  OpenType open_type_;
   unique_fd fd_{INVALID_NATIVE_HANDLE_VALUE};
 };
 
@@ -1785,14 +1810,14 @@ struct stdin_redirector {
     return StdinRedirector{std::move(p)};
   }
   StdinRedirector operator<(std::string_view file) const {
-    return StdinRedirector{File{file}};
+    return StdinRedirector{File{file, File::OpenType::ReadOnly}};
   }
   StdinRedirector operator<(Device file) const {
-    return StdinRedirector{File{file}};
+    return StdinRedirector{File{file, File::OpenType::ReadOnly}};
   }
 #if defined(_WIN32)
   StdinRedirector operator<(std::wstring_view file) const {
-    return StdinRedirector{File{file}};
+    return StdinRedirector{File{file, File::OpenType::ReadOnly}};
   }
 #endif
   StdinRedirector operator<(buffer& buf) const { return StdinRedirector{buf}; }
@@ -1803,14 +1828,14 @@ struct stdout_redirector {
     return StdoutRedirector{p};
   }
   StdoutRedirector operator>(std::string_view file) const {
-    return StdoutRedirector{File{file}};
+    return StdoutRedirector{File{file, File::OpenType::WriteTruncate}};
   }
   StdoutRedirector operator>(Device file) const {
-    return StdoutRedirector{File{file}};
+    return StdoutRedirector{File{file, File::OpenType::WriteTruncate}};
   }
 #if defined(_WIN32)
   StdoutRedirector operator>(std::wstring_view file) const {
-    return StdoutRedirector{File{file}};
+    return StdoutRedirector{File{file, File::OpenType::WriteTruncate}};
   }
 #endif
   StdoutRedirector operator>(buffer& buf) const {
@@ -1822,14 +1847,14 @@ struct stdout_redirector {
   }
 
   StdoutRedirector operator>>(std::string_view file) const {
-    return StdoutRedirector{File{file, true}};
+    return StdoutRedirector{File{file, File::OpenType::WriteAppend}};
   }
   StdoutRedirector operator>>(Device file) const {
-    return StdoutRedirector{File{file, true}};
+    return StdoutRedirector{File{file, File::OpenType::WriteAppend}};
   }
 #if defined(_WIN32)
   StdoutRedirector operator>>(std::wstring_view file) const {
-    return StdoutRedirector{File{file, true}};
+    return StdoutRedirector{File{file, File::OpenType::WriteAppend}};
   }
 #endif
 };
@@ -1839,14 +1864,14 @@ struct stderr_redirector {
     return StderrRedirector{std::move(p)};
   }
   StderrRedirector operator>(std::string_view file) const {
-    return StderrRedirector{File{file}};
+    return StderrRedirector{File{file, File::OpenType::WriteTruncate}};
   }
   StderrRedirector operator>(Device file) const {
-    return StderrRedirector{File{file}};
+    return StderrRedirector{File{file, File::OpenType::WriteTruncate}};
   }
 #if defined(_WIN32)
   StderrRedirector operator>(std::wstring_view file) const {
-    return StderrRedirector{File{file}};
+    return StderrRedirector{File{file, File::OpenType::WriteTruncate}};
   }
 #endif
   StderrRedirector operator>(buffer& buf) const {
@@ -1857,14 +1882,14 @@ struct stderr_redirector {
     return StderrRedirector{buf};
   }
   StderrRedirector operator>>(std::string_view file) const {
-    return StderrRedirector{File{file, true}};
+    return StderrRedirector{File{file, File::OpenType::WriteAppend}};
   }
   StderrRedirector operator>>(Device file) const {
-    return StderrRedirector{File{file, true}};
+    return StderrRedirector{File{file, File::OpenType::WriteAppend}};
   }
 #if defined(_WIN32)
   StderrRedirector operator>>(std::wstring_view file) const {
-    return StderrRedirector{File{file, true}};
+    return StderrRedirector{File{file, File::OpenType::WriteAppend}};
   }
 #endif
 };
@@ -2931,7 +2956,8 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   using namespace detail;
   std::tuple<int, buffer, buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd), StdinRedirector(File{devnull}),
+  exit_code_ = run(std::move(cmd),
+                   StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
                    std::forward<T>(args)..., StdoutRedirector{std_out_},
                    StderrRedirector{std_err_}, Newgroup{true});
   return result;
@@ -2944,7 +2970,8 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   using namespace detail;
   std::tuple<int, buffer, buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd), StdinRedirector(File{devnull}),
+  exit_code_ = run(std::move(cmd),
+                   StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
                    std::forward<T>(args)..., StdoutRedirector{std_out_},
                    StderrRedirector{std_err_}, Newgroup{true});
   return result;
