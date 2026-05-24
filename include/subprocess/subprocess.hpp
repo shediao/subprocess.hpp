@@ -2708,14 +2708,6 @@ class subprocess {
   StdoutRedirector stdout_;
   StderrRedirector stderr_;
   std::optional<std::chrono::milliseconds> timeout_{std::nullopt};
-  struct WatchdogState {
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool done = false;
-  };
-  std::optional<std::thread> watchdog_thread_{std::nullopt};
-  std::shared_ptr<WatchdogState> watchdog_state_{
-      std::make_shared<WatchdogState>()};
 #if defined(_WIN32)
   std::shared_ptr<unique_fd> job_handle_{std::make_shared<unique_fd>()};
   unique_fd process_handle_{INVALID_NATIVE_HANDLE_VALUE};
@@ -2724,6 +2716,14 @@ class subprocess {
   std::vector<std::thread> pump_threads_;
   bool newgroup_{false};
 #else
+  struct WatchdogState {
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool done = false;
+  };
+  std::optional<std::thread> watchdog_thread_{std::nullopt};
+  std::shared_ptr<WatchdogState> watchdog_state_{
+      std::make_shared<WatchdogState>()};
   unique_pid pid_{-1};
   unique_pid pgid_{-1};
   std::optional<pid_t> requested_pgid_{std::nullopt};
