@@ -862,6 +862,14 @@ inline std::map<std::string, std::string> get_all_env_vars() {
 }
 #endif
 
+struct Device {
+#if defined(_WIN32)
+  std::wstring_view name_;
+#else
+  std::string_view name_;
+#endif
+};
+
 class Pipe {
  public:
   Pipe(Pipe&& other) = default;
@@ -974,6 +982,9 @@ struct File {
     WriteTruncate,
     WriteAppend,
   };
+
+  explicit File(Device const& dev, bool append = false)
+      : path_{dev.name_}, append_{append} {}
 
   explicit File(std::string_view p, bool append = false)
       : path_{
@@ -1776,6 +1787,9 @@ struct stdin_redirector {
   StdinRedirector operator<(std::string_view file) const {
     return StdinRedirector{File{file}};
   }
+  StdinRedirector operator<(Device file) const {
+    return StdinRedirector{File{file}};
+  }
 #if defined(_WIN32)
   StdinRedirector operator<(std::wstring_view file) const {
     return StdinRedirector{File{file}};
@@ -1789,6 +1803,9 @@ struct stdout_redirector {
     return StdoutRedirector{p};
   }
   StdoutRedirector operator>(std::string_view file) const {
+    return StdoutRedirector{File{file}};
+  }
+  StdoutRedirector operator>(Device file) const {
     return StdoutRedirector{File{file}};
   }
 #if defined(_WIN32)
@@ -1807,6 +1824,9 @@ struct stdout_redirector {
   StdoutRedirector operator>>(std::string_view file) const {
     return StdoutRedirector{File{file, true}};
   }
+  StdoutRedirector operator>>(Device file) const {
+    return StdoutRedirector{File{file, true}};
+  }
 #if defined(_WIN32)
   StdoutRedirector operator>>(std::wstring_view file) const {
     return StdoutRedirector{File{file, true}};
@@ -1819,6 +1839,9 @@ struct stderr_redirector {
     return StderrRedirector{std::move(p)};
   }
   StderrRedirector operator>(std::string_view file) const {
+    return StderrRedirector{File{file}};
+  }
+  StderrRedirector operator>(Device file) const {
     return StderrRedirector{File{file}};
   }
 #if defined(_WIN32)
@@ -1834,6 +1857,9 @@ struct stderr_redirector {
     return StderrRedirector{buf};
   }
   StderrRedirector operator>>(std::string_view file) const {
+    return StderrRedirector{File{file, true}};
+  }
+  StderrRedirector operator>>(Device file) const {
     return StderrRedirector{File{file, true}};
   }
 #if defined(_WIN32)
@@ -1986,10 +2012,12 @@ struct env_operator {
 
 namespace named_args {
 #if defined(_WIN32)
-[[maybe_unused]] inline static const auto devnull = std::wstring_view{L"NUL"};
+[[maybe_unused]] inline constexpr static auto devnull = Device{L"NUL"};
+[[maybe_unused]] inline constexpr static auto devttyout = Device{L"CONOUT$"};
+[[maybe_unused]] inline constexpr static auto devttyin = Device{L"CONIN$"};
 #else
-[[maybe_unused]] inline static const auto devnull =
-    std::string_view{"/dev/null"};
+[[maybe_unused]] inline constexpr static auto devnull = Device{"/dev/null"};
+[[maybe_unused]] inline constexpr static auto devtty = Device{"/dev/tty"};
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector std_in;
 [[maybe_unused]] inline constexpr static stdout_redirector std_out;
@@ -2002,10 +2030,12 @@ namespace named_args {
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
-[[maybe_unused]] inline const static auto $devnull = std::wstring_view{L"NUL"};
+[[maybe_unused]] inline constexpr static auto $devnull = devnull;
+[[maybe_unused]] inline constexpr static auto $devttyout = devttyout;
+[[maybe_unused]] inline constexpr static auto $devttyin = devttyin;
 #else
-[[maybe_unused]] inline const static auto $devnull =
-    std::string_view{"/dev/null"};
+[[maybe_unused]] inline constexpr static auto $devnull = devnull;
+[[maybe_unused]] inline constexpr static auto $devtty = devtty;
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector $stdin;
 [[maybe_unused]] inline constexpr static stdout_redirector $stdout;
