@@ -56,6 +56,42 @@ cmake --build build/{platform}-{arch}
 
 clang-format (Google style) is configured. A pre-commit hook auto-formats staged C/C++ and CMake files. The repo enforces `-Wall -Wextra -Werror` (or `/W4 /WX` for MSVC).
 
+## Coding Style
+
+### 1. Language Standard & Tooling
+
+- **C++20** is the baseline (`CMAKE_CXX_STANDARD 20`). Use modern C++ idioms (concepts, `std::span`, designated initializers, etc.) where appropriate.
+- **clang-format** — `.clang-format` at repo root: Google style, `InsertBraces: true`, `InsertNewlineAtEOF: true`.
+- **clang-tidy** — `.clang-tidy` at repo root with a curated set of checks covering resource management (`cppcoreguidelines-*`, `bugprone-*`), modern C++ (`modernize-*`), performance, readability, and portability. Run before submitting PRs.
+- **`.clangd`** — Not present in the repo (it's in `.gitignore`). Developers may create their own; `.clang-format` and `.clang-tidy` are picked up automatically. A `compile_commands.json` can be generated with `cmake -B cmake-build-debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`.
+
+### 2. Resource Management (RAII)
+
+- **No bare resource handles or owning raw pointers** in type members. All native handles (file descriptors, `HANDLE`, `pid_t`, etc.) must be wrapped in RAII types that close/release in their destructor.
+- Use `std::unique_ptr`, `std::shared_ptr`, or project-internal RAII wrappers (e.g., `detail::unique_handle` pattern) for ownership. The `.clang-tidy` configuration enforces `cppcoreguidelines-owning-memory`, `cppcoreguidelines-no-malloc`, and `cppcoreguidelines-special-member-functions`.
+- Follow the Rule of Five: if a class manages a resource, either define or `= default` / `= delete` the destructor, copy/move constructors, and copy/move assignment operators.
+
+### 3. Line Endings
+
+- **All source files must use LF (`\n`) line endings exclusively.** Never introduce CRLF (`\r\n`).
+- The repo does not have a `.gitattributes` file; editors and tools should be configured to use Unix-style line endings on all platforms. Verify with `file <filename>` or `dos2unix` if needed.
+
+### 4. Testing Requirements
+
+- **Every new function, class, or public API must have corresponding tests.** No exceptions.
+- Tests live in `tests/`, one `.cc` file per feature area (e.g., `test_basic.cc`, `test_io.cc`, `test_pipeline.cc`). Each `.cc` file compiles into its own test executable and is also linked into the `all_test` aggregate target.
+- Tests use **Google Test** (v1.15.2, fetched via `FetchContent`). Write tests with `TEST()` / `TEST_F()` macros; use `ASSERT_*` for fatal conditions and `EXPECT_*` for non-fatal ones.
+- Include `tests/utils.h` for shared utilities like `TempFile`.
+- When fixing a bug, add a regression test that reproduces it before applying the fix.
+
+### 5. Cross-Platform Support
+
+- The library **must compile and work on Windows, Linux, and macOS**, plus other POSIX/BSD systems where feasible.
+- Use `#if defined(_WIN32)` / `#else` for platform-specific code. Avoid `#ifdef` unless necessary.
+- Platform-specific helpers (e.g., `utf8_to_utf16` on Windows, `pipe2` on Linux) should be isolated behind clear abstraction boundaries within the `detail` namespace.
+- String handling: public APIs accept both `std::string` and `std::wstring`. On Windows, internally convert to UTF-16 as needed.
+- Never commit code that breaks the build on any supported platform. Use the cross-compilation environments in `build/{platform}-{arch}/` for verification when available.
+
 ## CI
 
 If the remote repository URL is `http://github.com/*` or `git@github.com:*`, then GitHub Actions (configuration files located at `.github/workflows/*.yml`) is used as CI.
