@@ -157,59 +157,285 @@ If the corresponding cross-compilation environment does not exist locally, just 
 
 ## Architecture
 
-This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) for running child processes on Windows, Linux, and macOS. The entire implementation lives in a single header.
+This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) for running child processes on Windows, Linux, and macOS. The entire implementation lives in a single header (~2900 lines).
+
+### Namespace & Macro Controls
+
+- All library code lives under `namespace subprocess`.
+- Implementation details are in `namespace subprocess::detail`.
+- Named argument constants are in `subprocess::named_arguments` (aliased from `detail::named_args`).
+- `USE_DOLLAR_NAMED_VARIABLES` macro (default `1`): when set, enables `$`-prefixed aliases (`$stdin`, `$stdout`, `$cwd`, `$env`, `$timeout`, `$newgroup`, `$()` function).
+- `SUBPROCESS_USE_POSIX_SPAWN` (reserved but not yet wired in the header): opt-in for `posix_spawn` path instead of `fork`+`exec`.
+
+### RAII & Platform Primitives (`detail` namespace)
+
+- **`detail::unique_fd`** — RAII wrapper over `NativeHandle` (Windows `HANDLE` / Unix `int` fd). Automatically calls `CloseHandle` or `close` on destruction. Supports dup, close, move, and non-blocking set on Unix.
+- **`detail::unique_pid`** — (Unix only) RAII wrapper over `pid_t` with a no-op deleter. Used for child process and process group IDs.
+- **`detail::scope_exit`** — scope guard utility, similar to `std::experimental::scope_exit`. Used for cleanup: watchdog thread join, pump thread join.
+- **`detail::visitor`** — overloaded lambda visitor pattern for `std::visit` over `std::variant`.
+- **`detail::ssize_t`** — `ptrdiff_t` alias on Windows (where POSIX `ssize_t` is unavailable).
+- **`detail::INVALID_NATIVE_HANDLE_VALUE`** — `INVALID_HANDLE_VALUE` on Windows, `-1` on Unix.
+- **`detail::print_error()`** — platform-specific error printing: on Windows, attempts VT-aware `WriteConsoleW`, falls back to `WriteFile` with UTF-8; on Unix, writes to stderr with EINTR retry.
+- **`detail::get_last_error_message()`** — returns `GetLastError()` / `errno` message as a string/wstring.
+
+### String & Command-Line Utilities
+
+- **`utf8_to_utf16()` / `utf16_to_utf8()`** — (Windows only) conversion between UTF-8 `string_view` and UTF-16 `wstring_view`.
+- **`split()` / `split_to_if()`** — generic string splitting with delimiter predicate; supports `compress_tokens` for collapsing consecutive delimiters.
+- **`argv_to_command_line_string()`** — (Windows only) builds a properly escaped command-line string from a vector of `wstring` arguments, following MSVC quoting rules (backslash-doubling before quotes, wrapping whitespace-containing args in double quotes).
+- **`create_environment_string_data()`** — (Windows only) builds the null-delimited environment block required by `CreateProcessW`.
 
 ### Core class: `detail::subprocess`
 
-The main implementation class. Holds the command vector, I/O redirectors, environment, cwd, timeout, and newgroup flags. Key methods:
+The main implementation class. Holds the command vector, I/O redirectors, environment, cwd, timeout, and newgroup flags.
 
-- `async_run()` — spawns the child process (CreateProcessW on Windows, fork+exec or posix_spawn on Unix), then enters `pump_pipe_data()` to shuttle I/O between parent and child.
+**Key fields:**
+
+- `cmd_`: `vector<wstring>` on Windows, `vector<string>` on Unix.
+- `cwd_`: `wstring` on Windows, `string` on Unix.
+- `env_`: `map<wstring,wstring>` on Windows, `map<string,string>` on Unix.
+- `stdin_`, `stdout_`, `stderr_`: `StdinRedirector`, `StdoutRedirector`, `StderrRedirector` respectively.
+- `timeout_`: `optional<chrono::milliseconds>` on both platforms.
+- **Windows-specific**: `shared_ptr<unique_fd> job_handle_` (Job Object), `unique_fd process_handle_` + `thread_handle_`, `vector<unsigned char> proc_thread_attr_list_` (for explicit handle inheritance), `vector<thread> pump_threads_`, `bool newgroup_`.
+- **Unix-specific**: `unique_pid pid_` + `pgid_`, `optional<pid_t> requested_pgid_`, `optional<thread> watchdog_thread_` + `shared_ptr<WatchdogState> watchdog_state_`, `int early_exit_status_` + `bool child_reaped_early_` (for handling grandchildren that hold pipe write-ends open).
+
+**Key methods:**
+
+- `async_run()` — spawns the child process then enters `pump_pipe_data()` to shuttle I/O between parent and child.
+  - **Windows**: Creates a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, builds an explicit handle inheritance list via `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, resolves the executable via `SearchPathW` + `PATHEXT`, then calls `CreateProcessW` with `CREATE_UNICODE_ENVIRONMENT`. Assigns the process to the job object.
+  - **Unix**: `fork()` then `execute_command_in_child()` in the child. If no explicit I/O redirection and `/dev/tty` is unavailable, creates a new process group (`requested_pgid_ = 0`). Parent calls `setpgid()` for both parent and child (to avoid race), then launches the watchdog thread.
 - `run()` — calls `async_run()` then `wait_for_exit()`.
 - `wait_for_exit()` — blocks until the child exits, then returns the exit code.
-- `terminate()` — kills the process tree on timeout. Uses `TerminateJobObject` (Windows) or `kill(-pid, SIGTERM)` → `SIGKILL` (Unix).
+  - **Windows**: `WaitForSingleObject` on process handle, with optional timeout; calls `terminate()` on timeout. Joins pump threads via scope guard.
+  - **Unix**: Calls `waitpid()`, unless the child was already reaped early by the I/O pump (stored in `early_exit_status_`). Converts signal exit to `128 + signo`. Stops watchdog via scope guard.
+- `terminate()` — kills the process tree.
+  - **Windows**: `TerminateJobObject` first (closes child's inherited pipe handles, unblocking I/O threads), falls back to `TerminateProcess`. Then closes all redirectors.
+  - **Unix**: `kill(-pid, SIGTERM)` with 100ms grace period polling, then `kill(-pid, SIGKILL)`. Only uses process group kill when the child is the process group leader (`pid == pgid`).
+- `pid()` — returns the native process ID (`HANDLE` on Windows, `pid_t` on Unix).
 
-### I/O redirection: `detail::Redirector` hierarchy
+### I/O Primitives
 
-`StdinRedirector` (fd 0), `StdoutRedirector` (fd 1), `StderrRedirector` (fd 2) each wrap a `std::variant<Pipe, File, Buffer, FileHandler>`:
+- **`detail::Device`** — a platform-specific device name struct: `NUL`/`CONOUT$`/`CONIN$` on Windows, `/dev/null`/`/dev/tty` on Unix. Predefined constants: `$devnull`, `$devtty` (Unix), `$devttyout`/`$devttyin` (Windows).
+- **`detail::Pipe`** — anonymous pipe between parent and child. Uses `pipe2(O_CLOEXEC)` on Linux, `fcntl(F_SETFD, FD_CLOEXEC)` on other Unix, and `CreatePipe` with `SECURITY_ATTRIBUTES.bInheritHandle = FALSE` on Windows (individual handles are later made inheritable selectively). Wraps `rfd_`/`wfd_` as `unique_fd` in a `shared_ptr<pipe_pair>` for cheap copying. Supports `read_some`, `read_exact`, `write_some`, `write_all`, `dup`.
+- **`detail::File`** — a filesystem file with `OpenType` enum: `ReadOnly`, `WriteTruncate`, `WriteAppend`. Opens lazily (`open_for_read()` / `open_for_write()`). On Windows uses `CreateFileW` with `FILE_SHARE_READ`; on Unix uses `::open` with `O_CLOEXEC`. The path is stored as `wstring` on Windows, `string` on Unix.
+- **`detail::FileHandler`** — wraps an already-open `NativeHandle` or `unique_fd`. Used for passing existing file descriptors/handles. Supports dup, read/write operations.
+- **`detail::Buffer`** (capital B) — an in-memory buffer with a backing `Pipe`. Holds a `shared_ptr<variant<buffer, ref<buffer>>>`. The variant allows referencing an external `buffer` or owning one internally. Tracks `written_size_` for stdin writing progress. `read_some()` reads from the pipe and appends to the buffer; `write_some()` writes from the buffer to the pipe.
+- **`subprocess::buffer`** (lowercase b, the public type) — a `vector<unsigned char>` with an optional callback (`function<void(const unsigned char*, size_t)>`) invoked on each append. Provides `span()`, `to_string()`, `operator==` overloads against various string types.
 
-- **`detail::Pipe`** — anonymous pipe between parent and child. Uses `pipe2(O_CLOEXEC)` on Linux, `fcntl(FD_CLOEXEC)` elsewhere. On Windows, handles are created non-inheritable; only the child-end is made inheritable.
-- **`detail::File`** — a filesystem file opened for read or write.
-- **`detail::Buffer`** — an in-memory buffer with a backing pipe; used by `capture_run()`.
-- **`detail::FileHandler`** — wraps an already-open native handle/fd provided by the caller.
+### I/O Redirection: `detail::Redirector` Hierarchy
 
-The `prepare_for_child()` / `close_child_end()` / `close_parent_end()` protocol ensures the correct end of each pipe is inherited by the child and closed by the parent (and vice versa).
+`Redirector` is the abstract base. `StdinRedirector` (fd 0), `StdoutRedirector` (fd 1), `StderrRedirector` (fd 2) each wrap a `unique_ptr<variant<Pipe, File, Buffer, FileHandler>>`.
 
-### Named arguments (the `$` syntax)
+The redirector lifecycle protocol:
 
-Defined in `detail::named_args` and re-exported in `subprocess::named_arguments`. The operators return typed wrapper structs:
+1. **`prepare_for_child()`** — parent calls before spawning. On Windows: makes the child-end handle inheritable via `SetHandleInformation`. Opens files lazily.
+2. **`close_child_end()`** — parent calls after spawning. Parent closes the end meant for the child (e.g., for stdin, parent closes the read end since the child reads).
+3. **`close_parent_end()`** — (Unix only) child calls after fork. Uses `dup2()` to redirect to the target fd, then closes the pipe/file.
 
-- `$stdin < source`, `$stdout > target`, `$stderr > target` — produce `StdinRedirector` / `StdoutRedirector` / `StderrRedirector`.
-- `$cwd = path` → `Cwd`, `$env = map` → `Env`, `$env += map` → `EnvAppend`, `$env["KEY"] += val` → `EnvItemAppend`.
-- `$timeout = duration` → `Timeout`, `$newgroup = true` → `Newgroup`.
+Additional redirector methods:
 
-### Public API functions
+- **`child_inherit_handle()`** — (Windows only) returns the `HANDLE` the child should inherit.
+- **`get_buffer()`** — returns `optional<reference_wrapper<Buffer>>` if the redirector contains a Buffer.
+- **`get_file_fd()`** — returns `optional<reference_wrapper<const unique_fd>>` for File/FileHandler types.
+- **`inherit()`** — returns `true` if no redirect is configured (i.e., child inherits parent's fd).
 
-- **`run(...)`** — variadic template that partitions arguments into command parts (string-like) and named arguments (typed wrappers). Returns `int` exit code.
-- **`capture_run(...)`** — like `run()` but returns `std::tuple<int, buffer, buffer>` (exit_code, stdout, stderr). Internally forces `$stdin < $devnull` and `$newgroup = true`, then attaches stdout/stderr to buffers.
-- **`$(...)`** — alias for `run()` (controlled by `USE_DOLLAR_NAMED_VARIABLES` macro).
+### Named Arguments (the `$` syntax)
 
-### Pipeline support
+Defined in `detail::named_args` and re-exported in `subprocess::named_arguments`. Operator structs produce typed wrapper structs:
 
-`detail::pipeline` chains multiple `subprocess` objects with pipes (`subproc1 | subproc2`). Uses job objects (Windows) or process groups (Unix) for unified lifecycle management.
+| Syntax                             | Produces                    | Notes                                    |
+| ---------------------------------- | --------------------------- | ---------------------------------------- |
+| `$stdin < pipe`                    | `StdinRedirector(Pipe)`     |                                          |
+| `$stdin < "file"`                  | `StdinRedirector(File)`     | ReadOnly                                 |
+| `$stdin < $devnull`                | `StdinRedirector(File)`     | ReadOnly from device                     |
+| `$stdin < buffer`                  | `StdinRedirector(buffer&)`  |                                          |
+| `$stdout > pipe`                   | `StdoutRedirector(Pipe)`    |                                          |
+| `$stdout > "file"`                 | `StdoutRedirector(File)`    | WriteTruncate                            |
+| `$stdout >> "file"`                | `StdoutRedirector(File)`    | WriteAppend                              |
+| `$stdout > buffer`                 | `StdoutRedirector(buffer&)` | Clears buffer first                      |
+| `$stdout >> buffer`                | `StdoutRedirector(buffer&)` | Appends (does not clear)                 |
+| `$stderr > ...` / `$stderr >> ...` | `StderrRedirector(...)`     | Same semantics as stdout                 |
+| `$cwd = path`                      | `Cwd`                       | string_view to platform-native string    |
+| `$env = map`                       | `Env`                       | Replaces entire environment              |
+| `$env += map`                      | `EnvAppend`                 | Merges into existing env                 |
+| `$env["KEY"] += val`               | `EnvItemAppend`             | Appends to env var (with path separator) |
+| `$env["KEY"] <<= val`              | `EnvItemAppend`             | Prepends to env var                      |
+| `$timeout = ms`                    | `Timeout`                   | `chrono::milliseconds` or `int` seconds  |
+| `$timeout_infinite`                | —                           | `INT_MAX`, disables timeout              |
+| `$newgroup = true/false`           | `Newgroup`                  | Creates new process group / job object   |
 
-### I/O pump strategy
+On Windows, env keys are case-insensitive (uppercased for lookup). Path separator for `EnvItemAppend` is `;` on Windows, `:` on Unix.
 
-- **Windows**: `read_write_to_buffer_with_threads()` — dedicated threads for stdin write, stdout read, stderr read.
-- **Unix**: `read_write_to_buffer_use_poll()` — single-threaded `poll()` loop. When a child pid is provided (which it always is), the loop monitors child liveness via periodic `waitpid(WNOHANG)` and drains remaining pipe data for 2 seconds after the child exits. This prevents hanging when grandchildren inherit pipe write-ends.
+### Public API Functions
 
-### Timeout mechanism
+- **`run(cmd_vector, named_args...)`** — takes a `vector<string>` or `vector<wstring>` (Windows) plus named arguments. Returns `int` exit code.
+- **`run(args...)`** — variadic template that partitions arguments into command parts (string-like types) and named arguments (typed wrappers) using C++20 concepts. The partition separates arguments into: all string-likes come first and form the command vector, all named argument types go after.
+- **`capture_run(cmd_vector, named_args...)`** — like `run()` but returns `std::tuple<int, buffer, buffer>` (exit_code, stdout, stderr). Internally forces `$stdin < $devnull` and `$newgroup = true`, then attaches stdout/stderr to internal buffers. Accepts only non-stdout/stderr named arguments.
+- **`capture_run(args...)`** — variadic overload, same partitioning logic.
+- **`$(...)`** — alias for `run()` (controlled by `USE_DOLLAR_NAMED_VARIABLES` macro; enabled by default).
 
-A watchdog thread is launched by `async_run()`. If the timeout expires before `stop_watchdog()` is called (by `wait_for_exit()`), the watchdog calls `terminate()` which kills the entire process tree (Windows Job Object / Unix process group).
+**C++20 Concepts** used for the variadic overloads:
 
-### Platform abstraction
+- `string_like_type<T>` — matches `char*`, `const char*`, `string`, `string_view`, and (on Windows) `wchar_t*`, `const wchar_t*`, `wstring`, `wstring_view`.
+- `named_argument_type<T>` — matches `Env`, `StdinRedirector`, `StdoutRedirector`, `StderrRedirector`, `Cwd`, `Timeout`, `Newgroup`, `EnvAppend`, `EnvItemAppend`.
+- `run_args_type<T>` — `named_argument_type || string_like_type`.
+- `named_argument_for_capture_type<T>` — `named_argument_type` excluding `StdoutRedirector` and `StderrRedirector`.
+- `partition_args<Args...>` — validates that all string-like args precede all named args.
 
-The header uses `#if defined(_WIN32)` throughout. On Windows, all strings are converted to UTF-16 (`utf8_to_utf16`). Public APIs accept both `std::string` and `std::wstring`. Environment variables use the platform-native wide/narrow string types internally. POSIX has two spawn paths: traditional `fork`+`exec` and an optional `posix_spawn` path (opt-in via `SUBPROCESS_USE_POSIX_SPAWN`).
+### Pipeline Support
+
+`detail::pipeline` chains multiple `subprocess` objects with pipes (`subproc1 | subproc2`).
+
+- On construction/append, pipes are created between adjacent subprocesses: `subproc_n.stdout` to pipe to `subproc_{n+1}.stdin`.
+- On Windows, all subprocesses share the first subprocess's `job_handle_`.
+- On Unix, the first subprocess creates a new process group; subsequent subprocesses join that group (`requested_pgid_ = first.pid()`).
+- `run()` launches all subprocesses sequentially via `async_run()`, then waits for all to exit. Returns the last subprocess's exit code.
+- `exit_codes()` returns all exit codes as a `vector<int>`.
+- `terminate()` delegates to the first subprocess's `terminate()`, which kills the entire job/process group.
+
+### I/O Pump Strategy
+
+- **Windows**: `read_write_to_buffer_with_threads()` — dedicated `std::thread` for each active redirector (stdin write loop, stdout read loop, stderr read loop). Threads are joined in `wait_for_exit()`.
+- **Unix**: `read_write_to_buffer_use_poll()` — single-threaded `poll()` loop over up to 3 fds (stdin wfd, stdout rfd, stderr rfd). All fds are set to non-blocking. Key behavior:
+  - Polls with 200ms timeout when monitoring the child, so it can periodically `waitpid(WNOHANG)` to detect child exit.
+  - When the child exits, stores the status in `early_exit_status_` and starts a 2-second drain timer to collect final buffered pipe output from grandchildren.
+  - Handles `POLLHUP`, `POLLERR`, `POLLNVAL` to detect pipe closure.
+  - After the poll loop, does a final `waitpid(WNOHANG)` check and sets `child_reaped_early_` flag if the child already exited. This flag is checked by `wait_for_exit()`.
+
+### Timeout Mechanism
+
+- **Unix**: A watchdog thread (`watchdog_thread_`) is launched via `launch_watchdog()`. It sleeps on a `condition_variable` with the timeout duration. If the condition is not signaled (by `stop_watchdog()` in `wait_for_exit()`) before the timeout, it calls `terminate()`.
+- **Windows**: No separate watchdog thread. Instead, `WaitForSingleObject` in `wait_for_exit()` directly uses the timeout value. If it times out, `terminate()` is called (which closes child handles, unblocking the I/O threads).
+
+### Platform Abstraction Summary
+
+| Feature              | Windows                                            | Unix                                                                        |
+| -------------------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
+| Spawn API            | `CreateProcessW`                                   | `fork()` + `execv`/`execve`                                                 |
+| Executable search    | `SearchPathW` + `PATHEXT` env var                  | Manual `PATH` walk via `stat` + `access(X_OK)`                              |
+| Process tree mgmt    | Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`)  | Process group (`setpgid` + `kill(-pgid)`)                                   |
+| Handle inheritance   | Explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`       | FDs set `O_CLOEXEC` / `FD_CLOEXEC` by default; parent-end closed after fork |
+| Pipe creation        | `CreatePipe` (non-inheritable)                     | `pipe2(O_CLOEXEC)` on Linux, `pipe` + `fcntl(FD_CLOEXEC)` elsewhere         |
+| I/O pump             | Multi-threaded `WriteFile`/`ReadFile`              | Single-threaded `poll()` + non-blocking I/O                                 |
+| Timeout              | `WaitForSingleObject` timeout                      | Watchdog thread + `condition_variable`                                      |
+| String encoding      | UTF-16 (`wstring`) everywhere internally           | UTF-8 (`string`) internally                                                 |
+| Environment          | `GetEnvironmentStringsW`, null-delimited block     | `environ`, null-delimited strings                                           |
+| Error output         | `WriteConsoleW` (VT-aware) fallback to `WriteFile` | `write(STDERR_FILENO, ...)` with EINTR retry                                |
+| Device paths         | `NUL`, `CONOUT$`, `CONIN$`                         | `/dev/null`, `/dev/tty`                                                     |
+| Path separator (env) | `;`                                                | `:`                                                                         |
+
+### Environment Handling
+
+- `get_all_env_vars()` — returns a map of the current process environment. On Windows, handles hidden env vars (starting with `=`), and uppercases keys for case-insensitive matching.
+- Environment cascade in the constructor: named `Env` (full replacement) then merged with `EnvAppend` then patched with `EnvItemAppend` (append/prepend to specific keys). If `EnvAppend` or `EnvItemAppend` are used without `Env`, the current process environment is used as the base.
 
 ### Tests
 
-Each `.cc` file in `tests/` becomes its own test executable plus there is an `all_test` target that links all of them together. Tests use Google Test (v1.15.2 fetched via FetchContent). The helper `tests/utils.h` provides `TempFile` for creating temporary files in cross-platform tests.
+Located in `tests/`. 18+ `.cc` test files each become their own test executable plus there is an `all_test` aggregate target linking all of them together. Tests use **Google Test** (v1.15.2 fetched via `FetchContent`) and the `environment` library (for cross-platform environment variable testing).
+
+Key test files:
+
+- `test_basic.cc` — basic spawn/exit code
+- `test_io.cc` — stdin/stdout/stderr redirection
+- `test_pipeline.cc` — pipeline chaining
+- `test_timeout.cc` — timeout and termination
+- `test_environment.cc` — environment variable manipulation
+- `test_buffer_callback.cc` — buffer callback mechanism
+- `test_capture_stdin.cc` — capture_run with stdin
+- `test_error_handling.cc` — error paths (invalid commands, etc.)
+- `test_concept.cc` — C++20 concept validation
+- `test_variadic_types.cc` — variadic template argument handling
+- `test_split.cc` — string splitting utilities
+- `test_dup.cc` — handle/fd duplication
+- `test_multiplex.cc` — concurrent operations
+- `test_newgroup.cc` — process group behavior
+- `test_read_write_some.cc` — partial read/write
+- `test_filename_with_space.cc` — paths with spaces
+- `test_background.cc` — background process behavior
+- `test_filesystem_path.cc` — `std::filesystem::path` support
+- `test_executable_resolution.cc` — executable search path resolution
+
+Test utility: `tests/utils.h` provides `TempFile` for creating cross-platform temporary files (via `GetTempFileNameA` on Windows, `mkstemps` on Unix) and `getTempFilePath()` for temporary path generation.
+
+### CI Configuration
+
+Two GitHub Actions workflows:
+
+1. **`cmake-multi-platform.yml`** — Matrix build across `ubuntu-latest`, `windows-latest`, `macos-latest` by `[Release, Debug]` by `[gcc, clang, cl]`. MSVC on Windows, GCC/Clang on Linux, AppleClang on macOS. Runs cmake configure, build, ctest with `--rerun-failed --output-on-failure`.
+
+2. **`msys2.yml`** — Matrix build on `windows-latest` across `[MSYS, UCRT64, MINGW64]` by `[Release, Debug]` by `[gcc, clang]`. Uses `msys2/setup-msys2@v2` action. Builds with Ninja generator.
+
+### Coverage Support
+
+`SUBPROCESS_ENABLE_COVERAGE` option enables LLVM source-based code coverage (`-fprofile-instr-generate -fcoverage-mapping`). A `coverage` custom target runs tests via ctest then generates reports with `llvm-profdata` + `llvm-cov`. Requires Clang compiler.
+
+# Ai Coding Guidelines
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
