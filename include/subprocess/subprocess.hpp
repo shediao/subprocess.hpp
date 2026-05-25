@@ -107,12 +107,6 @@
 #error "This code requires C++20 or later."
 #endif
 
-#if defined(_MSVC_LANG)
-#define CPLUSPLUS_VERSION _MSVC_LANG
-#else
-#define CPLUSPLUS_VERSION __cplusplus
-#endif
-
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
