@@ -1066,8 +1066,8 @@ struct File {
     sa.lpSecurityDescriptor = nullptr;
     sa.bInheritHandle = FALSE;  // Default non-inheritable
 
-    DWORD dwDesiredAccess;
-    DWORD dwCreationDisposition;
+    DWORD dwDesiredAccess = 0;
+    DWORD dwCreationDisposition = 0;
     switch (open_type_) {
       case OpenType::ReadOnly:
         dwDesiredAccess = GENERIC_READ;
