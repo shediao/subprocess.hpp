@@ -424,6 +424,15 @@ class unique_fd
     return unique_fd{duped};
   }
 
+  bool isatty() const {
+#if defined(_WIN32)
+    DWORD mode;
+    return GetConsoleMode(get(), &mode);
+#else
+    return ::isatty(get());
+#endif
+  }
+
 #if !defined(_WIN32)
   void set_nonblocking() const { detail::set_nonblocking(get()); }
 #endif
@@ -2037,6 +2046,8 @@ namespace named_args {
 #else
 [[maybe_unused]] inline constexpr static auto devnull = Device{"/dev/null"};
 [[maybe_unused]] inline constexpr static auto devtty = Device{"/dev/tty"};
+[[maybe_unused]] inline constexpr static auto devttyout = devtty;
+[[maybe_unused]] inline constexpr static auto devttyin = devtty;
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector std_in;
 [[maybe_unused]] inline constexpr static stdout_redirector std_out;
@@ -2048,14 +2059,12 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static newgroup_operator newgroup;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-#if defined(_WIN32)
+#if !defined(_WIN32)
+[[maybe_unused]] inline constexpr static auto $devtty = devtty;
+#endif
 [[maybe_unused]] inline constexpr static auto $devnull = devnull;
 [[maybe_unused]] inline constexpr static auto $devttyout = devttyout;
 [[maybe_unused]] inline constexpr static auto $devttyin = devttyin;
-#else
-[[maybe_unused]] inline constexpr static auto $devnull = devnull;
-[[maybe_unused]] inline constexpr static auto $devtty = devtty;
-#endif
 [[maybe_unused]] inline constexpr static stdin_redirector $stdin;
 [[maybe_unused]] inline constexpr static stdout_redirector $stdout;
 [[maybe_unused]] inline constexpr static stderr_redirector $stderr;
@@ -2301,17 +2310,6 @@ class subprocess {
         *job_handle_ = unique_fd(hJob);
       }
     }
-#else
-    if (!requested_pgid_.has_value()) {
-      if (stdin_.inherit() && !unique_fd{open("/dev/tty", O_RDONLY)}) {
-        requested_pgid_ = 0;
-      } else {
-        requested_pgid_ = INVALID_NATIVE_HANDLE_VALUE;
-      }
-    }
-#endif
-
-#if defined(_WIN32)
     STARTUPINFOEXW startup_info{};
     startup_info.StartupInfo.cb = sizeof(startup_info);
 
@@ -2464,6 +2462,17 @@ class subprocess {
       stderr_.close_all();
     }
 #else
+
+    if (!requested_pgid_.has_value()) {
+      File stdin_file{detail::named_args::devttyin, File::OpenType::ReadOnly};
+      stdin_file.open_for_read();
+      if (stdin_.inherit() && !stdin_file.fd().isatty()) {
+        requested_pgid_ = 0;
+      } else {
+        requested_pgid_ = INVALID_NATIVE_HANDLE_VALUE;
+      }
+    }
+
     auto pid = fork();
     if (pid < 0) {
       print_error("fork() failed");
@@ -2852,6 +2861,8 @@ namespace named_arguments {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 using detail::named_args::$cwd;
 using detail::named_args::$devnull;
+using detail::named_args::$devttyin;
+using detail::named_args::$devttyout;
 using detail::named_args::$env;
 using detail::named_args::$newgroup;
 using detail::named_args::$stderr;
@@ -2862,6 +2873,8 @@ using detail::named_args::$timeout_infinite;
 #endif
 using detail::named_args::cwd;
 using detail::named_args::devnull;
+using detail::named_args::devttyin;
+using detail::named_args::devttyout;
 using detail::named_args::env;
 using detail::named_args::newgroup;
 using detail::named_args::std_err;
@@ -3001,7 +3014,10 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 using subprocess::$;
 using subprocess::named_arguments::$cwd;
 using subprocess::named_arguments::$devnull;
+using subprocess::named_arguments::$devttyin;
+using subprocess::named_arguments::$devttyout;
 using subprocess::named_arguments::$env;
+using subprocess::named_arguments::$newgroup;
 using subprocess::named_arguments::$stderr;
 using subprocess::named_arguments::$stdin;
 using subprocess::named_arguments::$stdout;
