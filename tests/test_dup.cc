@@ -235,7 +235,6 @@ TEST(DupTest, FileDupBasic) {
   tmp.write(std::string{"file_dup_content"});
 
   S::File f1(tmp.path(), S::File::OpenType::ReadOnly);
-  f1.open();
   ASSERT_NE(f1.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
 
   auto f2 = f1.dup();
@@ -245,33 +244,6 @@ TEST(DupTest, FileDupBasic) {
   // Both handles should be valid
   f2.close();
   f1.close();
-}
-
-// ===========================================================================
-// File::dup() — dup before open (lazy open)
-// ===========================================================================
-
-TEST(DupTest, FileDupBeforeOpen) {
-  TempFile tmp;
-  tmp.write(std::string{"lazy_open_content"});
-
-  S::File f1(tmp.path(), S::File::OpenType::ReadOnly);
-  // Don't open f1 yet — dup the unopened file
-  auto f2 = f1.dup();
-
-  // Open f2 independently
-  f2.open();
-  ASSERT_NE(f2.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
-
-  // f1 should still be unopened
-  ASSERT_EQ(f1.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
-
-  f1.open();
-  ASSERT_NE(f1.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
-  ASSERT_NE(f1.fd(), f2.fd());
-
-  f1.close();
-  f2.close();
 }
 
 // ===========================================================================
@@ -294,7 +266,6 @@ TEST(DupTest, FileDupReadContent) {
 
   // Open and read through original
   S::File f1(tmp.path(), S::File::OpenType::ReadOnly);
-  f1.open();
   auto f2 = f1.dup();
 
   // Read from duped fd
@@ -307,6 +278,25 @@ TEST(DupTest, FileDupReadContent) {
   f1.close();
   // fd2 was consumed by read_from_native_handle (set to invalid) — no need to
   // close again.
+}
+
+// ===========================================================================
+// File::dup() — dup after close returns invalid fd
+// ===========================================================================
+
+TEST(DupTest, FileDupAfterClose) {
+  TempFile tmp;
+  tmp.write(std::string{"file_dup_after_close"});
+
+  S::File f1(tmp.path(), S::File::OpenType::ReadOnly);
+  ASSERT_TRUE(f1.is_valid());
+  f1.close();
+  ASSERT_FALSE(f1.is_valid());
+
+  // Dup after close — the duped File should be invalid
+  auto f2 = f1.dup();
+  ASSERT_FALSE(f2.is_valid());
+  ASSERT_EQ(f2.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
 }
 
 // ===========================================================================
@@ -452,7 +442,6 @@ TEST(DupTest, RedirectorDupFile) {
   tmp.write(std::string{"redirector_dup_file"});
 
   S::File f(tmp.path(), S::File::OpenType::ReadOnly);
-  f.open();
 
   S::StdinRedirector redir(std::move(f));
 

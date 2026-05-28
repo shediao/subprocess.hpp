@@ -988,7 +988,9 @@ class File {
   };
 
   explicit File(Device const& dev, OpenType read_or_write)
-      : path_{dev.name_}, open_type_{read_or_write} {}
+      : path_{dev.name_}, open_type_{read_or_write} {
+    open_impl();
+  }
 
   explicit File(std::string_view p, OpenType read_or_write)
       : path_{
@@ -999,10 +1001,13 @@ class File {
 #endif
         },
         open_type_{read_or_write} {
+    open_impl();
   }
 #if defined(_WIN32)
   explicit File(std::wstring_view p, OpenType read_or_write)
-      : path_{p}, open_type_{read_or_write} {}
+      : path_{p}, open_type_{read_or_write} {
+    open_impl();
+  }
 #endif
 
   File(File&& o) noexcept
@@ -1019,12 +1024,6 @@ class File {
   File(File const&) = delete;
   File& operator=(File const&) = delete;
 
-  void open() {
-    if (fd_) {
-      return;
-    }
-    open_impl();
-  }
   void close() { fd_.close(); }
   [[nodiscard]] unique_fd const& fd() const { return fd_; }
   [[nodiscard]] unique_fd& fd() { return fd_; }
@@ -1043,7 +1042,9 @@ class File {
   }
 
   File dup() const {
-    File f{path_, open_type_};
+    File f;
+    f.path_ = path_;
+    f.open_type_ = open_type_;
     f.fd_ = fd_.dup();
     return f;
   }
@@ -1051,6 +1052,7 @@ class File {
   bool is_valid() const { return !!fd_; }
 
  private:
+  File() {}
   void open_impl() {
     if (fd_) {
       return;
@@ -1111,7 +1113,7 @@ class File {
 #else
   std::string path_;
 #endif
-  OpenType open_type_;
+  OpenType open_type_{OpenType::ReadOnly};
   unique_fd fd_{INVALID_NATIVE_HANDLE_VALUE};
 };
 
@@ -1566,8 +1568,7 @@ class Redirector {
               }
 #endif
             },
-            [](File& value) {
-              value.open();
+            []([[maybe_unused]] File& value) {
 #if defined(_WIN32)
               // File handles are now non-inheritable by default; make them
               // inheritable so the child can use them.
@@ -2452,7 +2453,6 @@ class subprocess {
 
     if (!requested_pgid_.has_value()) {
       File stdin_file{detail::named_args::devttyin, File::OpenType::ReadOnly};
-      stdin_file.open();
       if (stdin_.inherit() && !stdin_file.fd().isatty()) {
         requested_pgid_ = 0;
       } else {
