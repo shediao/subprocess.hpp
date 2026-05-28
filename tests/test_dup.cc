@@ -234,8 +234,8 @@ TEST(DupTest, FileDupBasic) {
   TempFile tmp;
   tmp.write(std::string{"file_dup_content"});
 
-  S::File f1(tmp.path());
-  f1.open_for_read();
+  S::File f1(tmp.path(), S::File::OpenType::ReadOnly);
+  f1.open();
   ASSERT_NE(f1.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
 
   auto f2 = f1.dup();
@@ -255,18 +255,18 @@ TEST(DupTest, FileDupBeforeOpen) {
   TempFile tmp;
   tmp.write(std::string{"lazy_open_content"});
 
-  S::File f1(tmp.path());
+  S::File f1(tmp.path(), S::File::OpenType::ReadOnly);
   // Don't open f1 yet — dup the unopened file
   auto f2 = f1.dup();
 
   // Open f2 independently
-  f2.open_for_read();
+  f2.open();
   ASSERT_NE(f2.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
 
   // f1 should still be unopened
   ASSERT_EQ(f1.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
 
-  f1.open_for_read();
+  f1.open();
   ASSERT_NE(f1.fd(), S::INVALID_NATIVE_HANDLE_VALUE);
   ASSERT_NE(f1.fd(), f2.fd());
 
@@ -293,8 +293,8 @@ TEST(DupTest, FileDupReadContent) {
       std_out > tmp.path());
 
   // Open and read through original
-  S::File f1(tmp.path());
-  f1.open_for_read();
+  S::File f1(tmp.path(), S::File::OpenType::ReadOnly);
+  f1.open();
   auto f2 = f1.dup();
 
   // Read from duped fd
@@ -451,8 +451,8 @@ TEST(DupTest, RedirectorDupFile) {
   TempFile tmp;
   tmp.write(std::string{"redirector_dup_file"});
 
-  S::File f(tmp.path());
-  f.open_for_read();
+  S::File f(tmp.path(), S::File::OpenType::ReadOnly);
+  f.open();
 
   S::StdinRedirector redir(std::move(f));
 

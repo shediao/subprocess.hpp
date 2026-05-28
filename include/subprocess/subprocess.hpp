@@ -979,17 +979,18 @@ class Pipe {
   std::shared_ptr<pipe_pair> pair_{std::make_shared<pipe_pair>()};
 };
 
-struct File {
+class File {
+ public:
   enum class OpenType {
     ReadOnly,
     WriteTruncate,
     WriteAppend,
   };
 
-  explicit File(Device const& dev, OpenType read_or_write = OpenType::ReadOnly)
+  explicit File(Device const& dev, OpenType read_or_write)
       : path_{dev.name_}, open_type_{read_or_write} {}
 
-  explicit File(std::string_view p, OpenType read_or_write = OpenType::ReadOnly)
+  explicit File(std::string_view p, OpenType read_or_write)
       : path_{
 #if defined(_WIN32)
             utf8_to_utf16(p)
@@ -1000,8 +1001,7 @@ struct File {
         open_type_{read_or_write} {
   }
 #if defined(_WIN32)
-  explicit File(std::wstring_view p,
-                OpenType read_or_write = OpenType::ReadOnly)
+  explicit File(std::wstring_view p, OpenType read_or_write)
       : path_{p}, open_type_{read_or_write} {}
 #endif
 
@@ -1019,19 +1019,9 @@ struct File {
   File(File const&) = delete;
   File& operator=(File const&) = delete;
 
-  void open_for_read() {
+  void open() {
     if (fd_) {
       return;
-    }
-    open_type_ = OpenType::ReadOnly;
-    open_impl();
-  }
-  void open_for_write() {
-    if (fd_) {
-      return;
-    }
-    if (open_type_ == OpenType::ReadOnly) {
-      open_type_ = OpenType::WriteTruncate;
     }
     open_impl();
   }
@@ -1057,6 +1047,8 @@ struct File {
     f.fd_ = fd_.dup();
     return f;
   }
+
+  bool is_valid() const { return !!fd_; }
 
  private:
   void open_impl() {
@@ -1106,9 +1098,8 @@ struct File {
         flag |= O_WRONLY | O_CREAT | O_APPEND;
         break;
     }
-    fd_.reset((open_type_ == OpenType::ReadOnly)
-                  ? ::open(path_.c_str(), flag)
-                  : ::open(path_.c_str(), flag, 0644));
+    fd_.reset(
+        ::open(path_.c_str(), flag, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH));
     if (!fd_) {
       print_error("open failed: " + path_);
       return;
@@ -1575,12 +1566,8 @@ class Redirector {
               }
 #endif
             },
-            [this](File& value) {
-              if (fileno() == 0) {
-                value.open_for_read();
-              } else {
-                value.open_for_write();
-              }
+            [](File& value) {
+              value.open();
 #if defined(_WIN32)
               // File handles are now non-inheritable by default; make them
               // inheritable so the child can use them.
@@ -2465,7 +2452,7 @@ class subprocess {
 
     if (!requested_pgid_.has_value()) {
       File stdin_file{detail::named_args::devttyin, File::OpenType::ReadOnly};
-      stdin_file.open_for_read();
+      stdin_file.open();
       if (stdin_.inherit() && !stdin_file.fd().isatty()) {
         requested_pgid_ = 0;
       } else {

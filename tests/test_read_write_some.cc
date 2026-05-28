@@ -184,8 +184,8 @@ TEST(ReadWriteSomeTest, FileReadWrite) {
 
   // Write via File::write_some
   {
-    File f(tmp.path());
-    f.open_for_write();
+    File f(tmp.path(), File::OpenType::WriteTruncate);
+    f.open();
     auto w = f.write_some(content, strlen(content));
     ASSERT_GT(w, 0);
     ASSERT_EQ(static_cast<size_t>(w), strlen(content));
@@ -193,8 +193,8 @@ TEST(ReadWriteSomeTest, FileReadWrite) {
 
   // Read back via File::read_some
   {
-    File f(tmp.path());
-    f.open_for_read();
+    File f(tmp.path(), File::OpenType::ReadOnly);
+    f.open();
     char buf[64] = {};
     auto r = f.read_some(buf, sizeof(buf));
     ASSERT_GT(r, 0);
@@ -208,14 +208,14 @@ TEST(ReadWriteSomeTest, FileWriteAllReadExact) {
   const char content[] = "file_exact_all_data";
 
   {
-    File f(tmp.path());
-    f.open_for_write();
+    File f(tmp.path(), File::OpenType::WriteTruncate);
+    f.open();
     ASSERT_TRUE(f.write_all(content, strlen(content)));
   }
 
   {
-    File f(tmp.path());
-    f.open_for_read();
+    File f(tmp.path(), File::OpenType::ReadOnly);
+    f.open();
     char buf[64] = {};
     ASSERT_TRUE(f.read_exact(buf, strlen(content)));
     ASSERT_EQ(std::string(buf, strlen(content)), std::string(content));
@@ -224,7 +224,7 @@ TEST(ReadWriteSomeTest, FileWriteAllReadExact) {
 
 TEST(ReadWriteSomeTest, FileReadClosed) {
   // File that was never opened has an invalid handle.
-  File f("/dev/null");
+  File f("/dev/null", File::OpenType::ReadOnly);
   char buf[16];
   auto n = f.read_some(buf, sizeof(buf));
   ASSERT_EQ(n, -1);
@@ -232,7 +232,7 @@ TEST(ReadWriteSomeTest, FileReadClosed) {
 
 TEST(ReadWriteSomeTest, FileWriteClosed) {
   // File that was never opened has an invalid handle.
-  File f("/dev/null");
+  File f("/dev/null", File::OpenType::ReadOnly);
   auto n = f.write_some("x", 1);
   ASSERT_EQ(n, -1);
 }
@@ -243,14 +243,14 @@ TEST(ReadWriteSomeTest, FileReadSomePartial) {
   const std::string content(4096, 'A');
 
   {
-    File f(tmp.path());
-    f.open_for_write();
+    File f(tmp.path(), File::OpenType::WriteTruncate);
+    f.open();
     ASSERT_TRUE(f.write_all(content.data(), content.size()));
   }
 
   {
-    File f(tmp.path());
-    f.open_for_read();
+    File f(tmp.path(), File::OpenType::ReadOnly);
+    f.open();
     char buf[128];
     auto r = f.read_some(buf, sizeof(buf));
     ASSERT_GT(r, 0);
@@ -270,14 +270,14 @@ TEST(ReadWriteSomeTest, FileHandlerReadWrite) {
 
   // Write using File, then read using FileHandler
   {
-    File f(tmp.path());
-    f.open_for_write();
+    File f(tmp.path(), File::OpenType::WriteTruncate);
+    f.open();
     ASSERT_TRUE(f.write_all(content, strlen(content)));
   }
 
   {
-    File f(tmp.path());
-    f.open_for_read();
+    File f(tmp.path(), File::OpenType::ReadOnly);
+    f.open();
     FileHandler fh(f.fd().release());  // wrap the native handle
 
     char buf[64] = {};
@@ -296,16 +296,16 @@ TEST(ReadWriteSomeTest, FileHandlerWriteAllReadExact) {
   TempFile tmp;
 
   {
-    File f(tmp.path());
-    f.open_for_write();
+    File f(tmp.path(), File::OpenType::WriteTruncate);
+    f.open();
     FileHandler fh(f.fd().release());
     const char data[] = "fh_exact";
     ASSERT_TRUE(fh.write_all(data, strlen(data)));
   }
 
   {
-    File f(tmp.path());
-    f.open_for_read();
+    File f(tmp.path(), File::OpenType::ReadOnly);
+    f.open();
     FileHandler fh(f.fd().release());
     char buf[64] = {};
     ASSERT_TRUE(fh.read_exact(buf, strlen("fh_exact")));
