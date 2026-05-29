@@ -63,6 +63,29 @@ inline bool wait_for_file(
 }
 
 // ===========================================================================
+// Helper: wait for a file to exist and contain non-empty content.
+// On Windows, ">" creates/truncates the file before writing, so we must
+// poll for content to avoid reading an empty file in the brief window
+// between file creation and the first write.
+// ===========================================================================
+inline bool wait_for_file_content(
+    const std::string& path,
+    std::chrono::milliseconds max_wait = std::chrono::seconds(5)) {
+  auto start = std::chrono::steady_clock::now();
+  while (true) {
+    std::error_code ec;
+    auto sz = std::filesystem::file_size(path, ec);
+    if (!ec && sz > 0) {
+      return true;
+    }
+    if (std::chrono::steady_clock::now() - start > max_wait) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+}
+
+// ===========================================================================
 // Helper: read file content as string, trim trailing whitespace
 // ===========================================================================
 inline std::string read_file_trimmed(const std::string& path) {
@@ -560,8 +583,10 @@ TEST(DetachTest, ProcessSurvivesDetachReturn) {
                   "sleep 1 && echo survived_detach > '" + tmp.path() + "'"});
 #endif
   EXPECT_TRUE(ok);
-  // detach_run has already returned; process should still be running
-  ASSERT_TRUE(wait_for_file(tmp.path(), std::chrono::seconds(10)));
+  // detach_run has already returned; process should still be running.
+  // We poll for non-empty content (not just existence) because on Windows
+  // the ">" redirect creates/truncates the file before writing to it.
+  ASSERT_TRUE(wait_for_file_content(tmp.path(), std::chrono::seconds(10)));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "survived_detach");
 }
 
