@@ -276,10 +276,13 @@ TEST(DetachTest, EnvFullReplacementClearsOtherVars) {
 #else
   // Use `env` to dump actual environment, then grep for a well-known var.
   // With full env replacement, HOME should not be present.
+  // We poll for non-empty content (not just existence) because the ">"
+  // redirect creates/truncates the file before `env` writes to it, and
+  // `env` is an external binary (requires fork+exec by the shell).
   bool ok = detach_run({"/bin/sh", "-c", "env > '" + tmp.path() + "'"},
                        env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
+  ASSERT_TRUE(wait_for_file_content(tmp.path()));
   std::string env_output = read_file_trimmed(tmp.path());
   // ONLY_THIS should be present
   EXPECT_TRUE(env_output.find("ONLY_THIS=present") != std::string::npos);
