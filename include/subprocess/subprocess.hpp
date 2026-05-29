@@ -277,19 +277,15 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
 }
 
 #if !defined(_WIN32)
-[[maybe_unused]] inline void set_nonblocking(int fd) {
+[[maybe_unused]] inline bool set_nonblocking(int fd) {
   if (invalid_handle(fd)) {
-    return;
+    return false;
   }
   auto const flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) {
-    print_error("fcntl(F_GETFL) failed");
-    return;
+    return false;
   }
-  if (-1 == fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
-    print_error("fcntl(F_SETFL) failed");
-    return;
-  }
+  return -1 != fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 #endif
 
@@ -1132,8 +1128,6 @@ class File {
                           dwCreationDisposition, FILE_ATTRIBUTE_NORMAL,
                           nullptr));
     if (!fd_) {
-      print_error(L"open failed: " + path_ + L", error: " +
-                  std::to_wstring(GetLastError()));
       return;
     }
 #else
@@ -1152,7 +1146,6 @@ class File {
     fd_.reset(
         ::open(path_.c_str(), flag, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH));
     if (!fd_) {
-      print_error("open failed: " + path_);
       return;
     }
 #endif
@@ -1327,9 +1320,6 @@ inline std::vector<std::thread> read_write_to_buffer_with_threads(
             write_size = buf.write_some();
           } while (write_size > 0);
           buf.close_write();
-          if (write_size == -1) {
-            print_error(get_last_error_message());
-          }
         },
         std::ref(in.value()));
   }
@@ -1341,9 +1331,6 @@ inline std::vector<std::thread> read_write_to_buffer_with_threads(
             read_size = buf.read_some();
           } while (read_size > 0);
           buf.close_read();
-          if (read_size == -1) {
-            print_error(get_last_error_message());
-          }
         },
         std::ref(out.value()));
   }
@@ -1355,9 +1342,6 @@ inline std::vector<std::thread> read_write_to_buffer_with_threads(
             read_size = buf.read_some();
           } while (read_size > 0);
           buf.close_read();
-          if (read_size == -1) {
-            print_error(get_last_error_message());
-          }
         },
         std::ref(err.value()));
   }
