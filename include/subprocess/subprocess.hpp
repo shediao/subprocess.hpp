@@ -2158,6 +2158,16 @@ template <typename T>
 concept capture_run_args_type =
     named_argument_for_capture_type<T> || string_like_type<T>;
 
+template <typename T>
+concept named_argument_for_detach_type =
+    std::same_as<Env, std::decay_t<T>> || std::same_as<Cwd, std::decay_t<T>> ||
+    std::same_as<EnvAppend, std::decay_t<T>> ||
+    std::same_as<EnvItemAppend, std::decay_t<T>>;
+
+template <typename T>
+concept detach_run_args_type =
+    named_argument_for_detach_type<T> || string_like_type<T>;
+
 template <typename T1, typename T2>
 struct tuple_concat;
 
@@ -2436,6 +2446,33 @@ class subprocess {
       return false;
     }
   }
+
+  bool detach_spawn_win() {
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+
+    auto app_path = find_command_in_path(cmd_[0]);
+    auto command = argv_to_command_line_string(cmd_);
+    auto env_block = create_environment_string_data(env_);
+
+    PROCESS_INFORMATION pi{};
+    DWORD creation_flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
+                           CREATE_UNICODE_ENVIRONMENT;
+
+    auto success = CreateProcessW(
+        app_path.has_value() ? app_path.value().c_str() : nullptr,
+        command.data(), NULL, NULL, FALSE, creation_flags,
+        env_block.empty() ? nullptr : env_block.data(),
+        cwd_.empty() ? nullptr : cwd_.data(), &si, &pi);
+
+    if (success) {
+      CloseHandle(pi.hProcess);
+      CloseHandle(pi.hThread);
+      return true;
+    }
+    print_error(get_last_error_message());
+    return false;
+  }
 #else
   bool async_run_posix() {
     if (!requested_pgid_.has_value()) {
@@ -2473,6 +2510,33 @@ class subprocess {
     }
     return true;
   }
+  bool detach_spawn_posix() {
+    auto pid = fork();
+    if (pid < 0) {
+      print_error("fork() failed");
+      return false;
+    }
+    if (pid == 0) {
+      // Double-fork: the intermediate child exits immediately so the
+      // grandchild is re-parented to init (PID 1), avoiding a zombie.
+      auto pid2 = fork();
+      if (pid2 < 0) {
+        _Exit(1);
+      }
+      if (pid2 == 0) {
+        // Grandchild: detach from terminal and exec.
+        if (setsid() < 0) {
+          _Exit(1);
+        }
+        execute_command_in_child();
+      }
+      _Exit(0);
+    }
+    // Reap the intermediate child immediately.
+    int status;
+    waitpid(pid, &status, 0);
+    return true;
+  }
 #endif
 
   bool async_run() {
@@ -2482,6 +2546,14 @@ class subprocess {
     return async_run_win();
 #else
     return async_run_posix();
+#endif  // !_WIN32
+  }
+
+  bool detach_spawn() {
+#if defined(_WIN32)
+    return detach_spawn_win();
+#else
+    return detach_spawn_posix();
 #endif  // !_WIN32
   }
 
@@ -2983,6 +3055,59 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
                                                  std::index_sequence<N...>) {
     return capture_run(
+        std::vector<
+            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
+            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>{
+                std::move(std::get<I>(args_tuple))}...},
+        std::move(
+            std::get<std::tuple_size_v<std::tuple<Args...>> -
+                     std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
+  }(std::make_index_sequence<std::tuple_size_v<std::tuple<Args...>> -
+                             std::tuple_size_v<NamedArgTypeList>>{},
+         std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
+}
+
+template <detail::named_argument_for_detach_type... T>
+inline bool detach_run(std::vector<std::string> cmd, T&&... args) {
+  if (cmd.empty()) {
+    return false;
+  }
+  using namespace named_arguments;
+  using namespace detail;
+  return detail::subprocess(
+             std::move(cmd), std::forward<T>(args)...,
+             StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
+             StdoutRedirector(File{devnull, File::OpenType::WriteTruncate}),
+             StderrRedirector(File{devnull, File::OpenType::WriteTruncate}))
+      .detach_spawn();
+}
+#if defined(_WIN32)
+template <detail::named_argument_for_detach_type... T>
+inline bool detach_run(std::vector<std::wstring> cmd, T&&... args) {
+  if (cmd.empty()) {
+    return false;
+  }
+  using namespace named_arguments;
+  using namespace detail;
+  return detail::subprocess(
+             std::move(cmd), std::forward<T>(args)...,
+             StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
+             StdoutRedirector(File{devnull, File::OpenType::WriteTruncate}),
+             StderrRedirector(File{devnull, File::OpenType::WriteTruncate}))
+      .detach_spawn();
+}
+#endif  // _WIN32
+
+template <detail::detach_run_args_type... Args>
+inline bool detach_run(Args... args) {
+  using namespace named_arguments;
+  std::tuple<Args...> args_tuple{std::move(args)...};
+  using NamedArgTypeList =
+      typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
+
+  return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
+                                                 std::index_sequence<N...>) {
+    return detach_run(
         std::vector<
             detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
             detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>{
