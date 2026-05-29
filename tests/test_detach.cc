@@ -46,29 +46,13 @@ using subprocess::buffer;
 using subprocess::detach_run;
 
 // ===========================================================================
-// Helper: wait for a file to be created (poll with timeout).
-// Returns true if the file exists within the timeout.
+// Helper: wait for a file to be created and contain non-empty content.
+// We poll for content (not just existence) because on all platforms
+// shell redirect (">") creates/truncates the file before the command
+// writes to it, so there is a brief window where the file exists but
+// is empty.
 // ===========================================================================
 inline bool wait_for_file(
-    const std::string& path,
-    std::chrono::milliseconds max_wait = std::chrono::seconds(5)) {
-  auto start = std::chrono::steady_clock::now();
-  while (!std::filesystem::exists(path)) {
-    if (std::chrono::steady_clock::now() - start > max_wait) {
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  }
-  return true;
-}
-
-// ===========================================================================
-// Helper: wait for a file to exist and contain non-empty content.
-// On Windows, ">" creates/truncates the file before writing, so we must
-// poll for content to avoid reading an empty file in the brief window
-// between file creation and the first write.
-// ===========================================================================
-inline bool wait_for_file_content(
     const std::string& path,
     std::chrono::milliseconds max_wait = std::chrono::seconds(5)) {
   auto start = std::chrono::steady_clock::now();
@@ -276,13 +260,10 @@ TEST(DetachTest, EnvFullReplacementClearsOtherVars) {
 #else
   // Use `env` to dump actual environment, then grep for a well-known var.
   // With full env replacement, HOME should not be present.
-  // We poll for non-empty content (not just existence) because the ">"
-  // redirect creates/truncates the file before `env` writes to it, and
-  // `env` is an external binary (requires fork+exec by the shell).
   bool ok = detach_run({"/bin/sh", "-c", "env > '" + tmp.path() + "'"},
                        env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
+  ASSERT_TRUE(wait_for_file(tmp.path()));
   std::string env_output = read_file_trimmed(tmp.path());
   // ONLY_THIS should be present
   EXPECT_TRUE(env_output.find("ONLY_THIS=present") != std::string::npos);
@@ -587,9 +568,7 @@ TEST(DetachTest, ProcessSurvivesDetachReturn) {
 #endif
   EXPECT_TRUE(ok);
   // detach_run has already returned; process should still be running.
-  // We poll for non-empty content (not just existence) because on Windows
-  // the ">" redirect creates/truncates the file before writing to it.
-  ASSERT_TRUE(wait_for_file_content(tmp.path(), std::chrono::seconds(10)));
+  ASSERT_TRUE(wait_for_file(tmp.path(), std::chrono::seconds(10)));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "survived_detach");
 }
 
