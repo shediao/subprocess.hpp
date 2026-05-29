@@ -669,7 +669,6 @@ inline std::vector<wchar_t> create_environment_string_data(
   }
   return env_block;
 }
-
 #endif
 
 #if defined(_WIN32)
@@ -775,32 +774,6 @@ inline bool read_exact(unique_fd const& fd, void* data, std::size_t size) {
   return true;
 }
 
-#if !defined(_WIN32)
-inline std::optional<std::string> find_command_in_path(
-    std::string_view exe_file) {
-  constexpr char path_env_sep = ':';
-
-  if (exe_file.find_last_of("/\\") != std::string_view::npos) {
-    return std::nullopt;
-  }
-
-  auto is_executable = [](std::string const& f) {
-    struct stat sb{};
-    return (stat(f.c_str(), &sb) == 0 && S_ISREG(sb.st_mode) &&
-            access(f.c_str(), X_OK) == 0);
-  };
-  for (const auto paths = split(std::string(::getenv("PATH")), path_env_sep);
-       auto& p : paths) {
-    constexpr char separator = '/';
-    if (std::string f = p + separator + std::string(exe_file);
-        is_executable(f)) {
-      return f;
-    }
-  }
-  return std::nullopt;
-}
-#endif  // !_WIN32
-
 #if defined(_WIN32)
 inline std::map<std::wstring, std::wstring> get_all_env_vars() {
   std::map<std::wstring, std::wstring> envs;
@@ -864,6 +837,82 @@ inline std::map<std::string, std::string> get_all_env_vars() {
   return envs;
 }
 #endif
+
+#if defined(_WIN32)
+inline std::optional<std::wstring> find_command_in_path(std::wstring command) {
+  auto search_path =
+      [](std::wstring const& cmd,
+         std::wstring const& ext) -> std::optional<std::wstring> {
+    DWORD const size =
+        SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
+                    0, nullptr, nullptr);
+    if (size == 0) {
+      return std::nullopt;
+    }
+    std::wstring result(size, L'\0');
+    DWORD const copied =
+        SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
+                    size, result.data(), nullptr);
+    // copied does not include the null terminator
+    result.resize(copied);
+    return result;
+  };
+
+  auto is_file = [](std::wstring const& path) {
+    DWORD const attr = GetFileAttributesW(path.c_str());
+    return attr != INVALID_FILE_ATTRIBUTES &&
+           !(attr & FILE_ATTRIBUTE_DIRECTORY);
+  };
+
+  if (command.find_last_of(L"/\\") != std::wstring::npos) {
+    if (is_file(command)) {
+      return command;
+    }
+  } else {
+    if (auto dot = command.find_last_of(L'.');
+        dot != std::wstring::npos && dot > 0) {
+      if (auto ret = search_path(command, L""); ret) {
+        return *ret;
+      }
+    } else {
+      for (auto ext :
+           split(get_env(L"PATHEXT").value_or(L".COM;.EXE;.BAT;.CMD"), L';')) {
+        if (ext.empty()) {
+          continue;
+        }
+        if (auto ret = search_path(command, ext); ret) {
+          return *ret;
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+#else   // _WIN32
+inline std::optional<std::string> find_command_in_path(
+    std::string_view exe_file) {
+  constexpr char path_env_sep = ':';
+
+  if (exe_file.find_last_of("/\\") != std::string_view::npos) {
+    return std::nullopt;
+  }
+
+  auto is_executable = [](std::string const& f) {
+    struct stat sb{};
+    return (stat(f.c_str(), &sb) == 0 && S_ISREG(sb.st_mode) &&
+            access(f.c_str(), X_OK) == 0);
+  };
+  for (const auto paths = split(std::string(::getenv("PATH")), path_env_sep);
+       auto& p : paths) {
+    constexpr char separator = '/';
+    if (std::string f = p + separator + std::string(exe_file);
+        is_executable(f)) {
+      return f;
+    }
+  }
+  return std::nullopt;
+}
+#endif  // !_WIN32
 
 struct Device {
 #if defined(_WIN32)
@@ -2279,10 +2328,8 @@ class subprocess {
 #endif
   }
 
-  void async_run() {
-    prepare_for_child();
-
 #if defined(_WIN32)
+  bool async_run_win() {
     // Create a Job Object to manage the entire process tree.
     // This allows the parent to terminate all child processes (e.g., when
     // cmd.exe spawns ping.exe, terminating cmd.exe alone does not kill ping,
@@ -2349,7 +2396,7 @@ class subprocess {
                                              &attr_list_size)) {
         print_error(L"InitializeProcThreadAttributeList failed: " +
                     std::to_wstring(GetLastError()));
-        return;
+        return false;
       }
       if (!UpdateProcThreadAttribute(
               attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
@@ -2358,59 +2405,12 @@ class subprocess {
         DeleteProcThreadAttributeList(attr_list);
         print_error(L"UpdateProcThreadAttribute failed: " +
                     std::to_wstring(GetLastError()));
-        return;
+        return false;
       }
       startup_info.lpAttributeList = attr_list;
     }
 
-    auto search_path =
-        [](std::wstring const& cmd,
-           std::wstring const& ext) -> std::optional<std::wstring> {
-      DWORD const size =
-          SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
-                      0, nullptr, nullptr);
-      if (size == 0) {
-        return std::nullopt;
-      }
-      std::wstring result(size, L'\0');
-      DWORD const copied =
-          SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
-                      size, result.data(), nullptr);
-      // copied does not include the null terminator
-      result.resize(copied);
-      return result;
-    };
-
-    auto is_file = [](std::wstring const& path) {
-      DWORD const attr = GetFileAttributesW(path.c_str());
-      return attr != INVALID_FILE_ATTRIBUTES &&
-             !(attr & FILE_ATTRIBUTE_DIRECTORY);
-    };
-
-    std::wstring app_path;
-    if (cmd_[0].find_last_of(L"/\\") != std::wstring::npos) {
-      if (is_file(cmd_[0])) {
-        app_path = cmd_[0];
-      }
-    } else {
-      if (auto dot = cmd_[0].find_last_of(L'.');
-          dot != std::wstring::npos && dot > 0) {
-        if (auto ret = search_path(cmd_[0], L""); ret) {
-          app_path = *ret;
-        }
-      } else {
-        for (auto ext : split(
-                 get_env(L"PATHEXT").value_or(L".COM;.EXE;.BAT;.CMD"), L';')) {
-          if (ext.empty()) {
-            continue;
-          }
-          if (auto ret = search_path(cmd_[0], ext); ret) {
-            app_path = *ret;
-            break;
-          }
-        }
-      }
-    }
+    auto app_path = find_command_in_path(cmd_[0]);
 
     auto command = argv_to_command_line_string(cmd_);
 
@@ -2424,12 +2424,12 @@ class subprocess {
     if (newgroup_) {
       creation_flags |= CREATE_NEW_PROCESS_GROUP;
     }
-    auto success =
-        CreateProcessW(app_path.empty() ? nullptr : app_path.c_str(),
-                       command.data(), NULL, NULL, TRUE, creation_flags,
-                       env_block.empty() ? nullptr : env_block.data(),
-                       cwd_.empty() ? nullptr : cwd_.data(),
-                       reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &pi);
+    auto success = CreateProcessW(
+        app_path.has_value() ? app_path.value().c_str() : nullptr,
+        command.data(), NULL, NULL, TRUE, creation_flags,
+        env_block.empty() ? nullptr : env_block.data(),
+        cwd_.empty() ? nullptr : cwd_.data(),
+        reinterpret_cast<LPSTARTUPINFOW>(&startup_info), &pi);
 
     if (attr_list != nullptr) {
       DeleteProcThreadAttributeList(attr_list);
@@ -2443,14 +2443,17 @@ class subprocess {
         AssignProcessToJobObject(job_handle_->get(), process_handle_.get());
       }
       pump_pipe_data();
+      return true;
     } else {
       print_error(get_last_error_message());
       stdin_.close_all();
       stdout_.close_all();
       stderr_.close_all();
+      return false;
     }
+  }
 #else
-
+  bool async_run_posix() {
     if (!requested_pgid_.has_value()) {
       File stdin_file{detail::named_args::devttyin, File::OpenType::ReadOnly};
       if (stdin_.inherit() && !stdin_file.fd().isatty()) {
@@ -2463,7 +2466,7 @@ class subprocess {
     auto pid = fork();
     if (pid < 0) {
       print_error("fork() failed");
-      return;
+      return false;
     }
     if (pid == 0) {
       if (!invalid_handle(
@@ -2484,11 +2487,25 @@ class subprocess {
       launch_watchdog();
       pump_pipe_data();
     }
+    return true;
+  }
+#endif
+
+  bool async_run() {
+    prepare_for_child();
+
+#if defined(_WIN32)
+    return async_run_win();
+#else
+    return async_run_posix();
 #endif  // !_WIN32
   }
 
   int run() {
-    async_run();
+    bool spawned = async_run();
+    if (!spawned) {
+      return 127;
+    }
     return wait_for_exit();
   }
 
@@ -2801,8 +2818,7 @@ class pipeline {
         it->requested_pgid_ = subs_.begin()->pid();
       }
 #endif
-      it->async_run();
-      if (invalid_handle(it->pid())) {
+      if (!it->async_run()) {
         for (auto& p : pipes) {
           p.close_all();
         }
