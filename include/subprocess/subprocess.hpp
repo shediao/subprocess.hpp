@@ -2464,6 +2464,27 @@ class subprocess {
         app_[i] = L'\\';
       }
     }
+
+    // Resolve relative paths against cwd_ before calling
+    // find_command_in_path, because GetFullPathNameW resolves relative
+    // to the calling process's CWD, not the child's future CWD.
+    if (!cwd_.empty()) {
+      auto sep = app_.find_last_of(L'\\');
+      if (sep != std::wstring::npos) {
+        bool is_absolute =
+            (app_.size() >= 2 && app_[1] == L':') ||
+            (app_.size() >= 2 && app_[0] == L'\\' && app_[1] == L'\\');
+        if (!is_absolute) {
+          std::wstring resolved = cwd_;
+          if (resolved.back() != L'\\') {
+            resolved += L'\\';
+          }
+          resolved += app_;
+          app_ = std::move(resolved);
+        }
+      }
+    }
+
     auto app_path = find_command_in_path(app_);
 
     auto command = argv_to_command_line_string(app_, args_, is_shell);
@@ -2510,6 +2531,31 @@ class subprocess {
   bool detach_spawn_win() {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
+
+    for (size_t i = 0; i < app_.size(); i++) {
+      if (app_[i] == L'/') {
+        app_[i] = L'\\';
+      }
+    }
+
+    // Resolve relative paths against cwd_ before calling
+    // find_command_in_path (same as async_run_win).
+    if (!cwd_.empty()) {
+      auto sep = app_.find_last_of(L'\\');
+      if (sep != std::wstring::npos) {
+        bool is_absolute =
+            (app_.size() >= 2 && app_[1] == L':') ||
+            (app_.size() >= 2 && app_[0] == L'\\' && app_[1] == L'\\');
+        if (!is_absolute) {
+          std::wstring resolved = cwd_;
+          if (resolved.back() != L'\\') {
+            resolved += L'\\';
+          }
+          resolved += app_;
+          app_ = std::move(resolved);
+        }
+      }
+    }
 
     auto app_path = find_command_in_path(app_);
     auto command = argv_to_command_line_string(app_, args_, is_shell);
