@@ -735,7 +735,7 @@ TEST(DetachTest, VariadicWithNamedArgs) {
 // 30. const wchar_t* arguments
 TEST(DetachTest, VariadicConstWCharPtr) {
   TempFile tmp;
-  const wchar_t* cmd = L"cmd.exe";
+  const wchar_t* app = L"cmd.exe";
   const wchar_t* a1 = L"/c";
   std::wstring a2_s = L"<nul set /p=const_wchar_ptr>" +
                       subprocess::detail::utf8_to_utf16(tmp.path());
