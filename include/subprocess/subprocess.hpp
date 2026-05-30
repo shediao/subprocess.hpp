@@ -1151,8 +1151,6 @@ class File {
 };
 
 class FileHandler {
-  friend class subprocess;
-
  public:
   explicit FileHandler(NativeHandle f) : fd_{f} {}
   explicit FileHandler(unique_fd&& f) : fd_{std::move(f)} {}
@@ -1523,7 +1521,6 @@ inline void read_write_to_buffer_use_poll(
 #endif
 
 class Redirector {
-  friend class subprocess;
   using value_type = std::variant<Pipe, File, Buffer, FileHandler>;
 
  public:
