@@ -240,9 +240,15 @@ inline void print_error(std::string_view const msg) {
 using NativeHandle = HANDLE;
 static inline const NativeHandle INVALID_NATIVE_HANDLE_VALUE =
     INVALID_HANDLE_VALUE;
-#else   // _WIN32
+using NativeString = std::wstring;
+using NativeStringView = std::wstring_view;
+#define TO_NATIVE_STRING(str) utf8_to_utf16(str)
+#else  // _WIN32
 using NativeHandle = int;
 constexpr NativeHandle INVALID_NATIVE_HANDLE_VALUE = -1;
+using NativeString = std::string;
+using NativeStringView = std::string_view;
+#define TO_NATIVE_STRING(str) str
 #endif  // !_WIN32
 
 inline bool invalid_handle(NativeHandle handle) {
@@ -911,11 +917,7 @@ inline std::optional<std::string> find_command_in_path(
 #endif  // !_WIN32
 
 struct Device {
-#if defined(_WIN32)
-  std::wstring_view name_;
-#else
-  std::string_view name_;
-#endif
+  NativeStringView name_;
 };
 
 class Pipe {
@@ -1038,14 +1040,7 @@ class File {
   }
 
   explicit File(std::string_view p, OpenType read_or_write)
-      : path_{
-#if defined(_WIN32)
-            utf8_to_utf16(p)
-#else
-            p
-#endif
-        },
-        open_type_{read_or_write} {
+      : path_{TO_NATIVE_STRING(p)}, open_type_{read_or_write} {
     open_impl();
   }
 #if defined(_WIN32)
@@ -1150,11 +1145,7 @@ class File {
     }
 #endif
   }
-#if defined(_WIN32)
-  std::wstring path_;
-#else
-  std::string path_;
-#endif
+  NativeString path_;
   OpenType open_type_{OpenType::ReadOnly};
   unique_fd fd_{INVALID_NATIVE_HANDLE_VALUE};
 };
@@ -1919,48 +1910,28 @@ struct stderr_redirector {
 };
 
 struct Cwd {
-#if defined(_WIN32)
-  std::wstring cwd;
-#else
-  std::string cwd;
-#endif
+  NativeString cwd;
 };
 
 // Set environment variables, replacing existing ones.
 struct Env {
-#if defined(_WIN32)
-  std::map<std::wstring, std::wstring> env;
-#else
-  std::map<std::string, std::string> env;
-#endif
+  std::map<NativeString, NativeString> env;
 };
 
 // Append environment variables to the existing environment.
 struct EnvAppend {
-#if defined(_WIN32)
-  std::map<std::wstring, std::wstring> env;
-#else
-  std::map<std::string, std::string> env;
-#endif
+  std::map<NativeString, NativeString> env;
 };
 
 // Append or prepend a value to a specific environment variable, e.g., PATH.
 struct EnvItemAppend {
   EnvItemAppend& operator+=(std::string_view val) {
-#if defined(_WIN32)
-    std::get<1>(kv) = utf8_to_utf16(val);
-#else
-    std::get<1>(kv) = std::move(val);
-#endif
+    std::get<1>(kv) = TO_NATIVE_STRING(val);
     std::get<2>(kv) = true;
     return *this;
   }
   EnvItemAppend& operator<<=(std::string_view val) {
-#if defined(_WIN32)
-    std::get<1>(kv) = utf8_to_utf16(val);
-#else
-    std::get<1>(kv) = std::move(val);
-#endif
+    std::get<1>(kv) = TO_NATIVE_STRING(val);
     std::get<2>(kv) = false;
     return *this;
   }
@@ -1978,12 +1949,8 @@ struct EnvItemAppend {
   }
 #endif
 
-#if defined(_WIN32)
   // name, value, is_append
-  std::tuple<std::wstring, std::wstring, bool> kv;
-#else
-  std::tuple<std::string, std::string, bool> kv;
-#endif
+  std::tuple<NativeString, NativeString, bool> kv;
 };
 
 struct Timeout {
@@ -2007,11 +1974,7 @@ struct timeout_operator {
 
 struct cwd_operator {
   Cwd operator=(std::string_view p) const {
-#if defined(_WIN32)
-    return Cwd{utf8_to_utf16(p)};
-#else
-    return Cwd{std::string(p)};
-#endif
+    return Cwd{TO_NATIVE_STRING(std::string(p))};
   }
 #if defined(_WIN32)
   Cwd operator=(std::wstring_view p) const { return Cwd{std::wstring{p}}; }
@@ -2204,21 +2167,11 @@ class subprocess {
 
  public:
   template <named_argument_type... T>
-#if defined(_WIN32)
-  explicit subprocess(std::vector<std::wstring> cmd, T&&... args)
-#else
-  explicit subprocess(std::vector<std::string> cmd, T&&... args)
-#endif
+  explicit subprocess(std::vector<NativeString> cmd, T&&... args)
       : cmd_(std::move(cmd)) {
-#if defined(_WIN32)
-    std::map<std::wstring, std::wstring> environments;
-    std::map<std::wstring, std::wstring> env_appends;
-    std::vector<std::tuple<std::wstring, std::wstring, bool>> env_item_appends;
-#else
-    std::map<std::string, std::string> environments;
-    std::map<std::string, std::string> env_appends;
-    std::vector<std::tuple<std::string, std::string, bool>> env_item_appends;
-#endif
+    std::map<NativeString, NativeString> environments;
+    std::map<NativeString, NativeString> env_appends;
+    std::vector<std::tuple<NativeString, NativeString, bool>> env_item_appends;
     (void)(..., ([&]<typename Arg>(Arg&& arg) {
              using ArgType = std::decay_t<Arg>;
              if constexpr (std::is_same_v<ArgType, StdinRedirector>) {
@@ -2799,15 +2752,9 @@ class subprocess {
   }
 #endif  // !_WIN32
 
-#if defined(_WIN32)
-  std::vector<std::wstring> cmd_;
-  std::wstring cwd_;
-  std::map<std::wstring, std::wstring> env_;
-#else
-  std::vector<std::string> cmd_;
-  std::string cwd_;
-  std::map<std::string, std::string> env_;
-#endif
+  std::vector<NativeString> cmd_;
+  NativeString cwd_;
+  std::map<NativeString, NativeString> env_;
   StdinRedirector stdin_;
   StdoutRedirector stdout_;
   StderrRedirector stderr_;
