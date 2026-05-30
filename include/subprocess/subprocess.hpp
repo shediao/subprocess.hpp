@@ -129,6 +129,7 @@
 #endif  // !_WIN32
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <climits>
 #include <condition_variable>
@@ -958,6 +959,100 @@ inline std::optional<std::string> find_command_in_path(
   return std::nullopt;
 }
 #endif  // !_WIN32
+
+class Timer {
+ public:
+  Timer() = default;
+
+  template <typename F, typename Duration>
+  Timer(F&& f, Duration timeout) {
+    start(std::forward<F>(f), timeout);
+  }
+
+  Timer(const Timer&) = delete;
+  Timer& operator=(const Timer&) = delete;
+
+  Timer(Timer&& other) noexcept
+      : state_{std::atomic_exchange(&other.state_, std::shared_ptr<State>{})} {}
+  Timer& operator=(Timer&& other) noexcept {
+    if (this != &other) {
+      stop();
+      std::atomic_store(&state_, std::atomic_exchange(
+                                     &other.state_, std::shared_ptr<State>{}));
+    }
+    return *this;
+  }
+
+  ~Timer() { stop(); }
+
+  bool running() const {
+    auto s = std::atomic_load(&state_);
+    return s && s->running_.load();
+  }
+
+  void stop() {
+    auto state = std::atomic_exchange(&state_, std::shared_ptr<State>{});
+    if (!state) {
+      return;
+    }
+    if (state->worker_.get_id() == std::this_thread::get_id()) {
+      state->worker_.detach();
+      return;
+    }
+
+    state->cancelled_.store(true);
+    state->cv_.notify_all();
+
+    if (state->worker_.joinable()) {
+      state->worker_.join();
+    }
+
+    state->running_.store(false);
+  }
+
+  template <typename F, typename Duration>
+  void start(F&& f, Duration timeout) {
+    stop();
+    auto state = std::make_shared<State>();
+    std::atomic_store(&state_, state);
+
+    state->cancelled_.store(false);
+    state->running_.store(true);
+
+    state->worker_ =
+        std::thread([state = state, f = std::forward<F>(f), timeout]() mutable {
+          std::unique_lock<std::mutex> lock(state->mutex_);
+          bool cancelled = state->cv_.wait_for(
+              lock, timeout, [&] { return state->cancelled_.load(); });
+          if (!cancelled) {
+            lock.unlock();
+            try {
+              f();
+            } catch (std::exception const& e) {
+              print_error(e.what());
+            } catch (...) {
+              print_error("Timer: unknown exception");
+            }
+          }
+          state->running_.store(false);
+        });
+  }
+
+  template <typename F, typename Duration>
+  static Timer after(F&& f, Duration timeout) {
+    return Timer(std::forward<F>(f), timeout);
+  }
+
+ private:
+  struct State {
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::atomic_bool cancelled_{true};
+    std::atomic_bool running_{false};
+    std::thread worker_;
+  };
+  std::shared_ptr<State> state_;
+};
 
 struct Device {
   NativeStringView name_;
@@ -2650,33 +2745,10 @@ class subprocess {
     if (!timeout_.has_value()) {
       return;
     }
-    auto timeout_val = *timeout_;
-    auto state = watchdog_state_;
-    watchdog_thread_.emplace([timeout_val, state, this]() {
-      // Wait for timeout or early cancellation via stop_watchdog().
-      {
-        std::unique_lock lock(state->mtx);
-        if (state->cv.wait_for(lock, timeout_val,
-                               [&state] { return state->done; })) {
-          return;  // canceled, process already finished
-        }
-      }
-      // Timeout expired — kill the entire process tree
-      terminate();
-    });
+    watchdog_ = Timer::after([this]() { terminate(); }, *timeout_);
   };
 
-  void stop_watchdog() {
-    if (watchdog_thread_.has_value()) {
-      {
-        std::lock_guard lock(watchdog_state_->mtx);
-        watchdog_state_->done = true;
-      }
-      watchdog_state_->cv.notify_one();
-      watchdog_thread_->join();
-      watchdog_thread_.reset();
-    }
-  }
+  void stop_watchdog() { watchdog_.stop(); }
 #endif  // !_WIN32
 
 #if defined(_WIN32)
@@ -2893,14 +2965,7 @@ class subprocess {
   std::vector<std::thread> pump_threads_;
   bool newgroup_{false};
 #else
-  struct WatchdogState {
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool done = false;
-  };
-  std::optional<std::thread> watchdog_thread_{std::nullopt};
-  std::shared_ptr<WatchdogState> watchdog_state_{
-      std::make_shared<WatchdogState>()};
+  detail::Timer watchdog_;
   unique_pid pid_{-1};
   unique_pid pgid_{-1};
   std::optional<pid_t> requested_pgid_{std::nullopt};
