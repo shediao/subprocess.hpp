@@ -598,14 +598,14 @@ TEST(DetachTest, VariadicConstCharPtr) {
   TempFile tmp;
 #if defined(_WIN32)
   std::string full_cmd = "<nul set /p=const_char_ptr>" + tmp.path();
-  const char* cmd = "cmd.exe";
+  const char* app = "cmd.exe";
   const char* a1 = "/c";
-  bool ok = detach_run(cmd, a1, full_cmd.c_str());
+  bool ok = detach_run(app, a1, full_cmd.c_str());
 #else
   std::string full_cmd = "echo const_char_ptr > '" + tmp.path() + "'";
-  const char* cmd = "/bin/sh";
+  const char* app = "/bin/sh";
   const char* a1 = "-c";
-  bool ok = detach_run(cmd, a1, full_cmd.c_str());
+  bool ok = detach_run(app, a1, full_cmd.c_str());
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -624,18 +624,18 @@ TEST(DetachTest, VariadicCharPtr) {
   std::string a1_s = "-c";
   std::string a2_s = "echo char_ptr > '" + tmp.path() + "'";
 #endif
-  char cmd[256], a1[256], a2[512];
+  char app[256], a1[256], a2[512];
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996)
 #endif
-  std::strcpy(cmd, cmd_s.c_str());
+  std::strcpy(app, cmd_s.c_str());
   std::strcpy(a1, a1_s.c_str());
   std::strcpy(a2, a2_s.c_str());
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "char_ptr");
@@ -645,15 +645,15 @@ TEST(DetachTest, VariadicCharPtr) {
 TEST(DetachTest, VariadicStdString) {
   TempFile tmp;
 #if defined(_WIN32)
-  std::string cmd("cmd.exe");
+  std::string app("cmd.exe");
   std::string a1("/c");
   std::string a2("<nul set /p=std_string>" + tmp.path());
 #else
-  std::string cmd("/bin/sh");
+  std::string app("/bin/sh");
   std::string a1("-c");
   std::string a2("echo std_string > '" + tmp.path() + "'");
 #endif
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "std_string");
@@ -666,18 +666,18 @@ TEST(DetachTest, VariadicStdStringView) {
   std::string cmd_s("cmd.exe");
   std::string a1_s("/c");
   std::string a2_s("<nul set /p=string_view>" + tmp.path());
-  std::string_view cmd(cmd_s);
+  std::string_view app(cmd_s);
   std::string_view a1(a1_s);
   std::string_view a2(a2_s);
 #else
   std::string cmd_s("/bin/sh");
   std::string a1_s("-c");
   std::string a2_s("echo string_view > '" + tmp.path() + "'");
-  std::string_view cmd(cmd_s);
+  std::string_view app(cmd_s);
   std::string_view a1(a1_s);
   std::string_view a2(a2_s);
 #endif
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "string_view");
@@ -687,17 +687,17 @@ TEST(DetachTest, VariadicStdStringView) {
 TEST(DetachTest, VariadicMixedNarrowTypes) {
   TempFile tmp;
 #if defined(_WIN32)
-  char cmd[] = "cmd.exe";
+  char app[] = "cmd.exe";
   std::string a1("/c");
   std::string a2_s("<nul set /p=mixed_narrow>" + tmp.path());
   std::string_view a2(a2_s);
 #else
-  char cmd[] = "/bin/sh";
+  char app[] = "/bin/sh";
   std::string a1("-c");
   std::string a2_s("echo mixed_narrow > '" + tmp.path() + "'");
   std::string_view a2(a2_s);
 #endif
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "mixed_narrow");
@@ -739,7 +739,7 @@ TEST(DetachTest, VariadicConstWCharPtr) {
   const wchar_t* a1 = L"/c";
   std::wstring a2_s = L"<nul set /p=const_wchar_ptr>" +
                       subprocess::detail::utf8_to_utf16(tmp.path());
-  bool ok = detach_run(cmd, a1, a2_s.c_str());
+  bool ok = detach_run(app, a1, a2_s.c_str());
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "const_wchar_ptr");
@@ -748,7 +748,7 @@ TEST(DetachTest, VariadicConstWCharPtr) {
 // 31. wchar_t* arguments
 TEST(DetachTest, VariadicWCharPtr) {
   TempFile tmp;
-  wchar_t cmd[] = L"cmd.exe";
+  wchar_t app[] = L"cmd.exe";
   wchar_t a1[] = L"/c";
   std::wstring a2_s =
       L"<nul set /p=wchar_ptr>" + subprocess::detail::utf8_to_utf16(tmp.path());
@@ -761,7 +761,7 @@ TEST(DetachTest, VariadicWCharPtr) {
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "wchar_ptr");
@@ -770,11 +770,11 @@ TEST(DetachTest, VariadicWCharPtr) {
 // 32. std::wstring arguments
 TEST(DetachTest, VariadicStdWString) {
   TempFile tmp;
-  std::wstring cmd(L"cmd.exe");
+  std::wstring app(L"cmd.exe");
   std::wstring a1(L"/c");
   std::wstring a2(L"<nul set /p=std_wstring>" +
                   subprocess::detail::utf8_to_utf16(tmp.path()));
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "std_wstring");
@@ -787,10 +787,10 @@ TEST(DetachTest, VariadicStdWStringView) {
   std::wstring a1_s(L"/c");
   std::wstring a2_s(L"<nul set /p=wstring_view>" +
                     subprocess::detail::utf8_to_utf16(tmp.path()));
-  std::wstring_view cmd(cmd_s);
+  std::wstring_view app(cmd_s);
   std::wstring_view a1(a1_s);
   std::wstring_view a2(a2_s);
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "wstring_view");
@@ -799,12 +799,12 @@ TEST(DetachTest, VariadicStdWStringView) {
 // 34. Mixed wide types
 TEST(DetachTest, VariadicMixedWideTypes) {
   TempFile tmp;
-  wchar_t cmd[] = L"cmd.exe";
+  wchar_t app[] = L"cmd.exe";
   std::wstring a1(L"/c");
   std::wstring a2_s(L"<nul set /p=mixed_wide>" +
                     subprocess::detail::utf8_to_utf16(tmp.path()));
   std::wstring_view a2(a2_s);
-  bool ok = detach_run(cmd, a1, a2);
+  bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "mixed_wide");
