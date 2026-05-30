@@ -33,11 +33,12 @@
 #include "./utils.h"
 #include "subprocess/subprocess.hpp"
 
-using namespace subprocess::named_arguments;
 using subprocess::buffer;
 using subprocess::capture_run;
 using subprocess::detach_run;
 using subprocess::run;
+using subprocess::named_arguments::std_err;
+using subprocess::named_arguments::std_out;
 
 // ===========================================================================
 // Helper: wait for file content (used by detach_run tests)
