@@ -846,7 +846,7 @@ inline std::map<std::string, std::string> get_all_env_vars() {
 
 #if defined(_WIN32)
 inline std::optional<std::wstring> find_command_in_path(
-    std::wstring const& command) {
+    std::wstring const& command, std::wstring const& cwd = {}) {
   auto search_path =
       [](std::wstring const& cmd,
          std::wstring const& ext) -> std::optional<std::wstring> {
@@ -871,22 +871,47 @@ inline std::optional<std::wstring> find_command_in_path(
            !(attr & FILE_ATTRIBUTE_DIRECTORY);
   };
 
-  if (command.find_last_of(L'\\') != std::wstring::npos) {
-    auto size = GetFullPathNameW(command.c_str(), 0, nullptr, nullptr);
+  // Normalize forward slashes to backslashes for consistent handling.
+  std::wstring normalized = command;
+  for (auto& ch : normalized) {
+    if (ch == L'/') {
+      ch = L'\\';
+    }
+  }
+
+  // If a cwd is provided and the command is a relative path, resolve it
+  // against cwd so GetFullPathNameW uses the correct base directory
+  // (the child's future CWD, not the parent's).
+  if (!cwd.empty() && normalized.find_last_of(L'\\') != std::wstring::npos) {
+    bool is_absolute = (normalized.size() >= 2 && normalized[1] == L':') ||
+                       (normalized.size() >= 2 && normalized[0] == L'\\' &&
+                        normalized[1] == L'\\');
+    if (!is_absolute) {
+      std::wstring resolved = cwd;
+      if (resolved.back() != L'\\') {
+        resolved += L'\\';
+      }
+      resolved += normalized;
+      normalized = std::move(resolved);
+    }
+  }
+
+  if (normalized.find_last_of(L'\\') != std::wstring::npos) {
+    auto size = GetFullPathNameW(normalized.c_str(), 0, nullptr, nullptr);
     if (size == 0) {
       return std::nullopt;
     }
     std::wstring result(size, L'\0');
     DWORD const copied =
-        GetFullPathNameW(command.c_str(), size, result.data(), nullptr);
+        GetFullPathNameW(normalized.c_str(), size, result.data(), nullptr);
     result.resize(copied);
     if (is_file(result)) {
       return result;
     }
   } else {
-    if (auto dot = command.find_last_of(L'.');
+    if (auto dot = normalized.find_last_of(L'.');
         dot != std::wstring::npos && dot > 0) {
-      if (auto ret = search_path(command, L""); ret) {
+      if (auto ret = search_path(normalized, L""); ret) {
         return *ret;
       }
     } else {
@@ -895,7 +920,7 @@ inline std::optional<std::wstring> find_command_in_path(
         if (ext.empty()) {
           continue;
         }
-        if (auto ret = search_path(command, ext); ret) {
+        if (auto ret = search_path(normalized, ext); ret) {
           return *ret;
         }
       }
@@ -2459,33 +2484,7 @@ class subprocess {
       startup_info.lpAttributeList = attr_list;
     }
 
-    for (size_t i = 0; i < app_.size(); i++) {
-      if (app_[i] == L'/') {
-        app_[i] = L'\\';
-      }
-    }
-
-    // Resolve relative paths against cwd_ before calling
-    // find_command_in_path, because GetFullPathNameW resolves relative
-    // to the calling process's CWD, not the child's future CWD.
-    if (!cwd_.empty()) {
-      auto sep = app_.find_last_of(L'\\');
-      if (sep != std::wstring::npos) {
-        bool is_absolute =
-            (app_.size() >= 2 && app_[1] == L':') ||
-            (app_.size() >= 2 && app_[0] == L'\\' && app_[1] == L'\\');
-        if (!is_absolute) {
-          std::wstring resolved = cwd_;
-          if (resolved.back() != L'\\') {
-            resolved += L'\\';
-          }
-          resolved += app_;
-          app_ = std::move(resolved);
-        }
-      }
-    }
-
-    auto app_path = find_command_in_path(app_);
+    auto app_path = find_command_in_path(app_, cwd_);
 
     auto command = argv_to_command_line_string(app_, args_, is_shell);
 
@@ -2532,32 +2531,7 @@ class subprocess {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
 
-    for (size_t i = 0; i < app_.size(); i++) {
-      if (app_[i] == L'/') {
-        app_[i] = L'\\';
-      }
-    }
-
-    // Resolve relative paths against cwd_ before calling
-    // find_command_in_path (same as async_run_win).
-    if (!cwd_.empty()) {
-      auto sep = app_.find_last_of(L'\\');
-      if (sep != std::wstring::npos) {
-        bool is_absolute =
-            (app_.size() >= 2 && app_[1] == L':') ||
-            (app_.size() >= 2 && app_[0] == L'\\' && app_[1] == L'\\');
-        if (!is_absolute) {
-          std::wstring resolved = cwd_;
-          if (resolved.back() != L'\\') {
-            resolved += L'\\';
-          }
-          resolved += app_;
-          app_ = std::move(resolved);
-        }
-      }
-    }
-
-    auto app_path = find_command_in_path(app_);
+    auto app_path = find_command_in_path(app_, cwd_);
     auto command = argv_to_command_line_string(app_, args_, is_shell);
     auto env_block = create_environment_string_data(env_);
 
