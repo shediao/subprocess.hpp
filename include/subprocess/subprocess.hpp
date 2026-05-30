@@ -960,6 +960,13 @@ inline std::optional<std::string> find_command_in_path(
 }
 #endif  // !_WIN32
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 class Timer {
  public:
   Timer() = default;
@@ -1029,9 +1036,18 @@ class Timer {
             try {
               f();
             } catch (std::exception const& e) {
+#if defined(_WIN32)
+              std::string what(e.what());
+              print_error(std::wstring(what.begin(), what.end()));
+#else
               print_error(e.what());
+#endif
             } catch (...) {
+#if defined(_WIN32)
+              print_error(L"Timer: unknown exception");
+#else
               print_error("Timer: unknown exception");
+#endif
             }
           }
           state->running_.store(false);
@@ -1053,6 +1069,9 @@ class Timer {
   };
   std::shared_ptr<State> state_;
 };
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 struct Device {
   NativeStringView name_;
