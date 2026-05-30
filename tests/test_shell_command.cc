@@ -214,9 +214,9 @@ TEST(ShellCommandTest, ShellRunWithCwd) {
   ASSERT_EQ(out, "C:\\\r\n");
 #else
   buffer out;
-  int ret = run(bash, "pwd", $cwd = "/tmp", $stdout > out);
+  int ret = run(bash, "pwd", $cwd = "/", $stdout > out);
   ASSERT_EQ(ret, 0);
-  ASSERT_EQ(out, "/tmp\n");
+  ASSERT_EQ(out, "/\n");
 #endif
 }
 
