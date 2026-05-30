@@ -19,14 +19,14 @@ using subprocess::run;
 #define CMD_TRUE TEXT("cmd.exe"), TEXT("/c"), TEXT("exit /b 0")
 #define CMD_EXIT_42 TEXT("cmd.exe"), TEXT("/c"), TEXT("exit /b 42")
 #define CMD_SLEEP_1 \
-  TEXT("cmd.exe"), TEXT("/c"), TEXT("ping 127.0.0.1 -n 2 > nul")
+  TEXT("cmd.exe"), { TEXT("/c"), TEXT("ping 127.0.0.1 -n 2 > nul") }
 #define CMD_SLEEP_10 \
   TEXT("cmd.exe"), TEXT("/c"), TEXT("ping 127.0.0.1 -n 11 > nul")
 #define CMD_CAT TEXT("cmd.exe"), TEXT("/c"), TEXT("more")
 #else
 #define CMD_TRUE "true"
 #define CMD_EXIT_42 "bash", "-c", "exit 42"
-#define CMD_SLEEP_1 "sleep", "1"
+#define CMD_SLEEP_1 "sleep", {"1"}
 #define CMD_CAT "cat"
 #endif
 
@@ -151,7 +151,7 @@ TEST(NewgroupTest, NewgroupTrueRunDoesNotAutoRedirectStdin) {
 
 #if !defined(_WIN32)
 TEST(NewgroupTest, PidAccessorReturnsValidPid) {
-  subprocess::detail::subprocess proc({CMD_SLEEP_1});
+  subprocess::detail::subprocess proc(CMD_SLEEP_1);
 
   proc.async_run();
   auto pid = proc.pid();
@@ -167,7 +167,7 @@ TEST(NewgroupTest, PidAccessorReturnsValidPid) {
 }
 
 TEST(NewgroupTest, PidAccessorInNewgroupMode) {
-  subprocess::detail::subprocess proc({CMD_SLEEP_1}, newgroup = true);
+  subprocess::detail::subprocess proc(CMD_SLEEP_1, newgroup = true);
 
   proc.async_run();
   auto pid = proc.pid();
@@ -184,7 +184,7 @@ TEST(NewgroupTest, PidAccessorInNewgroupMode) {
 }
 
 TEST(NewgroupTest, PidAccessorNoNewgroupNoProcessGroup) {
-  subprocess::detail::subprocess proc({CMD_SLEEP_1}, newgroup = false);
+  subprocess::detail::subprocess proc(CMD_SLEEP_1, newgroup = false);
 
   proc.async_run();
   auto pid = proc.pid();
@@ -288,10 +288,10 @@ TEST(NewgroupTest, PipelineWithNewgroupOnWindows) {
   using std::string_literals::operator""s;
   subprocess::buffer out;
   auto pipeline = subprocess::detail::subprocess(
-                      {"cmd.exe"s, "/c", "echo hello_pipeline&exit /b 0"},
+                      "cmd.exe"s, {"/c", "echo hello_pipeline&exit /b 0"},
                       newgroup = true) |
                   subprocess::detail::subprocess(
-                      {"findstr.exe"s, "hello_pipeline"}, $stdout > out);
+                      "findstr.exe"s, {"hello_pipeline"}, $stdout > out);
 
   int ret = pipeline.run();
   auto codes = pipeline.exit_codes();

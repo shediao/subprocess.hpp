@@ -36,6 +36,8 @@ using subprocess::run;
 using subprocess::detail::ssize_t;
 #endif
 
+using std::string_literals::operator""s;
+
 namespace S = subprocess::detail;
 
 static void write_all_and_close(S::unique_fd& fd, buffer const& write_data) {
@@ -203,10 +205,10 @@ TEST(DupTest, PipeDupWithSubprocess) {
   // Run a process writing to p1.  Use async_run + wait_for_exit so that
   // the child completes before we attempt to read from p2.
 #if defined(_WIN32)
-  S::subprocess proc({"cmd.exe", "/c", "echo dup_subprocess_test&exit /b 0"},
+  S::subprocess proc("cmd.exe"s, {"/c"s, "echo dup_subprocess_test&exit /b 0"},
                      $stdout > p1);
 #else
-  S::subprocess proc({"echo", "-n", "dup_subprocess_test"}, $stdout > p1);
+  S::subprocess proc("echo", {"-n", "dup_subprocess_test"}, $stdout > p1);
 #endif
   proc.async_run();
   proc.wait_for_exit();
@@ -499,10 +501,10 @@ TEST(DupTest, PipeDupBeforeSubprocessPattern) {
   auto p_reader = p.dup();
 
 #if defined(_WIN32)
-  S::subprocess proc({"cmd.exe", "/c", "echo dup_before_sp&exit /b 0"},
+  S::subprocess proc("cmd.exe", {"/c", "echo dup_before_sp&exit /b 0"},
                      $stdout > p);
 #else
-  S::subprocess proc({"/bin/echo", "-n", "dup_before_sp"}, $stdout > p);
+  S::subprocess proc("/bin/echo", {"-n", "dup_before_sp"}, $stdout > p);
 #endif
   proc.async_run();
   proc.wait_for_exit();

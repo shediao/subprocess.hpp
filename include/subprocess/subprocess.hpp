@@ -643,14 +643,17 @@ inline void append_windows_arg(std::vector<wchar_t>& cmd,
 }
 
 inline std::vector<wchar_t> argv_to_command_line_string(
-    std::vector<std::basic_string<wchar_t>> const& cmds) {
+    std::wstring app, std::vector<std::basic_string<wchar_t>> const& args,
+    bool is_shell) {
   std::vector<wchar_t> command;
-  if (cmds.empty()) {
-    return command;
-  }
-  append_windows_arg(command, cmds[0]);
-  for (auto it = std::next(cmds.begin()); it != cmds.end(); ++it) {
-    append_windows_arg(command, *it);
+  append_windows_arg(command, app);
+  for (auto it = args.begin(); it != args.end(); ++it) {
+    if (is_shell) {
+      command.push_back(L' ');
+      command.insert(command.end(), it->begin(), it->end());
+    } else {
+      append_windows_arg(command, *it);
+    }
   }
   command.push_back(L'\0');
   return command;
@@ -2019,6 +2022,26 @@ struct env_operator {
   }
 };
 
+struct Cmd {
+  static constexpr std::string_view app = "cmd";
+  static constexpr std::string_view args[]{"/c"};
+};
+
+struct Powershell {
+  static constexpr std::string_view app = "powershell";
+  static constexpr std::string_view args[]{"-NoProfile", "-Command"};
+};
+
+struct Bash {
+  static constexpr std::string_view app = "bash";
+  static constexpr std::string_view args[]{"-c"};
+};
+
+template <typename Shell>
+concept shell_type = std::same_as<std::decay_t<Shell>, Cmd> ||
+                     std::same_as<std::decay_t<Shell>, Powershell> ||
+                     std::same_as<std::decay_t<Shell>, Bash>;
+
 namespace named_args {
 #if defined(_WIN32)
 [[maybe_unused]] inline constexpr static auto devnull = Device{L"NUL"};
@@ -2038,6 +2061,9 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static timeout_operator timeout;
 [[maybe_unused]] inline constexpr static int timeout_infinite = INT_MAX;
 [[maybe_unused]] inline constexpr static newgroup_operator newgroup;
+[[maybe_unused]] inline constexpr static Cmd cmd;
+[[maybe_unused]] inline constexpr static Powershell powershell;
+[[maybe_unused]] inline constexpr static Bash bash;
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if !defined(_WIN32)
@@ -2054,6 +2080,9 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static timeout_operator $timeout;
 [[maybe_unused]] inline constexpr static int $timeout_infinite = INT_MAX;
 [[maybe_unused]] inline constexpr static newgroup_operator $newgroup;
+[[maybe_unused]] inline constexpr static Cmd $cmd;
+[[maybe_unused]] inline constexpr static Powershell $powershell;
+[[maybe_unused]] inline constexpr static Bash $bash;
 #endif
 }  // namespace named_args
 template <typename T>
@@ -2164,8 +2193,9 @@ class subprocess {
 
  public:
   template <named_argument_type... T>
-  explicit subprocess(std::vector<NativeString> cmd, T&&... args)
-      : cmd_(std::move(cmd)) {
+  explicit subprocess(NativeString app, std::vector<NativeString> args,
+                      T&&... named_args)
+      : app_(std::move(app)), args_(std::move(args)) {
     std::map<NativeString, NativeString> environments;
     std::map<NativeString, NativeString> env_appends;
     std::vector<std::tuple<NativeString, NativeString, bool>> env_item_appends;
@@ -2211,7 +2241,7 @@ class subprocess {
                  timeout_ = arg.timeout;
                }
              }
-           }(std::forward<T>(args))));
+           }(std::forward<T>(named_args))));
     if ((!env_item_appends.empty() || !env_appends.empty()) &&
         environments.empty()) {
       environments = get_all_env_vars();
@@ -2249,16 +2279,47 @@ class subprocess {
 
 #if defined(_WIN32)
   template <named_argument_type... T>
-  explicit subprocess(std::vector<std::string> cmd, T&&... args)
+  explicit subprocess(std::string const& app,
+                      std::vector<std::string> const& args, T&&... named_args)
       : subprocess(
-            [](auto const& cmd) {
-              std::vector<std::wstring> ret;
-              std::transform(cmd.begin(), cmd.end(), std::back_inserter(ret),
-                             [](auto const& s) { return utf8_to_utf16(s); });
+            TO_NATIVE_STRING(app),
+            [](auto const& args) {
+              std::vector<NativeString> ret;
+              std::transform(args.begin(), args.end(), std::back_inserter(ret),
+                             [](auto const& s) { return TO_NATIVE_STRING(s); });
               return ret;
-            }(cmd),
-            std::forward<T>(args)...) {}
+            }(args),
+            std::forward<T>(named_args)...) {}
+  template <shell_type shell, named_argument_type... Args>
+  subprocess(shell const&, std::wstring const& command, Args&&... named_args)
+      : subprocess(
+            std::wstring(shell::app),
+            [](std::wstring const& command) {
+              std::vector<std::wstring> ret;
+              std::transform(std::begin(shell::args), std::end(shell::args),
+                             std::back_inserter(ret),
+                             [](auto const& s) { return utf8_to_utf16(s); });
+              ret.push_back(command);
+              return ret;
+            }(command),
+            std::forward<Args>(named_args)...) {
+    is_shell = true;
+  }
 #endif
+
+  template <shell_type shell, named_argument_type... Args>
+  subprocess(shell const&, std::string const& command, Args&&... named_args)
+      : subprocess(
+            std::string{shell::app},
+            [](std::string const& command) {
+              std::vector<std::string> ret{std::begin(shell::args),
+                                           std::end(shell::args)};
+              ret.push_back(command);
+              return ret;
+            }(command),
+            std::forward<Args>(named_args)...) {
+    is_shell = true;
+  }
 
   subprocess(subprocess&&) noexcept = default;
   subprocess& operator=(subprocess&&) noexcept = default;
@@ -2354,9 +2415,9 @@ class subprocess {
       startup_info.lpAttributeList = attr_list;
     }
 
-    auto app_path = find_command_in_path(cmd_[0]);
+    auto app_path = find_command_in_path(app_);
 
-    auto command = argv_to_command_line_string(cmd_);
+    auto command = argv_to_command_line_string(app_, args_, is_shell);
 
     auto env_block = create_environment_string_data(env_);
 
@@ -2401,8 +2462,8 @@ class subprocess {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
 
-    auto app_path = find_command_in_path(cmd_[0]);
-    auto command = argv_to_command_line_string(cmd_);
+    auto app_path = find_command_in_path(app_);
+    auto command = argv_to_command_line_string(app_, args_, is_shell);
     auto env_block = create_environment_string_data(env_);
 
     PROCESS_INFORMATION pi{};
@@ -2709,8 +2770,8 @@ class subprocess {
     stdout_.close_parent_end();
     stderr_.close_parent_end();
 
-    std::vector<char*> cmd{};
-    std::ranges::transform(cmd_, std::back_inserter(cmd),
+    std::vector<char*> cmd{app_.data()};
+    std::ranges::transform(args_, std::back_inserter(cmd),
                            [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() && (-1 == ::chdir(cwd_.data()))) {
@@ -2718,7 +2779,7 @@ class subprocess {
       _Exit(126);
     }
 
-    std::string executable_path = cmd_[0];
+    std::string executable_path = app_;
     if (executable_path.find('/') == std::string::npos) {
       const auto resolved_path = find_command_in_path(executable_path);
       if (resolved_path.has_value()) {
@@ -2749,7 +2810,8 @@ class subprocess {
   }
 #endif  // !_WIN32
 
-  std::vector<NativeString> cmd_;
+  NativeString app_;
+  std::vector<NativeString> args_;
   NativeString cwd_;
   std::map<NativeString, NativeString> env_;
   StdinRedirector stdin_;
@@ -2782,6 +2844,7 @@ class subprocess {
   int early_exit_status_{0};
   bool child_reaped_early_{false};
 #endif
+  [[maybe_unused]] bool is_shell{false};
 };
 
 class pipeline {
@@ -2862,24 +2925,30 @@ using detail::buffer;
 
 namespace named_arguments {
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
+using detail::named_args::$bash;
+using detail::named_args::$cmd;
 using detail::named_args::$cwd;
 using detail::named_args::$devnull;
 using detail::named_args::$devttyin;
 using detail::named_args::$devttyout;
 using detail::named_args::$env;
 using detail::named_args::$newgroup;
+using detail::named_args::$powershell;
 using detail::named_args::$stderr;
 using detail::named_args::$stdin;
 using detail::named_args::$stdout;
 using detail::named_args::$timeout;
 using detail::named_args::$timeout_infinite;
 #endif
+using detail::named_args::bash;
+using detail::named_args::cmd;
 using detail::named_args::cwd;
 using detail::named_args::devnull;
 using detail::named_args::devttyin;
 using detail::named_args::devttyout;
 using detail::named_args::env;
 using detail::named_args::newgroup;
+using detail::named_args::powershell;
 using detail::named_args::std_err;
 using detail::named_args::std_in;
 using detail::named_args::std_out;
@@ -2889,13 +2958,19 @@ using detail::named_args::timeout_infinite;
 
 template <detail::named_argument_type... T>
 inline int run(std::vector<std::string> cmd, T&&... args) {
-  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
+  return detail::subprocess(
+             cmd[0], std::vector<std::string>{cmd.begin() + 1, cmd.end()},
+             std::forward<T>(args)...)
+      .run();
 }
 
 #if defined(_WIN32)
 template <detail::named_argument_type... T>
 inline int run(std::vector<std::wstring> cmd, T&&... args) {
-  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
+  return detail::subprocess(
+             cmd[0], std::vector<std::wstring>{cmd.begin() + 1, cmd.end()},
+             std::forward<T>(args)...)
+      .run();
 }
 #endif
 
@@ -2940,16 +3015,29 @@ inline int run(Args... args) {
          std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
 }
 
+template <detail::shell_type Shell, detail::string_like_type Command,
+          detail::named_argument_type... Args>
+inline int run(Shell s, Command&& command, Args&&... args) {
+  return detail::subprocess(
+             s, detail::to_string_t<Command>(std::forward<Command>(command)),
+             std::forward<Args>(args)...)
+      .run();
+}
+
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 template <detail::named_argument_type... T>
 inline int $(std::vector<std::string> cmd, T&&... args) {
-  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
+  return detail::subprocess(cmd[0], {cmd.begin() + 1, cmd.end()},
+                            std::forward<T>(args)...)
+      .run();
 }
 
 #if defined(_WIN32)
 template <detail::named_argument_type... T>
 inline int $(std::vector<std::wstring> cmd, T&&... args) {
-  return detail::subprocess(std::move(cmd), std::forward<T>(args)...).run();
+  return detail::subprocess(cmd[0], {cmd.begin() + 1, cmd.end()},
+                            std::forward<T>(args)...)
+      .run();
 }
 #endif  // _WIN32
 
@@ -3011,6 +3099,24 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
          std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
 }
 
+template <detail::shell_type Shell, detail::string_like_type Command,
+          detail::capture_run_args_type... Args>
+inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
+    Shell s, Command&& command, Args&&... args) {
+  using namespace named_arguments;
+  using namespace detail;
+  std::tuple<int, buffer, buffer> result;
+  auto& [exit_code_, std_out_, std_err_] = result;
+  exit_code_ =
+      detail::subprocess(
+          s, detail::to_string_t<Command>(std::forward<Command>(command)),
+          StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
+          std::forward<Args>(args)..., StdoutRedirector{std_out_},
+          StderrRedirector{std_err_}, Newgroup{true})
+          .run();
+  return result;
+}
+
 template <detail::named_argument_for_detach_type... T>
 inline bool detach_run(std::vector<std::string> cmd, T&&... args) {
   if (cmd.empty()) {
@@ -3019,7 +3125,7 @@ inline bool detach_run(std::vector<std::string> cmd, T&&... args) {
   using namespace named_arguments;
   using namespace detail;
   return detail::subprocess(
-             std::move(cmd), std::forward<T>(args)...,
+             cmd[0], {cmd.begin() + 1, cmd.end()}, std::forward<T>(args)...,
              StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
              StdoutRedirector(File{devnull, File::OpenType::WriteTruncate}),
              StderrRedirector(File{devnull, File::OpenType::WriteTruncate}))
@@ -3034,7 +3140,7 @@ inline bool detach_run(std::vector<std::wstring> cmd, T&&... args) {
   using namespace named_arguments;
   using namespace detail;
   return detail::subprocess(
-             std::move(cmd), std::forward<T>(args)...,
+             cmd[0], {cmd.begin() + 1, cmd.end()}, std::forward<T>(args)...,
              StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
              StdoutRedirector(File{devnull, File::OpenType::WriteTruncate}),
              StderrRedirector(File{devnull, File::OpenType::WriteTruncate}))
@@ -3063,17 +3169,33 @@ inline bool detach_run(Args... args) {
                              std::tuple_size_v<NamedArgTypeList>>{},
          std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
 }
+template <detail::shell_type Shell, detail::string_like_type Command,
+          detail::detach_run_args_type... Args>
+inline bool detach_run(Shell s, Command&& command, Args&&... args) {
+  using namespace named_arguments;
+  using namespace detail;
+  return detail::subprocess(
+             s, detail::to_string_t<Command>(std::forward<Command>(command)),
+             std::forward<Args>(args)...,
+             StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
+             StdoutRedirector(File{devnull, File::OpenType::WriteTruncate}),
+             StderrRedirector(File{devnull, File::OpenType::WriteTruncate}))
+      .detach_spawn();
+}
 
 }  // namespace subprocess
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 using subprocess::$;
+using subprocess::named_arguments::$bash;
+using subprocess::named_arguments::$cmd;
 using subprocess::named_arguments::$cwd;
 using subprocess::named_arguments::$devnull;
 using subprocess::named_arguments::$devttyin;
 using subprocess::named_arguments::$devttyout;
 using subprocess::named_arguments::$env;
 using subprocess::named_arguments::$newgroup;
+using subprocess::named_arguments::$powershell;
 using subprocess::named_arguments::$stderr;
 using subprocess::named_arguments::$stdin;
 using subprocess::named_arguments::$stdout;
