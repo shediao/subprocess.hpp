@@ -135,7 +135,7 @@ TEST(ExecutableResolutionTest, CommandWithDotSlashPath) {
   std::filesystem::path p(temp.path());
   std::string dir = p.parent_path().string();
   std::string filename = p.filename().string();
-  std::string dot_slash = "./" + filename;
+  std::string dot_slash = ".\\" + filename;
 
   int exit_code = run(dot_slash, $cwd = dir);
   ASSERT_EQ(exit_code, 42);

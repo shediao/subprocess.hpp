@@ -845,7 +845,8 @@ inline std::map<std::string, std::string> get_all_env_vars() {
 #endif
 
 #if defined(_WIN32)
-inline std::optional<std::wstring> find_command_in_path(std::wstring command) {
+inline std::optional<std::wstring> find_command_in_path(
+    std::wstring const& command) {
   auto search_path =
       [](std::wstring const& cmd,
          std::wstring const& ext) -> std::optional<std::wstring> {
@@ -870,7 +871,7 @@ inline std::optional<std::wstring> find_command_in_path(std::wstring command) {
            !(attr & FILE_ATTRIBUTE_DIRECTORY);
   };
 
-  if (command.find_last_of(L"/\\") != std::wstring::npos) {
+  if (command.find_last_of(L'\\') != std::wstring::npos) {
     auto size = GetFullPathNameW(command.c_str(), 0, nullptr, nullptr);
     if (size == 0) {
       return std::nullopt;
@@ -907,7 +908,7 @@ inline std::optional<std::string> find_command_in_path(
     std::string_view exe_file) {
   constexpr char path_env_sep = ':';
 
-  if (exe_file.find_last_of("/\\") != std::string_view::npos) {
+  if (exe_file.find_last_of('/') != std::string_view::npos) {
     std::string exe_str(exe_file);
     char result[PATH_MAX];
     if (realpath(exe_str.c_str(), result) != nullptr) {
@@ -2111,6 +2112,10 @@ concept named_argument_type = std::same_as<Env, std::decay_t<T>> ||
                               std::same_as<EnvItemAppend, std::decay_t<T>>;
 template <typename T>
 concept string_like_type =
+#if defined(_GLIBCXX_FILESYSTEM) || defined(_LIBCPP_FILESYSTEM) || \
+    defined(_FILESYSTEM_)
+    std::same_as<std::filesystem::path, std::decay_t<T>> ||
+#endif
 #if defined(_WIN32)
     std::same_as<wchar_t*, std::decay_t<T>> ||
     std::same_as<const wchar_t*, std::decay_t<T>> ||
@@ -2138,8 +2143,16 @@ struct get_char_type<CharT*> {
   using type = std::remove_cv_t<CharT>;
 };
 
+#if defined(_GLIBCXX_FILESYSTEM) || defined(_LIBCPP_FILESYSTEM) || \
+    defined(_FILESYSTEM_)
+template <>
+struct get_char_type<std::filesystem::path> {
+  using type = typename std::filesystem::path::value_type;
+};
+#endif
+
 template <typename T>
-using get_char_type_t = get_char_type<T>::type;
+using get_char_type_t = get_char_type<std::decay_t<T>>::type;
 
 template <typename T>
 using to_string_view_t =
@@ -2147,6 +2160,23 @@ using to_string_view_t =
 
 template <typename T>
 using to_string_t = std::basic_string<get_char_type_t<std::decay_t<T>>>;
+
+template <typename ToCharT, string_like_type From>
+std::basic_string<ToCharT> convert_to_string(From&& from) {
+  if constexpr (std::is_same_v<get_char_type_t<From>, ToCharT>) {
+    return std::basic_string<ToCharT>(std::forward<From>(from));
+#if defined(_WIN32)
+  } else if constexpr (!std::is_same_v<get_char_type_t<From>, ToCharT>) {
+    if constexpr (std::is_same_v<ToCharT, wchar_t>) {
+      return utf8_to_utf16(std::string(std::forward<From>(from)));
+    } else {
+      return utf16_to_utf8(std::wstring(std::forward<From>(from)));
+    }
+#endif
+  } else {
+    static_assert(sizeof(From) == 0, "invalid type");
+  }
+}
 
 template <typename T>
 concept run_args_type = named_argument_type<T> || string_like_type<T>;
@@ -2429,6 +2459,11 @@ class subprocess {
       startup_info.lpAttributeList = attr_list;
     }
 
+    for (size_t i = 0; i < app_.size(); i++) {
+      if (app_[i] == L'/') {
+        app_[i] = L'\\';
+      }
+    }
     auto app_path = find_command_in_path(app_);
 
     auto command = argv_to_command_line_string(app_, args_, is_shell);
@@ -3005,8 +3040,9 @@ inline int run(T&& app, Args... args) {
   return [&app, &args_tuple]<size_t... I, size_t... N>(
              std::index_sequence<I...>, std::index_sequence<N...>) {
     return run(detail::to_string_t<T>(std::forward<T>(app)),
-               std::vector<detail::to_string_t<T>>{detail::to_string_t<T>{
-                   std::move(std::get<I>(args_tuple))}...},
+               std::vector<detail::to_string_t<T>>{
+                   detail::convert_to_string<detail::get_char_type_t<T>>(
+                       std::move(std::get<I>(args_tuple)))...},
                std::move(std::get<std::tuple_size_v<std::tuple<Args...>> -
                                   std::tuple_size_v<NamedArgTypeList> + N>(
                    args_tuple))...);
@@ -3067,7 +3103,8 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
     return capture_run(
         detail::to_string_t<T>(std::forward<T>(app)),
         std::vector<detail::to_string_t<T>>{
-            detail::to_string_t<T>{std::move(std::get<I>(args_tuple))}...},
+            detail::convert_to_string<detail::get_char_type_t<T>>(
+                std::move(std::get<I>(args_tuple)))...},
         std::move(
             std::get<std::tuple_size_v<std::tuple<Args...>> -
                      std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
@@ -3121,7 +3158,8 @@ inline bool detach_run(T&& app, Args... args) {
     return detach_run(
         detail::to_string_t<T>(std::forward<T>(app)),
         std::vector<detail::to_string_t<T>>{
-            detail::to_string_t<T>{std::move(std::get<I>(args_tuple))}...},
+            detail::convert_to_string<detail::get_char_type_t<T>>(
+                std::move(std::get<I>(args_tuple)))...},
         std::move(
             std::get<std::tuple_size_v<std::tuple<Args...>> -
                      std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
