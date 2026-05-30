@@ -122,6 +122,7 @@
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -870,8 +871,16 @@ inline std::optional<std::wstring> find_command_in_path(std::wstring command) {
   };
 
   if (command.find_last_of(L"/\\") != std::wstring::npos) {
-    if (is_file(command)) {
-      return command;
+    auto size = GetFullPathNameW(command.c_str(), 0, nullptr, nullptr);
+    if (size == 0) {
+      return std::nullopt;
+    }
+    std::wstring result(size, L'\0');
+    DWORD const copied =
+        GetFullPathNameW(command.c_str(), size, result.data(), nullptr);
+    result.resize(copied);
+    if (is_file(result)) {
+      return result;
     }
   } else {
     if (auto dot = command.find_last_of(L'.');
@@ -899,6 +908,11 @@ inline std::optional<std::string> find_command_in_path(
   constexpr char path_env_sep = ':';
 
   if (exe_file.find_last_of("/\\") != std::string_view::npos) {
+    std::string exe_str(exe_file);
+    char result[PATH_MAX];
+    if (realpath(exe_str.c_str(), result) != nullptr) {
+      return result;
+    }
     return std::nullopt;
   }
 
@@ -2780,11 +2794,9 @@ class subprocess {
     }
 
     std::string executable_path = app_;
-    if (executable_path.find('/') == std::string::npos) {
-      const auto resolved_path = find_command_in_path(executable_path);
-      if (resolved_path.has_value()) {
-        executable_path = resolved_path.value();
-      }
+    const auto resolved_path = find_command_in_path(executable_path);
+    if (resolved_path.has_value()) {
+      executable_path = resolved_path.value();
     }
 
     if (!env_.empty()) {

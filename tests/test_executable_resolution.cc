@@ -123,6 +123,42 @@ TEST(ExecutableResolutionTest, AbsolutePathNotFound) {
 }
 
 // ===========================================================================
+// Command with dot-slash relative path (exercises GetFullPathNameW/realpath)
+// ===========================================================================
+TEST(ExecutableResolutionTest, CommandWithDotSlashPath) {
+#if defined(_WIN32)
+  TempFile temp("test_dotslash_", ".bat");
+  std::string content = "@echo off\r\nexit /b 42\r\n";
+  temp.write(content);
+
+  // Extract directory and bare filename from the absolute temp path
+  std::filesystem::path p(temp.path());
+  std::string dir = p.parent_path().string();
+  std::string filename = p.filename().string();
+  std::string dot_slash = "./" + filename;
+
+  int exit_code = run(dot_slash, $cwd = dir);
+  ASSERT_EQ(exit_code, 42);
+#else
+  TempFile temp("test_dotslash_", ".sh");
+  std::string content = "#!/bin/sh\nexit 42\n";
+  temp.write(content);
+
+  std::string chmod_cmd = "chmod +x " + temp.path();
+  int rc = system(chmod_cmd.c_str());
+  (void)rc;
+
+  std::filesystem::path p(temp.path());
+  std::string dir = p.parent_path().string();
+  std::string filename = p.filename().string();
+  std::string dot_slash = "./" + filename;
+
+  int exit_code = run(dot_slash, $cwd = dir);
+  ASSERT_EQ(exit_code, 42);
+#endif
+}
+
+// ===========================================================================
 // Captured run with PATH resolution
 // ===========================================================================
 TEST(ExecutableResolutionTest, CapturedRunWithPathResolution) {
