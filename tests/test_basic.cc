@@ -24,13 +24,13 @@ using subprocess::run;
 // Trivial smoke test — verifies the header compiles and basic run() works
 // ===========================================================================
 TEST(BasicTest, SmokeTest) {
-  int exit_code = run({
+  int exit_code = run(
 #if defined(_WIN32)
       "cmd.exe", "/c", "exit /b 0"
 #else
       "true"
 #endif
-  });
+  );
   ASSERT_EQ(exit_code, 0);
 }
 
@@ -38,22 +38,22 @@ TEST(BasicTest, SmokeTest) {
 // Simple command execution — true / false
 // ===========================================================================
 TEST(BasicTest, RunTrueCommand) {
-  int exit_code = run({
+  int exit_code = run(
 #if defined(_WIN32)
       "cmd.exe", "/c", "exit /b 0"
 #else
       "true"
 #endif
-  });
+  );
   ASSERT_EQ(exit_code, 0);
 }
 
 TEST(BasicTest, RunFalseCommand) {
 #if !defined(_WIN32)
-  int exit_code = run({"false"});
+  int exit_code = run("false");
   ASSERT_NE(exit_code, 0);  // Typically 1
 #else
-  int exit_code = run({"cmd.exe", "/c", "exit /b 1"});
+  int exit_code = run("cmd.exe", "/c", "exit /b 1");
   ASSERT_EQ(exit_code, 1);
 #endif
 }
@@ -97,7 +97,7 @@ TEST(BasicTest, CommandNotExistsAbsolutePath) {
 }
 
 TEST(BasicTest, NonExistentCommandVector) {
-  int exit_code = run({"this_command_does_not_exist_123xyz"});
+  int exit_code = run("this_command_does_not_exist_123xyz");
   ASSERT_NE(exit_code, 0);
 }
 
@@ -131,13 +131,12 @@ exit 0
 TEST(BasicTest, CommandWithMultipleArguments) {
   subprocess::buffer stdout_buf;
   int exit_code = run(
-      {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "echo one two words three"
+      "cmd.exe", "/c", "echo one two words three"
 #else
-          "/bin/echo", "one", "two words", "three"
+      "/bin/echo", "one", "two words", "three"
 #endif
-      },
+      ,
       std_out > stdout_buf);
   ASSERT_EQ(exit_code, 0);
 #if defined(_WIN32)

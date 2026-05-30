@@ -257,13 +257,12 @@ TEST(DupTest, FileDupReadContent) {
 
   // Write content to temp file via subprocess
   run(
-      {
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=file_dup_subprocess"
+      "cmd.exe", "/c", "<nul set /p=file_dup_subprocess"
 #else
-          "/bin/echo", "-n", "file_dup_subprocess"
+      "/bin/echo", "-n", "file_dup_subprocess"
 #endif
-      },
+      ,
       std_out > tmp.path());
 
   // Open and read through original
@@ -387,10 +386,10 @@ TEST(DupTest, BufferDupIntegration) {
   ASSERT_NE(buf.pipe().rfd(), buf2.pipe().rfd());
 
 #if defined(_WIN32)
-  run({"cmd.exe", "/c", "echo buffer_dup_integration&exit /b 0"},
+  run("cmd.exe", "/c", "echo buffer_dup_integration&exit /b 0",
       std_out > out_buf);
 #else
-  run({"echo", "-n", "buffer_dup_integration"}, std_out > out_buf);
+  run("echo", "-n", "buffer_dup_integration", std_out > out_buf);
 #endif
 
 #if defined(_WIN32)

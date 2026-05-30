@@ -40,18 +40,18 @@ using subprocess::run;
 #if defined(_WIN32)
 
 TEST(ErrorHandlingTest, InvalidCwdReturnsNonZero) {
-  auto exit_code = run({"cmd.exe", "/c", "exit /b 0"},
+  auto exit_code = run("cmd.exe", "/c", "exit /b 0",
                        cwd = "Z:\\this\\directory\\does\\not\\exist\\xyz");
   ASSERT_NE(exit_code, 0);
 }
 
 TEST(ErrorHandlingTest, CommandNotFoundReturns127) {
-  auto exit_code = run({"this_command_not_found_in_paths_xyz.exe"});
+  auto exit_code = run("this_command_not_found_in_paths_xyz.exe");
   ASSERT_EQ(exit_code, 127);
 }
 
 TEST(ErrorHandlingTest, NonExistentExecutableReturns127) {
-  auto exit_code = run({"C:\\path\\to\\this_command_not_exists.exe"});
+  auto exit_code = run("C:\\path\\to\\this_command_not_exists.exe");
   ASSERT_EQ(exit_code, 127);
 }
 
@@ -65,21 +65,21 @@ TEST(ErrorHandlingTest, NonExistentExecutableReturns127) {
 
 // Invalid CWD via run() — chdir fails → _Exit(126)
 TEST(ErrorHandlingTest, InvalidCwdReturns126) {
-  auto exit_code = run({"true"}, cwd = "/this/directory/does/not/exist/xyz");
+  auto exit_code = run("true", cwd = "/this/directory/does/not/exist/xyz");
   ASSERT_EQ(exit_code, 126);
 }
 
 // Invalid CWD via capture_run()
 TEST(ErrorHandlingTest, InvalidCwdWithCaptureRunReturns126) {
   auto [exit_code, out, err] =
-      capture_run({"true"}, cwd = "/this/directory/does/not/exist/xyz");
+      capture_run("true", cwd = "/this/directory/does/not/exist/xyz");
   ASSERT_EQ(exit_code, 126);
 }
 
 // Invalid CWD prints "chdir failed" to stderr
 TEST(ErrorHandlingTest, InvalidCwdPrintsChdirFailedToStderr) {
   buffer stderr_buf;
-  auto exit_code = run({"true"}, cwd = "/this/directory/does/not/exist/xyz",
+  auto exit_code = run("true", cwd = "/this/directory/does/not/exist/xyz",
                        std_err > stderr_buf);
   ASSERT_EQ(exit_code, 126);
   EXPECT_NE(stderr_buf.to_string().find("chdir failed"), std::string::npos);
@@ -87,7 +87,7 @@ TEST(ErrorHandlingTest, InvalidCwdPrintsChdirFailedToStderr) {
 
 // execv failure — non-existent executable by absolute path
 TEST(ErrorHandlingTest, ExecvFailureReturns127) {
-  auto exit_code = run({"/path/to/this_command_not_exists"});
+  auto exit_code = run("/path/to/this_command_not_exists");
   ASSERT_EQ(exit_code, 127);
 }
 
@@ -95,7 +95,7 @@ TEST(ErrorHandlingTest, ExecvFailureReturns127) {
 TEST(ErrorHandlingTest, ExecvFailurePrintsToStderr) {
   buffer stderr_buf;
   auto exit_code =
-      run({"/path/to/this_command_not_exists"}, std_err > stderr_buf);
+      run("/path/to/this_command_not_exists", std_err > stderr_buf);
   ASSERT_EQ(exit_code, 127);
   EXPECT_NE(stderr_buf.to_string().find("execv"), std::string::npos);
   EXPECT_NE(stderr_buf.to_string().find("failed"), std::string::npos);
@@ -104,7 +104,7 @@ TEST(ErrorHandlingTest, ExecvFailurePrintsToStderr) {
 // execve failure with explicit environment
 TEST(ErrorHandlingTest, ExecveFailureReturns127) {
   auto exit_code =
-      run({"/path/to/this_command_not_exists"},
+      run("/path/to/this_command_not_exists",
           env = std::map<std::string, std::string>{{"FOO", "BAR"}});
   ASSERT_EQ(exit_code, 127);
 }
@@ -112,7 +112,7 @@ TEST(ErrorHandlingTest, ExecveFailureReturns127) {
 // execve failure prints to stderr
 TEST(ErrorHandlingTest, ExecveFailurePrintsToStderr) {
   buffer stderr_buf;
-  auto exit_code = run({"/path/to/this_command_not_exists"},
+  auto exit_code = run("/path/to/this_command_not_exists",
                        env = std::map<std::string, std::string>{{"FOO", "BAR"}},
                        std_err > stderr_buf);
   ASSERT_EQ(exit_code, 127);
@@ -122,20 +122,20 @@ TEST(ErrorHandlingTest, ExecveFailurePrintsToStderr) {
 
 // Invalid CWD takes precedence over exec failure (chdir checked first)
 TEST(ErrorHandlingTest, InvalidCwdTakesPrecedenceOverExecFailure) {
-  auto exit_code = run({"/path/to/this_command_not_exists"},
+  auto exit_code = run("/path/to/this_command_not_exists",
                        cwd = "/this/directory/does/not/exist/xyz");
   ASSERT_EQ(exit_code, 126);
 }
 
 // Valid CWD sanity check
 TEST(ErrorHandlingTest, ValidCwdStillWorks) {
-  auto exit_code = run({"true"}, cwd = "/tmp");
+  auto exit_code = run("true", cwd = "/tmp");
   ASSERT_EQ(exit_code, 0);
 }
 
 // Command not found in PATH
 TEST(ErrorHandlingTest, CommandNotFoundInPathReturns127) {
-  auto exit_code = run({"this_command_not_found_in_paths"});
+  auto exit_code = run("this_command_not_found_in_paths");
   ASSERT_EQ(exit_code, 127);
 }
 
@@ -148,7 +148,7 @@ TEST(ErrorHandlingTest, NoPermissionOnExecutableReturns127) {
     f << "#!/bin/sh\nexit 0\n";
   }
   ::chmod(tmp_path.c_str(), 0644);
-  auto exit_code = run({tmp_path});
+  auto exit_code = run(tmp_path);
   ::unlink(tmp_path.c_str());
 #if defined(__MSYS__) || defined(__CYGWIN__)
   ASSERT_EQ(exit_code, 0);
@@ -170,13 +170,13 @@ TEST(ErrorHandlingTest, NoPermissionOnExecutableReturns127) {
 // When posix_spawn is active, an invalid CWD is detected in the parent via
 // die() → run() catches the exception → returns 127.
 TEST(PosixSpawnErrorHandlingTest, InvalidCwdReturns127) {
-  auto exit_code = run({"true"}, cwd = "/this/directory/does/not/exist/xyz");
+  auto exit_code = run("true", cwd = "/this/directory/does/not/exist/xyz");
   ASSERT_EQ(exit_code, 127);
 }
 
 TEST(PosixSpawnErrorHandlingTest, InvalidCwdWithCaptureRunReturns127) {
   auto [exit_code, out, err] =
-      capture_run({"true"}, cwd = "/this/directory/does/not/exist/xyz");
+      capture_run("true", cwd = "/this/directory/does/not/exist/xyz");
   ASSERT_EQ(exit_code, 127);
 }
 
@@ -184,25 +184,25 @@ TEST(PosixSpawnErrorHandlingTest, InvalidCwdWithCaptureRunReturns127) {
 // so the child stderr buffer is empty.
 TEST(PosixSpawnErrorHandlingTest, InvalidCwdChildStderrIsEmpty) {
   buffer stderr_buf;
-  auto exit_code = run({"true"}, cwd = "/this/directory/does/not/exist/xyz",
+  auto exit_code = run("true", cwd = "/this/directory/does/not/exist/xyz",
                        std_err > stderr_buf);
   ASSERT_EQ(exit_code, 127);
   EXPECT_TRUE(stderr_buf.empty());
 }
 
 TEST(PosixSpawnErrorHandlingTest, ValidCwdStillWorks) {
-  auto exit_code = run({"true"}, cwd = "/tmp");
+  auto exit_code = run("true", cwd = "/tmp");
   ASSERT_EQ(exit_code, 0);
 }
 
 TEST(PosixSpawnErrorHandlingTest, RegularCommandStillWorks) {
-  auto exit_code = run({"true"});
+  auto exit_code = run("true");
   ASSERT_EQ(exit_code, 0);
 }
 
 TEST(PosixSpawnErrorHandlingTest, CaptureStdoutWorks) {
   buffer out;
-  auto exit_code = run({"/bin/echo", "-n", "hello"}, std_out > out);
+  auto exit_code = run("/bin/echo", "-n", "hello", std_out > out);
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(out.to_string(), "hello");
 }

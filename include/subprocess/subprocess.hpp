@@ -2956,23 +2956,13 @@ using detail::named_args::timeout;
 using detail::named_args::timeout_infinite;
 }  // namespace named_arguments
 
-template <detail::named_argument_type... T>
-inline int run(std::vector<std::string> cmd, T&&... args) {
-  return detail::subprocess(
-             cmd[0], std::vector<std::string>{cmd.begin() + 1, cmd.end()},
-             std::forward<T>(args)...)
+template <detail::string_like_type T, detail::named_argument_type... Args>
+inline int run(T&& app, std::vector<detail::to_string_t<T>> args,
+               Args&&... named_args) {
+  return detail::subprocess(detail::to_string_t<T>(std::forward<T>(app)),
+                            std::move(args), std::forward<Args>(named_args)...)
       .run();
 }
-
-#if defined(_WIN32)
-template <detail::named_argument_type... T>
-inline int run(std::vector<std::wstring> cmd, T&&... args) {
-  return detail::subprocess(
-             cmd[0], std::vector<std::wstring>{cmd.begin() + 1, cmd.end()},
-             std::forward<T>(args)...)
-      .run();
-}
-#endif
 
 namespace detail {
 template <typename... Args>
@@ -2994,22 +2984,20 @@ concept partition_args =
           typename detail::named_arg_type_list_t<std::decay_t<Args>...>>>{});
 }  // namespace detail
 
-template <detail::run_args_type... Args>
+template <detail::string_like_type T, detail::run_args_type... Args>
   requires detail::partition_args<Args...>
-inline int run(Args... args) {
+inline int run(T&& app, Args... args) {
   std::tuple<Args...> args_tuple{std::move(args)...};
   using NamedArgTypeList =
       typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
-  return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
-                                                 std::index_sequence<N...>) {
-    return run(
-        std::vector<
-            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
-            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>{
-                std::move(std::get<I>(args_tuple))}...},
-        std::move(
-            std::get<std::tuple_size_v<std::tuple<Args...>> -
-                     std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
+  return [&app, &args_tuple]<size_t... I, size_t... N>(
+             std::index_sequence<I...>, std::index_sequence<N...>) {
+    return run(detail::to_string_t<T>(std::forward<T>(app)),
+               std::vector<detail::to_string_t<T>>{detail::to_string_t<T>{
+                   std::move(std::get<I>(args_tuple))}...},
+               std::move(std::get<std::tuple_size_v<std::tuple<Args...>> -
+                                  std::tuple_size_v<NamedArgTypeList> + N>(
+                   args_tuple))...);
   }(std::make_index_sequence<std::tuple_size_v<std::tuple<Args...>> -
                              std::tuple_size_v<NamedArgTypeList>>{},
          std::make_index_sequence<std::tuple_size_v<NamedArgTypeList>>{});
@@ -3025,21 +3013,12 @@ inline int run(Shell s, Command&& command, Args&&... args) {
 }
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-template <detail::named_argument_type... T>
-inline int $(std::vector<std::string> cmd, T&&... args) {
-  return detail::subprocess(cmd[0], {cmd.begin() + 1, cmd.end()},
-                            std::forward<T>(args)...)
-      .run();
+template <detail::string_like_type T, detail::named_argument_type... Args>
+inline int $(T&& app, std::vector<detail::to_string_t<T>> args,
+             Args&&... named_args) {
+  return run(std::forward<T>(app), std::move(args),
+             std::forward<Args>(named_args)...);
 }
-
-#if defined(_WIN32)
-template <detail::named_argument_type... T>
-inline int $(std::vector<std::wstring> cmd, T&&... args) {
-  return detail::subprocess(cmd[0], {cmd.begin() + 1, cmd.end()},
-                            std::forward<T>(args)...)
-      .run();
-}
-#endif  // _WIN32
 
 template <detail::run_args_type... Args>
 inline int $(Args... args) {
@@ -3047,50 +3026,36 @@ inline int $(Args... args) {
 }
 #endif  // USE_DOLLAR_NAMED_VARIABLES
 
-template <detail::named_argument_for_capture_type... T>
+template <detail::string_like_type T,
+          detail::named_argument_for_capture_type... Args>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    std::vector<std::string> cmd, T&&... args) {
+    T&& app, std::vector<detail::to_string_t<T>> args, Args&&... named_args) {
   using namespace named_arguments;
   using namespace detail;
   std::tuple<int, buffer, buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd),
-                   StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
-                   std::forward<T>(args)..., StdoutRedirector{std_out_},
-                   StderrRedirector{std_err_}, Newgroup{true});
+  exit_code_ =
+      run(detail::to_string_t<T>(std::forward<T>(app)), std::move(args),
+          StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
+          std::forward<Args>(named_args)..., StdoutRedirector{std_out_},
+          StderrRedirector{std_err_}, Newgroup{true});
   return result;
 }
-#if defined(_WIN32)
-template <detail::named_argument_for_capture_type... T>
-inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    std::vector<std::wstring> cmd, T&&... args) {
-  using namespace named_arguments;
-  using namespace detail;
-  std::tuple<int, buffer, buffer> result;
-  auto& [exit_code_, std_out_, std_err_] = result;
-  exit_code_ = run(std::move(cmd),
-                   StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
-                   std::forward<T>(args)..., StdoutRedirector{std_out_},
-                   StderrRedirector{std_err_}, Newgroup{true});
-  return result;
-}
-#endif  // _WIN32
 
-template <detail::capture_run_args_type... Args>
+template <detail::string_like_type T, detail::capture_run_args_type... Args>
 inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    Args... args) {
+    T&& app, Args... args) {
   using namespace named_arguments;
   std::tuple<Args...> args_tuple{std::move(args)...};
   using NamedArgTypeList =
       typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
 
-  return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
-                                                 std::index_sequence<N...>) {
+  return [&app, &args_tuple]<size_t... I, size_t... N>(
+             std::index_sequence<I...>, std::index_sequence<N...>) {
     return capture_run(
-        std::vector<
-            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
-            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>{
-                std::move(std::get<I>(args_tuple))}...},
+        detail::to_string_t<T>(std::forward<T>(app)),
+        std::vector<detail::to_string_t<T>>{
+            detail::to_string_t<T>{std::move(std::get<I>(args_tuple))}...},
         std::move(
             std::get<std::tuple_size_v<std::tuple<Args...>> -
                      std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);
@@ -3117,51 +3082,34 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   return result;
 }
 
-template <detail::named_argument_for_detach_type... T>
-inline bool detach_run(std::vector<std::string> cmd, T&&... args) {
-  if (cmd.empty()) {
-    return false;
-  }
+template <detail::string_like_type T,
+          detail::named_argument_for_detach_type... Args>
+inline bool detach_run(T app, std::vector<detail::to_string_t<T>> args,
+                       Args&&... named_args) {
   using namespace named_arguments;
   using namespace detail;
   return detail::subprocess(
-             cmd[0], {cmd.begin() + 1, cmd.end()}, std::forward<T>(args)...,
+             detail::to_string_t<T>(std::forward<T>(app)), std::move(args),
+             std::forward<Args>(named_args)...,
              StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
              StdoutRedirector(File{devnull, File::OpenType::WriteTruncate}),
              StderrRedirector(File{devnull, File::OpenType::WriteTruncate}))
       .detach_spawn();
 }
-#if defined(_WIN32)
-template <detail::named_argument_for_detach_type... T>
-inline bool detach_run(std::vector<std::wstring> cmd, T&&... args) {
-  if (cmd.empty()) {
-    return false;
-  }
-  using namespace named_arguments;
-  using namespace detail;
-  return detail::subprocess(
-             cmd[0], {cmd.begin() + 1, cmd.end()}, std::forward<T>(args)...,
-             StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
-             StdoutRedirector(File{devnull, File::OpenType::WriteTruncate}),
-             StderrRedirector(File{devnull, File::OpenType::WriteTruncate}))
-      .detach_spawn();
-}
-#endif  // _WIN32
 
-template <detail::detach_run_args_type... Args>
-inline bool detach_run(Args... args) {
+template <detail::string_like_type T, detail::detach_run_args_type... Args>
+inline bool detach_run(T&& app, Args... args) {
   using namespace named_arguments;
   std::tuple<Args...> args_tuple{std::move(args)...};
   using NamedArgTypeList =
       typename detail::named_arg_type_list_t<std::decay_t<Args>...>;
 
-  return [&args_tuple]<size_t... I, size_t... N>(std::index_sequence<I...>,
-                                                 std::index_sequence<N...>) {
+  return [&app, &args_tuple]<size_t... I, size_t... N>(
+             std::index_sequence<I...>, std::index_sequence<N...>) {
     return detach_run(
-        std::vector<
-            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>>{
-            detail::to_string_t<std::tuple_element_t<0, std::tuple<Args...>>>{
-                std::move(std::get<I>(args_tuple))}...},
+        detail::to_string_t<T>(std::forward<T>(app)),
+        std::vector<detail::to_string_t<T>>{
+            detail::to_string_t<T>{std::move(std::get<I>(args_tuple))}...},
         std::move(
             std::get<std::tuple_size_v<std::tuple<Args...>> -
                      std::tuple_size_v<NamedArgTypeList> + N>(args_tuple))...);

@@ -63,9 +63,9 @@ TEST(EnvironmentTest, CwdSetToHome) {
   auto home_dir = home();
 
 #if !defined(_WIN32)
-  run({"/bin/pwd"}, $stdout > out, $cwd = home_dir.value());
+  run("/bin/pwd", $stdout > out, $cwd = home_dir.value());
 #else
-  run({"cmd.exe", "/c", "echo %CD%"}, $stdout > out, $cwd = home_dir.value());
+  run("cmd.exe", "/c", "echo %CD%", $stdout > out, $cwd = home_dir.value());
 #endif
 
   ASSERT_FALSE(out.empty());
@@ -139,10 +139,10 @@ TEST(EnvironmentTest, CwdSetAndReadRelativeFile) {
 
   buffer stdout_buf;
 #if defined(_WIN32)
-  int exit_code = run({"cmd.exe", "/c", "type " + relative_file_name},
+  int exit_code = run("cmd.exe", "/c", "type " + relative_file_name,
                       cwd = temp_dir_path, std_out > stdout_buf);
 #else
-  int exit_code = run({"/bin/cat", relative_file_name}, cwd = temp_dir_path,
+  int exit_code = run("/bin/cat", relative_file_name, cwd = temp_dir_path,
                       std_out > stdout_buf);
 #endif
 
@@ -184,20 +184,20 @@ TEST(EnvironmentTest, EnvOverrideClearsOtherVars) {
   buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code = run(
-      {"cmd.exe", "/c",
-       R"(if "%ONLY_VAR%"=="visible" (<nul set /p=isolated& exit /b 0) else (<nul set /p=not_isolated& exit /b 0))"},
+      "cmd.exe", "/c",
+      R"(if "%ONLY_VAR%"=="visible" (<nul set /p=isolated& exit /b 0) else (<nul set /p=not_isolated& exit /b 0))",
       subprocess::named_arguments::env = {{"ONLY_VAR", "visible"}},
       std_out > stdout_buf);
 #else
   int exit_code =
-      run({"bash", "-c",
-           R"(
+      run("bash", "-c",
+          R"(
 if [ "$ONLY_VAR" = "visible" ]; then
   echo -n isolated;
 else
   echo -n not_isolated;
 fi
-)"},
+)",
           subprocess::named_arguments::env = {{"ONLY_VAR", "visible"}},
           std_out > stdout_buf);
 #endif
@@ -230,16 +230,16 @@ TEST(EnvironmentTest, EnvAppendCheckValue) {
   buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code =
-      run({"cmd.exe", "/c",
-           "<nul set /p=%MY_APPEND_VAR%&if defined PATH (<nul set "
-           "/p=_haspath)&exit /b 0"},
+      run("cmd.exe", "/c",
+          "<nul set /p=%MY_APPEND_VAR%&if defined PATH (<nul set "
+          "/p=_haspath)&exit /b 0",
           subprocess::named_arguments::env += {{"MY_APPEND_VAR", "appended"}},
           std_out > stdout_buf);
 #else
   int exit_code =
-      run({"bash", "-c",
-           "echo -n $MY_APPEND_VAR; if [ -n \"$PATH\" ]; then echo -n "
-           "_haspath; fi"},
+      run("bash", "-c",
+          "echo -n $MY_APPEND_VAR; if [ -n \"$PATH\" ]; then echo -n "
+          "_haspath; fi",
           subprocess::named_arguments::env += {{"MY_APPEND_VAR", "appended"}},
           std_out > stdout_buf);
 #endif

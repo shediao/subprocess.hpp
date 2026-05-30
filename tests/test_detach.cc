@@ -89,13 +89,13 @@ inline std::string read_file_trimmed(const std::string& path) {
 // ===========================================================================
 TEST(DetachTest, SmokeTest) {
   TempFile tmp;
-  bool ok = detach_run({
+  bool ok = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "<nul set /p=ok>" + tmp.path()
+      "cmd.exe", { "/c", "<nul set /p=ok>" + tmp.path() }
 #else
-      "/bin/sh", "-c", "echo ok > '" + tmp.path() + "'"
+      "/bin/sh", {"-c", "echo ok > '" + tmp.path() + "'"}
 #endif
-  });
+  );
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "ok");
@@ -106,13 +106,13 @@ TEST(DetachTest, SmokeTest) {
 // ===========================================================================
 TEST(DetachTest, ActuallyExecutes) {
   TempFile tmp;
-  bool ok = detach_run({
+  bool ok = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "<nul set /p=executed>" + tmp.path()
+      "cmd.exe", { "/c", "<nul set /p=executed>" + tmp.path() }
 #else
-      "/bin/sh", "-c", "echo executed > '" + tmp.path() + "'"
+      "/bin/sh", {"-c", "echo executed > '" + tmp.path() + "'"}
 #endif
-  });
+  );
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "executed");
@@ -122,13 +122,13 @@ TEST(DetachTest, ActuallyExecutes) {
 // 3. detach_run with a non-zero exit — still returns true (fire-and-forget)
 // ===========================================================================
 TEST(DetachTest, NonZeroExitStillReturnsTrue) {
-  bool ok = detach_run({
+  bool ok = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "exit /b 42"
+      "cmd.exe", {"/c", "exit /b 42"}
 #else
-      "/bin/sh", "-c", "exit 42"
+      "/bin/sh", {"-c", "exit 42"}
 #endif
-  });
+  );
   // detach_run is fire-and-forget; spawn success → true regardless of exit
   EXPECT_TRUE(ok);
 }
@@ -139,7 +139,7 @@ TEST(DetachTest, NonZeroExitStillReturnsTrue) {
 //    POSIX:   double-fork hides exec failure → true
 // ===========================================================================
 TEST(DetachTest, CommandNotFound) {
-  bool ok = detach_run({"this_command_definitely_does_not_exist_xyz"});
+  bool ok = detach_run("this_command_definitely_does_not_exist_xyz");
 #if defined(_WIN32)
   EXPECT_FALSE(ok);
 #else
@@ -153,11 +153,11 @@ TEST(DetachTest, CommandNotFound) {
 // ===========================================================================
 TEST(DetachTest, InvalidCwd) {
 #if defined(_WIN32)
-  bool ok = detach_run({"cmd.exe", "/c", "exit /b 0"},
+  bool ok = detach_run("cmd.exe", {"/c", "exit /b 0"},
                        cwd = "Z:\\this\\directory\\does\\not\\exist\\xyz");
   EXPECT_FALSE(ok);
 #else
-  bool ok = detach_run({"true"}, cwd = "/this/directory/does/not/exist/xyz");
+  bool ok = detach_run("true", cwd = "/this/directory/does/not/exist/xyz");
   // On POSIX, fork() succeeds; the chdir/exec failure is in the grandchild.
   EXPECT_TRUE(ok);
 #endif
@@ -169,11 +169,11 @@ TEST(DetachTest, InvalidCwd) {
 TEST(DetachTest, CwdSetToHome) {
   TempFile tmp;
 #if defined(_WIN32)
-  bool ok = detach_run({"cmd.exe", "/c", "<nul set /p=%CD%>" + tmp.path()},
+  bool ok = detach_run("cmd.exe", {"/c", "<nul set /p=%CD%>" + tmp.path()},
                        cwd = "C:\\Windows");
 #else
   bool ok =
-      detach_run({"/bin/sh", "-c", "pwd > '" + tmp.path() + "'"}, cwd = "/tmp");
+      detach_run("/bin/sh", {"-c", "pwd > '" + tmp.path() + "'"}, cwd = "/tmp");
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -219,15 +219,15 @@ TEST(DetachTest, CwdVariadicForm) {
 TEST(DetachTest, EnvFullReplacement) {
   TempFile tmp;
 #if defined(_WIN32)
-  bool ok =
-      detach_run({"cmd.exe", "/c",
-                  "<nul set /p=%MY_DETACH_VAR%>" + tmp.path() + "&exit /b 0"},
-                 env = {{"MY_DETACH_VAR", "detached_value"}});
+  bool ok = detach_run(
+      "cmd.exe",
+      {"/c", "<nul set /p=%MY_DETACH_VAR%>" + tmp.path() + "&exit /b 0"},
+      env = {{"MY_DETACH_VAR", "detached_value"}});
 #else
-  bool ok =
-      detach_run({"/bin/sh", "-c",
-                  "printf '%s' \"$MY_DETACH_VAR\" > '" + tmp.path() + "'"},
-                 env = {{"MY_DETACH_VAR", "detached_value"}});
+  bool ok = detach_run(
+      "/bin/sh",
+      {"-c", "printf '%s' \"$MY_DETACH_VAR\" > '" + tmp.path() + "'"},
+      env = {{"MY_DETACH_VAR", "detached_value"}});
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -244,23 +244,24 @@ TEST(DetachTest, EnvFullReplacementClearsOtherVars) {
   TempFile tmp;
 #if defined(_WIN32)
   bool ok = detach_run(
-      {"cmd.exe", "/c", "<nul set /p=%PATH%>" + tmp.path() + "&exit /b 0"},
+      "cmd.exe", {"/c", "<nul set /p=%PATH%>" + tmp.path() + "&exit /b 0"},
       env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "%PATH%");
 
   TempFile tmp2;
-  ok = detach_run({"cmd.exe", "/c",
-                   "<nul set /p=%ONLY_THIS%>" + tmp2.path() + "&exit /b 0"},
-                  env = {{"ONLY_THIS", "present"}});
+  ok = detach_run(
+      "cmd.exe",
+      {"/c", "<nul set /p=%ONLY_THIS%>" + tmp2.path() + "&exit /b 0"},
+      env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp2.path()));
   EXPECT_EQ(read_file_trimmed(tmp2.path()), "present");
 #else
   // Use `env` to dump actual environment, then grep for a well-known var.
   // With full env replacement, HOME should not be present.
-  bool ok = detach_run({"/bin/sh", "-c", "env > '" + tmp.path() + "'"},
+  bool ok = detach_run("/bin/sh", {"-c", "env > '" + tmp.path() + "'"},
                        env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -280,14 +281,14 @@ TEST(DetachTest, EnvAppend) {
   TempFile tmp;
 #if defined(_WIN32)
   bool ok = detach_run(
-      {"cmd.exe", "/c",
-       "<nul set /p=%MY_APPEND_DETACH%>" + tmp.path() + "&exit /b 0"},
+      "cmd.exe",
+      {"/c", "<nul set /p=%MY_APPEND_DETACH%>" + tmp.path() + "&exit /b 0"},
       env += {{"MY_APPEND_DETACH", "appended_val"}});
 #else
-  bool ok =
-      detach_run({"/bin/sh", "-c",
-                  "printf '%s' \"$MY_APPEND_DETACH\" > '" + tmp.path() + "'"},
-                 env += {{"MY_APPEND_DETACH", "appended_val"}});
+  bool ok = detach_run(
+      "/bin/sh",
+      {"-c", "printf '%s' \"$MY_APPEND_DETACH\" > '" + tmp.path() + "'"},
+      env += {{"MY_APPEND_DETACH", "appended_val"}});
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -302,15 +303,16 @@ TEST(DetachTest, EnvAppendPreservesExistingVars) {
 #if defined(_WIN32)
   // PATH should still exist after env+=
   bool ok = detach_run(
-      {"cmd.exe", "/c",
-       R"(if defined PATH (<nul set /p=path_exists>)" + tmp.path() +
-           R"() else (<nul set /p=path_missing>)" + tmp.path() + ")"},
+      "cmd.exe",
+      {"/c", R"(if defined PATH (<nul set /p=path_exists>)" + tmp.path() +
+                 R"() else (<nul set /p=path_missing>)" + tmp.path() + ")"},
       env += {{"EXTRA_DETACH", "yes"}});
 #else
   bool ok = detach_run(
-      {"/bin/sh", "-c",
-       "if [ -n \"$PATH\" ]; then printf '%s' path_exists > '" + tmp.path() +
-           "'; else printf '%s' path_missing > '" + tmp.path() + "'; fi"},
+      "/bin/sh",
+      {"-c", "if [ -n \"$PATH\" ]; then printf '%s' path_exists > '" +
+                 tmp.path() + "'; else printf '%s' path_missing > '" +
+                 tmp.path() + "'; fi"},
       env += {{"EXTRA_DETACH", "yes"}});
 #endif
   EXPECT_TRUE(ok);
@@ -325,12 +327,12 @@ TEST(DetachTest, EnvItemAppend) {
   TempFile tmp;
 #if defined(_WIN32)
   bool ok = detach_run(
-      {"cmd.exe", "/c", "<nul set /p=%PATH%>" + tmp.path() + "&exit /b 0"},
+      "cmd.exe", {"/c", "<nul set /p=%PATH%>" + tmp.path() + "&exit /b 0"},
       env["PATH"] += "DETACH_SUFFIX");
 #else
-  bool ok = detach_run(
-      {"/bin/sh", "-c", "printf '%s' \"$PATH\" > '" + tmp.path() + "'"},
-      env["PATH"] += "DETACH_SUFFIX");
+  bool ok = detach_run("/bin/sh",
+                       {"-c", "printf '%s' \"$PATH\" > '" + tmp.path() + "'"},
+                       env["PATH"] += "DETACH_SUFFIX");
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -348,12 +350,12 @@ TEST(DetachTest, EnvItemPrepend) {
   TempFile tmp;
 #if defined(_WIN32)
   bool ok = detach_run(
-      {"cmd.exe", "/c", "<nul set /p=%PATH%>" + tmp.path() + "&exit /b 0"},
+      "cmd.exe", {"/c", "<nul set /p=%PATH%>" + tmp.path() + "&exit /b 0"},
       env["PATH"] <<= "DETACH_PREFIX");
 #else
-  bool ok = detach_run(
-      {"/bin/sh", "-c", "printf '%s' \"$PATH\" > '" + tmp.path() + "'"},
-      env["PATH"] <<= "DETACH_PREFIX");
+  bool ok = detach_run("/bin/sh",
+                       {"-c", "printf '%s' \"$PATH\" > '" + tmp.path() + "'"},
+                       env["PATH"] <<= "DETACH_PREFIX");
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -367,15 +369,15 @@ TEST(DetachTest, EnvItemPrepend) {
 TEST(DetachTest, EnvItemAppendNewKey) {
   TempFile tmp;
 #if defined(_WIN32)
-  bool ok =
-      detach_run({"cmd.exe", "/c",
-                  "<nul set /p=%DETACH_NEW_VAR%>" + tmp.path() + "&exit /b 0"},
-                 env["DETACH_NEW_VAR"] += "new_value");
+  bool ok = detach_run(
+      "cmd.exe",
+      {"/c", "<nul set /p=%DETACH_NEW_VAR%>" + tmp.path() + "&exit /b 0"},
+      env["DETACH_NEW_VAR"] += "new_value");
 #else
-  bool ok =
-      detach_run({"/bin/sh", "-c",
-                  "printf '%s' \"$DETACH_NEW_VAR\" > '" + tmp.path() + "'"},
-                 env["DETACH_NEW_VAR"] += "new_value");
+  bool ok = detach_run(
+      "/bin/sh",
+      {"-c", "printf '%s' \"$DETACH_NEW_VAR\" > '" + tmp.path() + "'"},
+      env["DETACH_NEW_VAR"] += "new_value");
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -389,12 +391,12 @@ TEST(DetachTest, EnvCombined) {
   TempFile tmp;
 #if defined(_WIN32)
   bool ok = detach_run(
-      {"cmd.exe", "/c", "<nul set /p=%COMBINED%>" + tmp.path() + "&exit /b 0"},
+      "cmd.exe", {"/c", "<nul set /p=%COMBINED%>" + tmp.path() + "&exit /b 0"},
       env = {{"COMBINED", "base"}}, env += {{"EXTRA", "bonus"}},
       env["COMBINED"] += "suffix");
 #else
   bool ok = detach_run(
-      {"/bin/sh", "-c", "printf '%s' \"$COMBINED\" > '" + tmp.path() + "'"},
+      "/bin/sh", {"-c", "printf '%s' \"$COMBINED\" > '" + tmp.path() + "'"},
       env = {{"COMBINED", "base"}}, env += {{"EXTRA", "bonus"}},
       env["COMBINED"] += "suffix");
 #endif
@@ -407,44 +409,31 @@ TEST(DetachTest, EnvCombined) {
 }
 
 // ===========================================================================
-// 16. Empty command vector — platform-dependent return
-// ===========================================================================
-TEST(DetachTest, EmptyCommandVector) {
-  bool ok = detach_run(std::vector<std::string>{});
-#if defined(_WIN32)
-  EXPECT_FALSE(ok);
-#else
-  // On POSIX, fork succeeds; exec failure is in grandchild
-  EXPECT_FALSE(ok);
-#endif
-}
-
-// ===========================================================================
 // 17. Multiple concurrent detach_run calls
 // ===========================================================================
 TEST(DetachTest, MultipleConcurrent) {
   TempFile tmp1, tmp2, tmp3;
-  bool ok1 = detach_run({
+  bool ok1 = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "<nul set /p=one>" + tmp1.path()
+      "cmd.exe", { "/c", "<nul set /p=one>" + tmp1.path() }
 #else
-      "/bin/sh", "-c", "echo one > '" + tmp1.path() + "'"
+      "/bin/sh", {"-c", "echo one > '" + tmp1.path() + "'"}
 #endif
-  });
-  bool ok2 = detach_run({
+  );
+  bool ok2 = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "<nul set /p=two>" + tmp2.path()
+      "cmd.exe", { "/c", "<nul set /p=two>" + tmp2.path() }
 #else
-      "/bin/sh", "-c", "echo two > '" + tmp2.path() + "'"
+      "/bin/sh", {"-c", "echo two > '" + tmp2.path() + "'"}
 #endif
-  });
-  bool ok3 = detach_run({
+  );
+  bool ok3 = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "<nul set /p=three>" + tmp3.path()
+      "cmd.exe", { "/c", "<nul set /p=three>" + tmp3.path() }
 #else
-      "/bin/sh", "-c", "echo three > '" + tmp3.path() + "'"
+      "/bin/sh", {"-c", "echo three > '" + tmp3.path() + "'"}
 #endif
-  });
+  );
   EXPECT_TRUE(ok1);
   EXPECT_TRUE(ok2);
   EXPECT_TRUE(ok3);
@@ -462,15 +451,14 @@ TEST(DetachTest, MultipleConcurrent) {
 TEST(DetachTest, LongRunningProcess) {
   TempFile tmp_start, tmp_done;
 #if defined(_WIN32)
-  bool ok = detach_run({"cmd.exe", "/c",
-                        "<nul set /p=started>" + tmp_start.path() +
+  bool ok = detach_run(
+      "cmd.exe", {"/c", "<nul set /p=started>" + tmp_start.path() +
                             "& ping 127.0.0.1 -n 3 > nul & <nul set /p=done>" +
                             tmp_done.path()});
 #else
-  bool ok =
-      detach_run({"/bin/sh", "-c",
-                  "echo started > '" + tmp_start.path() +
-                      "' && sleep 1 && echo done > '" + tmp_done.path() + "'"});
+  bool ok = detach_run("/bin/sh", {"-c", "echo started > '" + tmp_start.path() +
+                                             "' && sleep 1 && echo done > '" +
+                                             tmp_done.path() + "'"});
 #endif
   EXPECT_TRUE(ok);
   // The start marker should appear quickly
@@ -489,13 +477,13 @@ TEST(DetachTest, PathWithSpaces) {
   // TempFile paths from GetTempFileNameA / mkstemps usually don't have spaces,
   // so this test verifies the command-line argument quoting works correctly
   // when the output file path is passed within quotes.
-  bool ok = detach_run({
+  bool ok = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "<nul set /p=spaces_ok>" + tmp.path()
+      "cmd.exe", { "/c", "<nul set /p=spaces_ok>" + tmp.path() }
 #else
-      "/bin/sh", "-c", "echo spaces_ok > '" + tmp.path() + "'"
+      "/bin/sh", {"-c", "echo spaces_ok > '" + tmp.path() + "'"}
 #endif
-  });
+  );
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "spaces_ok");
@@ -510,15 +498,16 @@ TEST(DetachTest, EnvSpecialCharacters) {
   // Value with spaces and special characters
   std::string special_val = "hello world! @#$^%&*()";
 #if defined(_WIN32)
-  bool ok = detach_run({"powershell.exe", "-NoProfile", "-Command",
+  bool ok = detach_run("powershell.exe",
+                       {"-NoProfile", "-Command",
                         "[System.IO.File]::WriteAllText('" + tmp.path() +
                             "',$env:DETACH_SPECIAL)"},
                        env = {{"DETACH_SPECIAL", special_val}});
 #else
-  bool ok =
-      detach_run({"/bin/sh", "-c",
-                  "printf '%s' \"$DETACH_SPECIAL\" > '" + tmp.path() + "'"},
-                 env = {{"DETACH_SPECIAL", special_val}});
+  bool ok = detach_run(
+      "/bin/sh",
+      {"-c", "printf '%s' \"$DETACH_SPECIAL\" > '" + tmp.path() + "'"},
+      env = {{"DETACH_SPECIAL", special_val}});
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -534,15 +523,16 @@ TEST(DetachTest, EnvEmptyValue) {
   TempFile tmp;
 #if defined(_WIN32)
   bool ok = detach_run(
-      {"cmd.exe", "/c",
-       R"(if "%DETACH_EMPTY%"=="" (<nul set /p=empty>)" + tmp.path() +
-           R"() else (<nul set /p=not_empty>)" + tmp.path() + ")"},
+      "cmd.exe",
+      {"/c", R"(if "%DETACH_EMPTY%"=="" (<nul set /p=empty>)" + tmp.path() +
+                 R"() else (<nul set /p=not_empty>)" + tmp.path() + ")"},
       env = {{"DETACH_EMPTY", ""}});
 #else
   bool ok = detach_run(
-      {"/bin/sh", "-c",
-       "if [ -z \"$DETACH_EMPTY\" ]; then printf '%s' empty > '" + tmp.path() +
-           "'; else printf '%s' not_empty > '" + tmp.path() + "'; fi"},
+      "/bin/sh",
+      {"-c", "if [ -z \"$DETACH_EMPTY\" ]; then printf '%s' empty > '" +
+                 tmp.path() + "'; else printf '%s' not_empty > '" + tmp.path() +
+                 "'; fi"},
       env = {{"DETACH_EMPTY", ""}});
 #endif
   EXPECT_TRUE(ok);
@@ -557,14 +547,13 @@ TEST(DetachTest, EnvEmptyValue) {
 TEST(DetachTest, ProcessSurvivesDetachReturn) {
   TempFile tmp;
 #if defined(_WIN32)
-  bool ok =
-      detach_run({"cmd.exe", "/c",
-                  "ping 127.0.0.1 -n 2 > nul & <nul set /p=survived_detach>" +
-                      tmp.path()});
+  bool ok = detach_run(
+      "cmd.exe",
+      {"/c", "ping 127.0.0.1 -n 2 > nul & <nul set /p=survived_detach>" +
+                 tmp.path()});
 #else
-  bool ok =
-      detach_run({"/bin/sh", "-c",
-                  "sleep 1 && echo survived_detach > '" + tmp.path() + "'"});
+  bool ok = detach_run("/bin/sh", {"-c", "sleep 1 && echo survived_detach > '" +
+                                             tmp.path() + "'"});
 #endif
   EXPECT_TRUE(ok);
   // detach_run has already returned; process should still be running.
@@ -578,11 +567,11 @@ TEST(DetachTest, ProcessSurvivesDetachReturn) {
 TEST(DetachTest, ManyArguments) {
   TempFile tmp;
 #if defined(_WIN32)
-  bool ok = detach_run(
-      {"cmd.exe", "/c", "<nul set /p=a b c d e f g h i j>" + tmp.path()});
+  bool ok = detach_run("cmd.exe",
+                       {"/c", "<nul set /p=a b c d e f g h i j>" + tmp.path()});
 #else
   bool ok = detach_run(
-      {"/bin/sh", "-c", "echo a b c d e f g h i j > '" + tmp.path() + "'"});
+      "/bin/sh", {"-c", "echo a b c d e f g h i j > '" + tmp.path() + "'"});
 #endif
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
@@ -829,7 +818,7 @@ TEST(DetachTest, WideVectorForm) {
   TempFile tmp;
   std::wstring full_cmd = L"<nul set /p=wide_vector>" +
                           subprocess::detail::utf8_to_utf16(tmp.path());
-  bool ok = detach_run(std::vector<std::wstring>{L"cmd.exe", L"/c", full_cmd});
+  bool ok = detach_run(L"cmd.exe", L"/c", full_cmd);
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "wide_vector");
@@ -853,7 +842,7 @@ TEST(DetachTest, DetachedProcessInOwnSession) {
   TempFile tmp;
   // Write both PID and PGID on one line: "PID PGID"
   bool ok = detach_run(
-      {"/bin/sh", "-c", "echo $$ $(ps -o pgid= -p $$) > '" + tmp.path() + "'"});
+      "/bin/sh", {"-c", "echo $$ $(ps -o pgid= -p $$) > '" + tmp.path() + "'"});
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   std::string out = read_file_trimmed(tmp.path());
@@ -878,7 +867,7 @@ TEST(DetachTest, DetachedProcessInOwnSession) {
 //     should have PPID 1 (or a sub-reaper PID, but not the test process).
 TEST(DetachTest, DetachedGrandchildParentIsInit) {
   TempFile tmp;
-  bool ok = detach_run({"/bin/sh", "-c", "echo $PPID > '" + tmp.path() + "'"});
+  bool ok = detach_run("/bin/sh", {"-c", "echo $PPID > '" + tmp.path() + "'"});
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path(), std::chrono::seconds(5)));
   std::string ppid_str = read_file_trimmed(tmp.path());
@@ -895,7 +884,7 @@ TEST(DetachTest, DetachedGrandchildParentIsInit) {
 //     smoke check.
 TEST(DetachTest, NoZombieFromIntermediateChild) {
   for (int i = 0; i < 10; ++i) {
-    bool ok = detach_run({"/bin/sh", "-c", "exit 0"});
+    bool ok = detach_run("/bin/sh", {"-c", "exit 0"});
     EXPECT_TRUE(ok);
   }
   // Give processes time to be reaped
@@ -908,11 +897,11 @@ TEST(DetachTest, NoZombieFromIntermediateChild) {
 // 40. Detach with CWD and Env together
 TEST(DetachTest, CwdAndEnvTogether) {
   TempFile tmp;
-  bool ok = detach_run({"/bin/sh", "-c",
-                        "pwd > '" + tmp.path() +
-                            ".cwd' && "
-                            "printf '%s' \"$DTVAR\" > '" +
-                            tmp.path() + ".env'"},
+  bool ok = detach_run("/bin/sh",
+                       {"-c", "pwd > '" + tmp.path() +
+                                  ".cwd' && "
+                                  "printf '%s' \"$DTVAR\" > '" +
+                                  tmp.path() + ".env'"},
                        cwd = "/tmp", env = {{"DTVAR", "cwd_env_value"}});
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path() + ".cwd"));
@@ -934,7 +923,7 @@ TEST(DetachTest, CwdAndEnvTogether) {
 TEST(DetachTest, StdinIsDevNull) {
   TempFile tmp;
   // 'cat' with /dev/null as stdin should produce no output
-  bool ok = detach_run({"/bin/sh", "-c", "cat > '" + tmp.path() + "'"});
+  bool ok = detach_run("/bin/sh", {"-c", "cat > '" + tmp.path() + "'"});
   EXPECT_TRUE(ok);
   // Give it a moment to run, then check — cat with /dev/null stdin
   // should produce an empty file (or not even create it).
@@ -953,13 +942,15 @@ TEST(DetachTest, StdinIsDevNull) {
 // ===========================================================================
 TEST(DetachTest, VectorOnlyForm) {
   TempFile tmp;
-  bool ok = detach_run(std::vector<std::string>{
+  bool ok = detach_run(
 #if defined(_WIN32)
-      "cmd.exe", "/c", "<nul set /p=vector_only>" + tmp.path()
+      "cmd.exe",
+      std::vector<std::string> { "/c", "<nul set /p=vector_only>" + tmp.path() }
 #else
-      "/bin/sh", "-c", "echo vector_only > '" + tmp.path() + "'"
+      "/bin/sh",
+      std::vector<std::string>{"-c", "echo vector_only > '" + tmp.path() + "'"}
 #endif
-  });
+  );
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   EXPECT_EQ(read_file_trimmed(tmp.path()), "vector_only");

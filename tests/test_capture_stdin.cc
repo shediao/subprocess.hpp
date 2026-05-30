@@ -220,13 +220,13 @@ TEST(CaptureStdinTest, StdinFromBufferWithEnvTwoArgForm) {
   buffer in{"two_arg_with_env\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] =
-      capture_run({"cat"}, std_in < in, env = {{"MYVAR", "myval"}});
+      capture_run("cat", std_in < in, env = {{"MYVAR", "myval"}});
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(out, "two_arg_with_env\n");
   ASSERT_TRUE(err.empty());
 #else
   auto [exit_code, out, err] =
-      capture_run({"more.com"}, std_in < in, env = {{"MYVAR", "myval"}});
+      capture_run("more.com", std_in < in, env = {{"MYVAR", "myval"}});
   ASSERT_EQ(exit_code, 0);
   ASSERT_FALSE(out.empty());
 #endif
@@ -518,15 +518,15 @@ TEST(CaptureStdinTest, StdinFromFileTwoArgFormMultiNamedArgs) {
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] =
-      capture_run({"bash", "-c", "cat; echo $MYVAR"}, std_in < tf.path(),
+      capture_run("bash", "-c", "cat; echo $MYVAR", std_in < tf.path(),
                   env = {{"MYVAR", "hello"}});
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(out, "two_arg_multi\nhello\n");
   ASSERT_TRUE(err.empty());
 #else
   auto [exit_code, out, err] =
-      capture_run({"cmd.exe", "/c", "more.com&echo %MYVAR%"},
-                  std_in < tf.path(), env = {{"MYVAR", "hello"}});
+      capture_run("cmd.exe", "/c", "more.com&echo %MYVAR%", std_in < tf.path(),
+                  env = {{"MYVAR", "hello"}});
   ASSERT_EQ(exit_code, 0);
   ASSERT_FALSE(out.empty());
 #endif

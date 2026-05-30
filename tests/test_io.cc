@@ -67,9 +67,9 @@ TEST(IOTest, CaptureStdoutBasic) {
   buffer stdout_buf;
   int exit_code = run(
 #if defined(_WIN32)
-      {"cmd.exe", "/c", "<nul set /p=Hello Stdout&exit /b 0"}
+      "cmd.exe", "/c", "<nul set /p=Hello Stdout&exit /b 0"
 #else
-      {"/bin/echo", "-n", "Hello Stdout"}
+      "/bin/echo", "-n", "Hello Stdout"
 #endif
       ,
       std_out > stdout_buf);
@@ -80,13 +80,13 @@ TEST(IOTest, CaptureStdoutBasic) {
 TEST(IOTest, CaptureStderrBasic) {
   buffer stderr_buf;
   int exit_code = run(
-      {
+
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Hello Stderr>&2&exit /b 0"
+      "cmd.exe", "/c", "<nul set /p=Hello Stderr>&2&exit /b 0"
 #else
-          "bash", "-c", "echo -n 'Hello Stderr' >&2"
+      "bash", "-c", "echo -n 'Hello Stderr' >&2"
 #endif
-      },
+      ,
       std_err > stderr_buf);
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(stderr_buf.to_string(), "Hello Stderr");
@@ -96,13 +96,13 @@ TEST(IOTest, CaptureBothStdoutAndStderr) {
   buffer stdout_buf;
   buffer stderr_buf;
   int exit_code = run(
-      {
+
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Out& <nul set /p=Err>&2&exit /b 0"
+      "cmd.exe", "/c", "<nul set /p=Out& <nul set /p=Err>&2&exit /b 0"
 #else
-          "bash", "-c", "echo -n Out; echo -n Err >&2"
+      "bash", "-c", "echo -n Out; echo -n Err >&2"
 #endif
-      },
+      ,
       std_out > stdout_buf, std_err > stderr_buf);
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(stdout_buf.to_string(), "Out");
@@ -112,13 +112,13 @@ TEST(IOTest, CaptureBothStdoutAndStderr) {
 TEST(IOTest, CaptureEmptyStdout) {
   buffer stdout_buf;
   int exit_code = run(
-      {
+
 #if defined(_WIN32)
-          "cmd.exe", "/c", "exit /b 0"
+      "cmd.exe", "/c", "exit /b 0"
 #else
-          "true"
+      "true"
 #endif
-      },
+      ,
       std_out > stdout_buf);
   ASSERT_EQ(exit_code, 0);
   ASSERT_TRUE(stdout_buf.empty());
@@ -226,9 +226,9 @@ TEST(IOTest, RedirectStdoutToFileOverwrite) {
   TempFile tmp_file;
   buffer content{"123"};
 #if !defined(_WIN32)
-  run({"echo", "-n", content.to_string()}, std_out > tmp_file.path());
+  run("echo", "-n", content.to_string(), std_out > tmp_file.path());
 #else
-  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string()},
+  run("cmd.exe", "/c", "<nul set /p=" + content.to_string(),
       std_out > tmp_file.path());
 #endif
   ASSERT_EQ(content.to_string(), tmp_file.content_str());
@@ -238,10 +238,10 @@ TEST(IOTest, RedirectStderrToFileOverwrite) {
   TempFile tmp_file;
   buffer content{"123"};
 #if !defined(_WIN32)
-  run({"bash", "-c", "echo -n " + content.to_string() + " >&2"},
+  run("bash", "-c", "echo -n " + content.to_string() + " >&2",
       std_err > tmp_file.path());
 #else
-  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2"},
+  run("cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2",
       std_err > tmp_file.path());
 #endif
   ASSERT_EQ(content.to_string(), tmp_file.content_str());
@@ -250,13 +250,13 @@ TEST(IOTest, RedirectStderrToFileOverwrite) {
 TEST(IOTest, RedirectStdoutToFileOverwrite2) {
   TempFile temp_file;
   int exit_code = run(
-      {
+
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Overwrite Content&exit /b 0"
+      "cmd.exe", "/c", "<nul set /p=Overwrite Content&exit /b 0"
 #else
-          "/bin/echo", "-n", "Overwrite Content"
+      "/bin/echo", "-n", "Overwrite Content"
 #endif
-      },
+      ,
       std_out > temp_file.path());
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(temp_file.content_str(), "Overwrite Content");
@@ -265,13 +265,13 @@ TEST(IOTest, RedirectStdoutToFileOverwrite2) {
 TEST(IOTest, RedirectStderrToFileOverwrite2) {
   TempFile temp_file;
   int exit_code = run(
-      {
+
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Error Overwrite>&2&exit /b 0"
+      "cmd.exe", "/c", "<nul set /p=Error Overwrite>&2&exit /b 0"
 #else
-          "bash", "-c", "echo -n 'Error Overwrite' >&2"
+      "bash", "-c", "echo -n 'Error Overwrite' >&2"
 #endif
-      },
+      ,
       std_err > temp_file.path());
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(temp_file.content_str(), "Error Overwrite");
@@ -286,9 +286,9 @@ TEST(IOTest, RedirectStdoutToFileAppend) {
   tmp_file.write(std::string{"000"});
   buffer content{"123"};
 #if !defined(_WIN32)
-  run({"echo", "-n", content.to_string()}, std_out >> tmp_file.path());
+  run("echo", "-n", content.to_string(), std_out >> tmp_file.path());
 #else
-  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string()},
+  run("cmd.exe", "/c", "<nul set /p=" + content.to_string(),
       std_out >> tmp_file.path());
 #endif
   ASSERT_EQ("000123", tmp_file.content_str());
@@ -299,10 +299,10 @@ TEST(IOTest, RedirectStderrToFileAppend) {
   tmp_file.write(std::string{"999"});
   buffer content{"123"};
 #if !defined(_WIN32)
-  run({"bash", "-c", "echo -n " + content.to_string() + " >&2"},
+  run("bash", "-c", "echo -n " + content.to_string() + " >&2",
       std_err >> tmp_file.path());
 #else
-  run({"cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2"},
+  run("cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2",
       std_err >> tmp_file.path());
 #endif
   ASSERT_EQ("999123", tmp_file.content_str());
@@ -312,13 +312,13 @@ TEST(IOTest, RedirectStdoutToFileAppend2) {
   TempFile temp_file;
   temp_file.write(std::string{"Initial\n"});
   int exit_code = run(
-      {
+
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=Appended&exit /b 0"
+      "cmd.exe", "/c", "<nul set /p=Appended&exit /b 0"
 #else
-          "/bin/echo", "-n", "Appended"
+      "/bin/echo", "-n", "Appended"
 #endif
-      },
+      ,
       std_out >> temp_file.path());
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(temp_file.content_str(), "Initial\nAppended");
@@ -328,13 +328,13 @@ TEST(IOTest, RedirectStderrToFileAppend2) {
   TempFile temp_file;
   temp_file.write(std::string{"InitialError\n"});
   int exit_code = run(
-      {
+
 #if defined(_WIN32)
-          "cmd.exe", "/c", "<nul set /p=AppendedError>&2&exit /b 0"
+      "cmd.exe", "/c", "<nul set /p=AppendedError>&2&exit /b 0"
 #else
-          "bash", "-c", "echo -n 'AppendedError' >&2"
+      "bash", "-c", "echo -n 'AppendedError' >&2"
 #endif
-      },
+      ,
       std_err >> temp_file.path());
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(temp_file.content_str(), "InitialError\nAppendedError");
