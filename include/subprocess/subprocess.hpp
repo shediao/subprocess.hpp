@@ -645,12 +645,24 @@ inline void append_windows_arg(std::vector<wchar_t>& cmd,
 }
 
 inline std::vector<wchar_t> argv_to_command_line_string(
-    std::wstring app, std::vector<std::basic_string<wchar_t>> const& args,
-    bool is_shell) {
+    std::wstring app, std::vector<std::basic_string<wchar_t>> const& args) {
   std::vector<wchar_t> command;
+
+  auto dot = app.find_last_of(L'.');
+  auto path_sep = app.find_last_of(L"\\/");
+
+  auto app_stem_start = path_sep == std::wstring::npos ? 0 : path_sep + 1;
+  auto app_stem_end = dot == std::wstring::npos ? app.size() : dot;
+  auto app_stem = app.substr(app_stem_start, app_stem_end - app_stem_start);
+
+  std::transform(app_stem.begin(), app_stem.end(), app_stem.begin(),
+                 [](wchar_t c) { return towlower(c); });
+
+  auto is_cmd = app_stem == L"cmd";
+
   append_windows_arg(command, app);
   for (auto it = args.begin(); it != args.end(); ++it) {
-    if (is_shell) {
+    if (is_cmd) {
       command.push_back(L' ');
       command.insert(command.end(), it->begin(), it->end());
     } else {
@@ -2552,9 +2564,7 @@ class subprocess {
               ret.emplace_back(std::move(command));
               return ret;
             }(std::move(command)),
-            std::forward<Args>(named_args)...) {
-    is_shell = true;
-  }
+            std::forward<Args>(named_args)...) {}
 
 #if defined(_WIN32)
   template <named_argument_type... T>
@@ -2572,9 +2582,7 @@ class subprocess {
   template <named_argument_type... Args>
   subprocess(Shell shell, std::string command, Args&&... named_args)
       : subprocess(shell, utf8_to_utf16(std::move(command)),
-                   std::forward<Args>(named_args)...) {
-    is_shell = true;
-  }
+                   std::forward<Args>(named_args)...) {}
 #endif
 
   subprocess(subprocess&&) noexcept = default;
@@ -2673,7 +2681,7 @@ class subprocess {
 
     auto app_path = find_command_in_path(app_, cwd_);
 
-    auto command = argv_to_command_line_string(app_, args_, is_shell);
+    auto command = argv_to_command_line_string(app_, args_);
 
     auto env_block = create_environment_string_data(env_);
 
@@ -2719,7 +2727,7 @@ class subprocess {
     si.cb = sizeof(si);
 
     auto app_path = find_command_in_path(app_, cwd_);
-    auto command = argv_to_command_line_string(app_, args_, is_shell);
+    auto command = argv_to_command_line_string(app_, args_);
     auto env_block = create_environment_string_data(env_);
 
     PROCESS_INFORMATION pi{};
@@ -3073,7 +3081,6 @@ class subprocess {
   int early_exit_status_{0};
   bool child_reaped_early_{false};
 #endif
-  [[maybe_unused]] bool is_shell{false};
 };
 
 class pipeline {
