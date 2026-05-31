@@ -2838,6 +2838,11 @@ class subprocess {
 
  private:
   void terminate() {
+    auto close_all_guard = detail::make_scope_exit([this] {
+      stdin_.close_all();
+      stdout_.close_all();
+      stderr_.close_all();
+    });
 #if defined(_WIN32)
     // Kill the process FIRST. This closes the child's inherited pipe handles,
     // which unblocks any pump threads blocked on ReadFile. Only then is it
@@ -2866,16 +2871,24 @@ class subprocess {
     auto sigkill_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     while (std::chrono::steady_clock::now() < sigkill_deadline) {
-      if (kill(kill_pid, 0) != 0) {
-        return;  // all processes in the group have already exited
+      pid_t result{0};
+      int status{0};
+      do {
+        result = ::waitpid(pid_.get(), &status, WNOHANG);
+      } while (result == -1 && errno == EINTR);
+      if (result > 0) {
+        early_exit_status_ = status;
+        child_reaped_early_ = true;
+        return;
+      }
+      if (result == -1 && errno == ECHILD) {
+        child_reaped_early_ = true;
+        return;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     kill(kill_pid, SIGKILL);
 #endif
-    stdin_.close_all();
-    stdout_.close_all();
-    stderr_.close_all();
   }
 
 #if defined(_WIN32)
