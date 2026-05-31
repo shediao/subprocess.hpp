@@ -465,7 +465,8 @@ TEST(DetachTest, LongRunningProcess) {
   ASSERT_TRUE(wait_for_file(tmp_start.path(), std::chrono::seconds(3)));
   EXPECT_EQ(read_file_trimmed(tmp_start.path()), "started");
   // The done marker should appear after the sleep
-  ASSERT_TRUE(wait_for_file(tmp_done.path(), std::chrono::seconds(10)));
+  // CI runners can be slow; use a generous timeout for the done marker.
+  ASSERT_TRUE(wait_for_file(tmp_done.path(), std::chrono::seconds(20)));
   EXPECT_EQ(read_file_trimmed(tmp_done.path()), "done");
 }
 

@@ -2866,24 +2866,15 @@ class subprocess {
       kill_pid = -pid_.get();
     }
     kill(kill_pid, SIGTERM);
-    // Give the process group a short grace period to handle SIGTERM,
-    // checking periodically for early exit.
+    // Give the process group a short grace period to handle SIGTERM.
+    // Use kill(pid, 0) to check liveness — unlike waitpid it does NOT
+    // reap the zombie, so wait_for_exit() can later retrieve the
+    // correct exit status via its own blocking waitpid call.
     auto sigkill_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     while (std::chrono::steady_clock::now() < sigkill_deadline) {
-      pid_t result{0};
-      int status{0};
-      do {
-        result = ::waitpid(pid_.get(), &status, WNOHANG);
-      } while (result == -1 && errno == EINTR);
-      if (result > 0) {
-        early_exit_status_ = status;
-        child_reaped_early_ = true;
-        return;
-      }
-      if (result == -1 && errno == ECHILD) {
-        child_reaped_early_ = true;
-        return;
+      if (kill(kill_pid, 0) != 0) {
+        return;  // all processes in the group have already exited
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -2938,7 +2929,8 @@ class subprocess {
         early_exit_status_ = status;
         child_reaped_early_ = true;
       } else if (result == -1 && errno == ECHILD) {
-        // Child was already reaped inside read_write_to_buffer_use_poll.
+        // Child was already reaped inside read_write_to_buffer_use_poll,
+        // which stored the status via the child_status pointer.
         child_reaped_early_ = true;
       }
     }
