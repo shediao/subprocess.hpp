@@ -2221,13 +2221,11 @@ class Shell {
 
  private:
   static std::vector<NativeString> default_shell_cmds() {
-    std::vector<NativeString> ret;
 #if defined(_WIN32)
     return cmd_cmds();
 #else
     return shell_cmds();
 #endif
-    return ret;
   }
 #if defined(_WIN32)
   static std::vector<NativeString> cmd_cmds() {
