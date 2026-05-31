@@ -202,7 +202,7 @@ TEST(DupTest, PipeDupWithSubprocess) {
   auto p1 = S::Pipe::create();
   auto p2 = p1.dup();
 
-  // Run a process writing to p1.  Use async_run + wait_for_exit so that
+  // Run a process writing to p1.  Use spawn + wait so that
   // the child completes before we attempt to read from p2.
 #if defined(_WIN32)
   S::subprocess proc("cmd.exe"s, {"/c"s, "echo dup_subprocess_test&exit /b 0"},
@@ -210,8 +210,8 @@ TEST(DupTest, PipeDupWithSubprocess) {
 #else
   S::subprocess proc("echo", {"-n", "dup_subprocess_test"}, $stdout > p1);
 #endif
-  proc.async_run();
-  proc.wait_for_exit();
+  proc.spawn();
+  proc.wait();
 
   // The child has exited, closing its stdout (a dup of the pipe write end).
   // close_child_end() already closed p1.wfd().  p2.wfd() still refers
@@ -505,8 +505,8 @@ TEST(DupTest, PipeDupBeforeSubprocessPattern) {
 #else
   S::subprocess proc("/bin/echo", {"-n", "dup_before_sp"}, $stdout > p);
 #endif
-  proc.async_run();
-  proc.wait_for_exit();
+  proc.spawn();
+  proc.wait();
 
   // p's fds were closed by the child; p_reader is independent.
   p_reader.close_write();

@@ -580,13 +580,13 @@ TEST(PipeReaderWriterTest, ReadFromStdout) {
 #else
   subprocess::detail::subprocess proc($shell, "echo -n hello", $stdout > pipe);
 #endif
-  proc.async_run();
+  proc.spawn();
 
   char buf[16];
   auto n = reader.read(buf, sizeof(buf));
   ASSERT_GT(n, 0);
   ASSERT_EQ(std::string(buf, static_cast<size_t>(n)), "hello");
-  proc.wait_for_exit();
+  proc.wait();
 }
 
 TEST(PipeReaderWriterTest, WriteToStdin) {
@@ -602,13 +602,14 @@ TEST(PipeReaderWriterTest, WriteToStdin) {
 #endif
 
   std::string_view data = "hello";
-  std::jthread writer_thread([&]() {
+  std::thread writer_thread([&]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     writer.write(data.data(), data.size());
     writer.close();
   });
-  proc.async_run();
-  proc.wait_for_exit();
+  proc.spawn();
+  proc.wait();
+  writer_thread.join();
 
   auto output = outbuf.to_string();
   ASSERT_TRUE(output.starts_with(data));

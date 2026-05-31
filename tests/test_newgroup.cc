@@ -153,7 +153,7 @@ TEST(NewgroupTest, NewgroupTrueRunDoesNotAutoRedirectStdin) {
 TEST(NewgroupTest, PidAccessorReturnsValidPid) {
   subprocess::detail::subprocess proc(CMD_SLEEP_1);
 
-  proc.async_run();
+  proc.spawn();
   auto pid = proc.pid();
 
   // PID should be positive (valid)
@@ -162,14 +162,14 @@ TEST(NewgroupTest, PidAccessorReturnsValidPid) {
   // Process should be running (kill with signal 0 checks existence)
   EXPECT_EQ(kill(pid, 0), 0);
 
-  auto exit_code = proc.wait_for_exit();
+  auto exit_code = proc.wait();
   EXPECT_EQ(exit_code, 0);
 }
 
 TEST(NewgroupTest, PidAccessorInNewgroupMode) {
   subprocess::detail::subprocess proc(CMD_SLEEP_1, newgroup = true);
 
-  proc.async_run();
+  proc.spawn();
   auto pid = proc.pid();
 
   EXPECT_GT(pid, 0);
@@ -179,14 +179,14 @@ TEST(NewgroupTest, PidAccessorInNewgroupMode) {
   // getpgid(pid) should equal pid (since the child called setpgid(0,0)).
   EXPECT_EQ(getpgid(pid), pid);
 
-  auto exit_code = proc.wait_for_exit();
+  auto exit_code = proc.wait();
   EXPECT_EQ(exit_code, 0);
 }
 
 TEST(NewgroupTest, PidAccessorNoNewgroupNoProcessGroup) {
   subprocess::detail::subprocess proc(CMD_SLEEP_1, newgroup = false);
 
-  proc.async_run();
+  proc.spawn();
   auto pid = proc.pid();
 
   EXPECT_GT(pid, 0);
@@ -196,7 +196,7 @@ TEST(NewgroupTest, PidAccessorNoNewgroupNoProcessGroup) {
   auto my_pgid = getpgid(getpid());
   EXPECT_EQ(pgid, my_pgid);
 
-  auto exit_code = proc.wait_for_exit();
+  auto exit_code = proc.wait();
   EXPECT_EQ(exit_code, 0);
 }
 #endif  // !_WIN32

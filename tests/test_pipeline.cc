@@ -66,13 +66,13 @@ TEST(PipelineTest, ThreeProcessManualChain) {
   subprocess::detail::subprocess p3("findstr.exe"s, {"4"},
                                     $stdin<pipe2, $stdout> out);
 
-  p1.async_run();
-  p2.async_run();
-  p3.async_run();
+  p1.spawn();
+  p2.spawn();
+  p3.spawn();
 
-  auto r1 = p1.wait_for_exit();
-  auto r2 = p2.wait_for_exit();
-  auto r3 = p3.wait_for_exit();
+  auto r1 = p1.wait();
+  auto r2 = p2.wait();
+  auto r3 = p3.wait();
   ASSERT_EQ(r1, 0);
   ASSERT_EQ(r2, 0);
   ASSERT_EQ(r3, 0);
@@ -87,13 +87,13 @@ TEST(PipelineTest, ThreeProcessManualChain) {
                                     $stdin<pipe1, $stdout> pipe2);
   subprocess::detail::subprocess p3("grep", {"4"}, $stdin<pipe2, $stdout> out);
 
-  p1.async_run();
-  p2.async_run();
-  p3.async_run();
+  p1.spawn();
+  p2.spawn();
+  p3.spawn();
 
-  auto r1 = p1.wait_for_exit();
-  auto r2 = p2.wait_for_exit();
-  auto r3 = p3.wait_for_exit();
+  auto r1 = p1.wait();
+  auto r2 = p2.wait();
+  auto r3 = p3.wait();
   ASSERT_EQ(r1, 0);
   ASSERT_EQ(r2, 0);
   ASSERT_EQ(r3, 0);
@@ -433,10 +433,10 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
   subprocess::detail::subprocess p(
       "cmd.exe"s, {"/c"s, "echo single_pipe_test&exit /b 0"}, $stdout > pipe);
 
-  p.async_run();
+  p.spawn();
   buffer tmp;
   read_from_native_handle(pipe.rfd(), tmp);
-  p.wait_for_exit();
+  p.wait();
   ASSERT_EQ(tmp, "single_pipe_test\r\n");
 #else
   auto pipe = subprocess::detail::Pipe::create();
@@ -444,10 +444,10 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
   subprocess::detail::subprocess p("printf", {"single_pipe_test\\n"},
                                    $stdout > pipe);
 
-  p.async_run();
+  p.spawn();
   buffer tmp;
   read_from_native_handle(pipe.rfd(), tmp);
-  p.wait_for_exit();
+  p.wait();
   ASSERT_EQ(tmp, "single_pipe_test\n");
 #endif
 }
@@ -801,9 +801,9 @@ TEST(PipelineTest, ExplicitPipeClosedAfterUse) {
     subprocess::detail::subprocess p("printf", {"pipe_raii\\n"},
                                      $stdout > pipe);
 #endif
-    p.async_run();
+    p.spawn();
     read_from_native_handle(pipe.rfd(), captured);
-    p.wait_for_exit();
+    p.wait();
   }
 #if defined(_WIN32)
   ASSERT_EQ(captured, "pipe_raii\r\n");

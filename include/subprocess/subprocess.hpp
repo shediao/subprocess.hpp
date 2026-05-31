@@ -1195,10 +1195,6 @@ class Pipe {
     }
 #else
 #if defined(__linux__)
-    // Use pipe2 with O_CLOEXEC so that the pipe fds are automatically closed
-    // on exec(). This prevents child processes' grandchildren from inheriting
-    // the pipe write ends and keeping them open indefinitely, which would
-    // cause pump_pipe_data() to hang waiting for EOF.
     if (-1 == pipe2(fds, O_CLOEXEC)) {
       print_error("pipe2() failed");
       return;
@@ -1593,7 +1589,7 @@ inline std::vector<std::thread> read_write_to_buffer_with_threads(
 // hanging when the child's grandchildren inherit pipe fds and keep
 // them open after the direct child has exited.
 // If child_status is non-null and the child is reaped during polling,
-// the status is stored there so wait_for_exit() can retrieve it.
+// the status is stored there so wait() can retrieve it.
 [[maybe_unused]]
 inline void read_write_to_buffer_use_poll(
     std::optional<std::reference_wrapper<Buffer>> in,
@@ -2660,34 +2656,40 @@ class subprocess {
 #endif
   }
 
-  bool async_run() {
+  bool spawn() {
     prepare_for_child();
-
 #if defined(_WIN32)
-    return async_run_win();
+    bool success = spawn_win();
 #else
-    return async_run_posix();
+    bool success = spawn_posix();
 #endif  // !_WIN32
+    close_child_end();
+    if (success) {
+      pump_pipe_data();
+    }
+    return success;
   }
 
   bool detach_spawn() {
 #if defined(_WIN32)
-    return detach_spawn_win();
+    bool success = detach_spawn_win();
 #else
-    return detach_spawn_posix();
+    bool success = detach_spawn_posix();
 #endif  // !_WIN32
+    close_child_end();
+    return success;
   }
 
   int run() {
-    bool spawned = async_run();
+    bool spawned = spawn();
     if (!spawned) {
       return 127;
     }
-    return wait_for_exit();
+    return wait();
   }
 
 #if defined(_WIN32)
-  int wait_for_exit() {
+  int wait() {
     auto threads_guard =
         detail::make_scope_exit([this] { join_pump_threads(); });
     if (!process_handle_) {
@@ -2709,7 +2711,7 @@ class subprocess {
     return 127;
   }
 #else
-  int wait_for_exit() {
+  int wait() {
     auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
     if (!pid_) {
       return 127;
@@ -2721,9 +2723,6 @@ class subprocess {
         wait_ret = waitpid(pid_.get(), &status, 0);
       } while (wait_ret == -1 && errno == EINTR);
     } else {
-      // Child was already reaped by pump_pipe_data() when it detected
-      // the child exited while pipe fds were still held open by
-      // grandchildren.  Use the stored status.
       status = early_exit_status_;
     }
 
@@ -2777,7 +2776,7 @@ class subprocess {
     kill(kill_pid, SIGTERM);
     // Give the process group a short grace period to handle SIGTERM.
     // Use kill(pid, 0) to check liveness — unlike waitpid it does NOT
-    // reap the zombie, so wait_for_exit() can later retrieve the
+    // reap the zombie, so wait() can later retrieve the
     // correct exit status via its own blocking waitpid call.
     auto sigkill_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
@@ -2803,11 +2802,7 @@ class subprocess {
 #endif  // !_WIN32
 
 #if defined(_WIN32)
-  bool async_run_win() {
-    // Create a Job Object to manage the entire process tree.
-    // This allows the parent to terminate all child processes (e.g., when
-    // cmd.exe spawns ping.exe, terminating cmd.exe alone does not kill ping,
-    // and ping would keep stdout/stderr pipes open, blocking pump_pipe_data).
+  bool spawn_win() {
     if (!(*job_handle_)) {
       HANDLE hJob = CreateJobObjectW(NULL, NULL);
       if (hJob) {
@@ -2824,10 +2819,6 @@ class subprocess {
 
     startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
 
-    // Build explicit handle inheritance list so that the child only inherits
-    // the handles we explicitly specify, rather than all inheritable handles.
-    // std handles from GetStdHandle() are included to ensure proper
-    // inheritance when PROC_THREAD_ATTRIBUTE_HANDLE_LIST is active.
     std::vector<HANDLE> handles_to_inherit;
     auto add_unique_handle = [&](HANDLE h) {
       if (h == nullptr || h == INVALID_HANDLE_VALUE) {
@@ -2916,7 +2907,6 @@ class subprocess {
       if (*job_handle_) {
         AssignProcessToJobObject(job_handle_->get(), process_handle_.get());
       }
-      pump_pipe_data();
       return true;
     } else {
       print_error(get_last_error_message());
@@ -2954,7 +2944,7 @@ class subprocess {
     return false;
   }
 #else
-  bool async_run_posix() {
+  bool spawn_posix() {
     if (!requested_pgid_.has_value()) {
       File stdin_file{detail::named_args::devttyin, File::OpenType::ReadOnly};
       if (stdin_.inherit() && !stdin_file.fd().isatty()) {
@@ -2986,7 +2976,6 @@ class subprocess {
       }
 
       launch_watchdog();
-      pump_pipe_data();
     }
     return true;
   }
@@ -3035,26 +3024,20 @@ class subprocess {
     stdout_.prepare_for_child();
     stderr_.prepare_for_child();
   }
-  // parent pump data to/from child processes
-  void pump_pipe_data() {
+  void close_child_end() {
     stdin_.close_child_end();
     stdout_.close_child_end();
     stderr_.close_child_end();
-
+  }
+  // parent pump data to/from child processes
+  void pump_pipe_data() {
 #if defined(_WIN32)
     pump_threads_ = read_write_to_buffer_with_threads(
         stdin_.get_buffer(), stdout_.get_buffer(), stderr_.get_buffer());
 #else
-    // Pass the child pid so the poll loop can detect when the direct child
-    // exits. This prevents hanging indefinitely when the child's grandchildren
-    // inherit and hold open the write ends of stdout/stderr pipes.
-    // Also pass a pointer to early_exit_status_ so that if the child is
-    // reaped during polling, wait_for_exit() can retrieve the status.
     read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
                                   stderr_.get_buffer(), pid_.get(),
                                   &early_exit_status_);
-    // Check whether the child was reaped during the poll loop.  If it was,
-    // record that fact so wait_for_exit() can skip the waitpid call.
     {
       int status = 0;
       pid_t result;
@@ -3062,12 +3045,9 @@ class subprocess {
         result = ::waitpid(pid_.get(), &status, WNOHANG);
       } while (result == -1 && errno == EINTR);
       if (result > 0) {
-        // Child just exited — store status.
         early_exit_status_ = status;
         child_reaped_early_ = true;
       } else if (result == -1 && errno == ECHILD) {
-        // Child was already reaped inside read_write_to_buffer_use_poll,
-        // which stored the status via the child_status pointer.
         child_reaped_early_ = true;
       }
     }
@@ -3137,10 +3117,6 @@ class subprocess {
   unique_pid pid_{-1};
   unique_pid pgid_{-1};
   std::optional<pid_t> requested_pgid_{std::nullopt};
-  // When the child is reaped early by pump_pipe_data() (because it exited
-  // while the poll loop was still draining pipe data), the exit status is
-  // stored here so that wait_for_exit() can return it without calling
-  // waitpid() again on the already-reaped child.
   int early_exit_status_{0};
   bool child_reaped_early_{false};
 #endif
@@ -3180,7 +3156,7 @@ class pipeline {
         it->requested_pgid_ = subs_.begin()->pid();
       }
 #endif
-      if (!it->async_run()) {
+      if (!it->spawn()) {
         for (auto& p : pipes) {
           p.close_all();
         }
@@ -3188,7 +3164,7 @@ class pipeline {
       }
     }
     for (auto& sub : subs_) {
-      exit_codes_.push_back(sub.wait_for_exit());
+      exit_codes_.push_back(sub.wait());
     }
     return exit_codes_.back();
   }
