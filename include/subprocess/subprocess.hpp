@@ -865,7 +865,7 @@ inline std::optional<std::string> getenv(std::string const& name) {
 #endif
 
 #if defined(_WIN32)
-inline std::optional<std::wstring> find_command_in_path(
+inline std::optional<std::wstring> find_executable(
     std::wstring const& command, std::wstring const& cwd = {}) {
   auto search_path =
       [](std::wstring const& cmd,
@@ -950,8 +950,7 @@ inline std::optional<std::wstring> find_command_in_path(
   return std::nullopt;
 }
 #else   // _WIN32
-inline std::optional<std::string> find_command_in_path(
-    std::string_view exe_file) {
+inline std::optional<std::string> find_executable(std::string_view exe_file) {
   constexpr char path_env_sep = ':';
 
   if (exe_file.find_last_of('/') != std::string_view::npos) {
@@ -2308,7 +2307,7 @@ class Shell {
     } else if (auto system_root = detail::getenv(L"SystemRoot");
                system_root.has_value()) {
       ret.push_back(system_root.value() + L"\\System32\\cmd.exe");
-    } else if (auto cmd = find_command_in_path(L"cmd"); cmd.has_value()) {
+    } else if (auto cmd = find_executable(L"cmd"); cmd.has_value()) {
       ret.push_back(cmd.value());
     } else {
       ret.push_back(L"cmd.exe");
@@ -2875,7 +2874,7 @@ class subprocess {
       startup_info.lpAttributeList = attr_list;
     }
 
-    auto app_path = find_command_in_path(app_, cwd_);
+    auto app_path = find_executable(app_, cwd_);
 
     auto command = argv_to_command_line_string(app_, args_);
 
@@ -2921,7 +2920,7 @@ class subprocess {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
 
-    auto app_path = find_command_in_path(app_, cwd_);
+    auto app_path = find_executable(app_, cwd_);
     auto command = argv_to_command_line_string(app_, args_);
     auto env_block = create_environment_string_data(env_);
 
@@ -3069,7 +3068,7 @@ class subprocess {
     }
 
     std::string executable_path = app_;
-    const auto resolved_path = find_command_in_path(executable_path);
+    const auto resolved_path = find_executable(executable_path);
     if (resolved_path.has_value()) {
       executable_path = resolved_path.value();
     }
