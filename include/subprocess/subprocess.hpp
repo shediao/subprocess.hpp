@@ -2660,6 +2660,148 @@ class subprocess {
 #endif
   }
 
+  bool async_run() {
+    prepare_for_child();
+
+#if defined(_WIN32)
+    return async_run_win();
+#else
+    return async_run_posix();
+#endif  // !_WIN32
+  }
+
+  bool detach_spawn() {
+#if defined(_WIN32)
+    return detach_spawn_win();
+#else
+    return detach_spawn_posix();
+#endif  // !_WIN32
+  }
+
+  int run() {
+    bool spawned = async_run();
+    if (!spawned) {
+      return 127;
+    }
+    return wait_for_exit();
+  }
+
+#if defined(_WIN32)
+  int wait_for_exit() {
+    auto threads_guard =
+        detail::make_scope_exit([this] { join_pump_threads(); });
+    if (!process_handle_) {
+      return 127;
+    }
+    auto rc = WaitForSingleObject(
+        process_handle_.get(),
+        timeout_.has_value() ? static_cast<DWORD>(timeout_.value().count())
+                             : INFINITE);
+    if (rc == WAIT_OBJECT_0) {
+      DWORD ret{127};
+      GetExitCodeProcess(process_handle_.get(), &ret);
+      return static_cast<int>(ret);
+    }
+    if (rc == WAIT_TIMEOUT) {
+      terminate();  // close_all() unblocks I/O threads
+      return 127;
+    }
+    return 127;
+  }
+#else
+  int wait_for_exit() {
+    auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
+    if (!pid_) {
+      return 127;
+    }
+    int status = 0;
+    if (!child_reaped_early_) {
+      int wait_ret;
+      do {
+        wait_ret = waitpid(pid_.get(), &status, 0);
+      } while (wait_ret == -1 && errno == EINTR);
+    } else {
+      // Child was already reaped by pump_pipe_data() when it detected
+      // the child exited while pipe fds were still held open by
+      // grandchildren.  Use the stored status.
+      status = early_exit_status_;
+    }
+
+    auto return_code = -1;
+    if (WIFEXITED(status)) {
+      return_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+      return_code = 128 + (WTERMSIG(status));
+    }
+
+    pid_.reset(-1);
+    return return_code;
+  }
+#endif
+
+#if defined(_WIN32)
+  [[nodiscard]] NativeHandle pid() const { return process_handle_.get(); }
+#else
+  [[nodiscard]] pid_t pid() const { return pid_.get(); }
+#endif
+
+ private:
+  void terminate() {
+    auto close_all_guard = detail::make_scope_exit([this] {
+      stdin_.close_all();
+      stdout_.close_all();
+      stderr_.close_all();
+    });
+#if defined(_WIN32)
+    // Kill the process FIRST. This closes the child's inherited pipe handles,
+    // which unblocks any pump threads blocked on ReadFile. Only then is it
+    // safe to close our end of the pipes via close_all().
+    if (job_handle_ && *job_handle_) {
+      TerminateJobObject(job_handle_->get(), 1);
+      job_handle_->close();
+    } else if (process_handle_) {
+      TerminateProcess(process_handle_.get(), 1);
+    }
+#else
+    if (-1 == pid_) {
+      return;
+    }
+    // Only kill the entire process group when a group was explicitly
+    // created AND the child is the process group leader (pid == pgid).
+    // This prevents accidentally killing unrelated processes that may
+    // share the same process group.
+    auto kill_pid = pid_.get();
+    if ((-1 != pgid_) && pid_.get() == pgid_.get()) {
+      kill_pid = -pid_.get();
+    }
+    kill(kill_pid, SIGTERM);
+    // Give the process group a short grace period to handle SIGTERM.
+    // Use kill(pid, 0) to check liveness — unlike waitpid it does NOT
+    // reap the zombie, so wait_for_exit() can later retrieve the
+    // correct exit status via its own blocking waitpid call.
+    auto sigkill_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    while (std::chrono::steady_clock::now() < sigkill_deadline) {
+      if (kill(kill_pid, 0) != 0) {
+        return;  // all processes in the group have already exited
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    kill(kill_pid, SIGKILL);
+#endif
+  }
+
+#if !defined(_WIN32)
+  void launch_watchdog() {
+    if (!timeout_.has_value()) {
+      return;
+    }
+    watchdog_ = Timer::after([this]() { terminate(); }, *timeout_);
+  };
+
+  void stop_watchdog() { watchdog_.stop(); }
+#endif  // !_WIN32
+
 #if defined(_WIN32)
   bool async_run_win() {
     // Create a Job Object to manage the entire process tree.
@@ -2876,148 +3018,6 @@ class subprocess {
     return true;
   }
 #endif
-
-  bool async_run() {
-    prepare_for_child();
-
-#if defined(_WIN32)
-    return async_run_win();
-#else
-    return async_run_posix();
-#endif  // !_WIN32
-  }
-
-  bool detach_spawn() {
-#if defined(_WIN32)
-    return detach_spawn_win();
-#else
-    return detach_spawn_posix();
-#endif  // !_WIN32
-  }
-
-  int run() {
-    bool spawned = async_run();
-    if (!spawned) {
-      return 127;
-    }
-    return wait_for_exit();
-  }
-
-#if !defined(_WIN32)
-  void launch_watchdog() {
-    if (!timeout_.has_value()) {
-      return;
-    }
-    watchdog_ = Timer::after([this]() { terminate(); }, *timeout_);
-  };
-
-  void stop_watchdog() { watchdog_.stop(); }
-#endif  // !_WIN32
-
-#if defined(_WIN32)
-  int wait_for_exit() {
-    auto threads_guard =
-        detail::make_scope_exit([this] { join_pump_threads(); });
-    if (!process_handle_) {
-      return 127;
-    }
-    auto rc = WaitForSingleObject(
-        process_handle_.get(),
-        timeout_.has_value() ? static_cast<DWORD>(timeout_.value().count())
-                             : INFINITE);
-    if (rc == WAIT_OBJECT_0) {
-      DWORD ret{127};
-      GetExitCodeProcess(process_handle_.get(), &ret);
-      return static_cast<int>(ret);
-    }
-    if (rc == WAIT_TIMEOUT) {
-      terminate();  // close_all() unblocks I/O threads
-      return 127;
-    }
-    return 127;
-  }
-#else
-  int wait_for_exit() {
-    auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
-    if (!pid_) {
-      return 127;
-    }
-    int status = 0;
-    if (!child_reaped_early_) {
-      int wait_ret;
-      do {
-        wait_ret = waitpid(pid_.get(), &status, 0);
-      } while (wait_ret == -1 && errno == EINTR);
-    } else {
-      // Child was already reaped by pump_pipe_data() when it detected
-      // the child exited while pipe fds were still held open by
-      // grandchildren.  Use the stored status.
-      status = early_exit_status_;
-    }
-
-    auto return_code = -1;
-    if (WIFEXITED(status)) {
-      return_code = WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-      return_code = 128 + (WTERMSIG(status));
-    }
-
-    pid_.reset(-1);
-    return return_code;
-  }
-#endif
-
-#if defined(_WIN32)
-  [[nodiscard]] NativeHandle pid() const { return process_handle_.get(); }
-#else
-  [[nodiscard]] pid_t pid() const { return pid_.get(); }
-#endif
-
- private:
-  void terminate() {
-    auto close_all_guard = detail::make_scope_exit([this] {
-      stdin_.close_all();
-      stdout_.close_all();
-      stderr_.close_all();
-    });
-#if defined(_WIN32)
-    // Kill the process FIRST. This closes the child's inherited pipe handles,
-    // which unblocks any pump threads blocked on ReadFile. Only then is it
-    // safe to close our end of the pipes via close_all().
-    if (job_handle_ && *job_handle_) {
-      TerminateJobObject(job_handle_->get(), 1);
-      job_handle_->close();
-    } else if (process_handle_) {
-      TerminateProcess(process_handle_.get(), 1);
-    }
-#else
-    if (-1 == pid_) {
-      return;
-    }
-    // Only kill the entire process group when a group was explicitly
-    // created AND the child is the process group leader (pid == pgid).
-    // This prevents accidentally killing unrelated processes that may
-    // share the same process group.
-    auto kill_pid = pid_.get();
-    if ((-1 != pgid_) && pid_.get() == pgid_.get()) {
-      kill_pid = -pid_.get();
-    }
-    kill(kill_pid, SIGTERM);
-    // Give the process group a short grace period to handle SIGTERM.
-    // Use kill(pid, 0) to check liveness — unlike waitpid it does NOT
-    // reap the zombie, so wait_for_exit() can later retrieve the
-    // correct exit status via its own blocking waitpid call.
-    auto sigkill_deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-    while (std::chrono::steady_clock::now() < sigkill_deadline) {
-      if (kill(kill_pid, 0) != 0) {
-        return;  // all processes in the group have already exited
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    kill(kill_pid, SIGKILL);
-#endif
-  }
 
 #if defined(_WIN32)
   void join_pump_threads() {
