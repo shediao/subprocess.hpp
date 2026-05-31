@@ -443,3 +443,428 @@ TEST(ShellCommandTest, ShellRunEmptyOutput) {
   // Output should be empty or contain only whitespace/newlines
   // ($shell with no echo produces empty stdout)
 }
+
+// Helper: skip if bash returned non-zero (likely not available)
+static bool is_bash_available() {
+  int ret = run(subprocess::named_arguments::bash, "exit 0");
+  return ret == 0;
+}
+
+// ===========================================================================
+// Complex shell commands — double quotes, special characters, functions
+// ===========================================================================
+
+// --- Bash: double quotes with variable expansion ---
+
+TEST(ShellCommandTest, BashDoubleQuotesWithVarExpansion) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash, "FOO='hello world'; echo \"$FOO\"", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "hello world\n");
+}
+
+TEST(ShellCommandTest, BashEscapedDoubleQuotesInsideString) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash, "echo \"quoted string with spaces\"", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "quoted string with spaces\n");
+}
+
+TEST(ShellCommandTest, BashSingleQuotesLiteral) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  // Single quotes prevent expansion: $HOME is literal
+  int ret = run($bash, "echo 'literal $HOME'", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "literal $HOME\n");
+}
+
+// --- Bash: function definition and call ---
+
+TEST(ShellCommandTest, BashFunctionDefinitionSimple) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "myfunc() { echo -n 'called'; }; myfunc",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "called");
+}
+
+TEST(ShellCommandTest, BashFunctionWithArguments) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "greet() { echo -n \"Hello, $1!\"; }; greet World",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "Hello, World!");
+}
+
+TEST(ShellCommandTest, BashFunctionWithReturnValue) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  int ret = run($bash,
+                "is_even() { return $(($1 % 2)); }; is_even 42");
+  ASSERT_EQ(ret, 0);
+
+  ret = run($bash,
+            "is_even() { return $(($1 % 2)); }; is_even 7");
+  ASSERT_EQ(ret, 1);
+}
+
+TEST(ShellCommandTest, BashFunctionCallingAnotherFunction) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "get_msg() { echo -n 'nested call'; };"
+                " outer() { echo -n \"[$1]\"; };"
+                " outer \"$(get_msg)\"",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "[nested call]");
+}
+
+// --- Bash: special characters ---
+
+TEST(ShellCommandTest, BashCommandSubstitution) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash, "echo -n $(echo inner)", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "inner");
+}
+
+TEST(ShellCommandTest, BashArithmeticExpansion) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash, "echo -n $((3 * 7 + 1))", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "22");
+}
+
+TEST(ShellCommandTest, BashBackslashEscapes) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "echo -ne 'tab:\\t newline:\\n backslash:\\\\'",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "tab:\t newline:\n backslash:\\");
+}
+
+TEST(ShellCommandTest, BashPipeChainWithSpecialChars) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "echo -n 'a b c d e' | tr ' ' '|' | tr 'a-z' 'A-Z'",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "A|B|C|D|E");
+}
+
+TEST(ShellCommandTest, BashRedirectStderrToStdout) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  // Redirect stderr (fd 2) to stdout (fd 1) within the shell command itself.
+  // The 2>&1 merges both streams before they reach separate pipes,
+  // so all output appears on stdout.
+  int ret = run($bash,
+                "exec 2>&1; echo -n to_out; echo -n to_err >&2",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "to_outto_err");
+}
+
+// --- Bash: loops ---
+
+TEST(ShellCommandTest, BashForLoop) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "for i in 1 2 3; do echo -n \"$i \"; done",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "1 2 3 ");
+}
+
+TEST(ShellCommandTest, BashWhileLoop) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "i=0; while [ $i -lt 3 ]; do echo -n \"$i \"; i=$((i+1)); done",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "0 1 2 ");
+}
+
+// --- Bash: complex one-liners ---
+
+TEST(ShellCommandTest, BashIfElseConditional) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "if [ 5 -gt 3 ]; then echo -n yes; else echo -n no; fi",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "yes");
+}
+
+TEST(ShellCommandTest, BashCaseStatement) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "x='two'; case $x in one) echo -n 1;; two) echo -n 2;; *) echo -n x;; esac",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "2");
+}
+
+TEST(ShellCommandTest, BashHereStringIntoGrep) {
+  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  buffer out;
+  int ret = run($bash,
+                "grep -o world <<< 'hello world'",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "world\n");
+}
+
+// ===========================================================================
+// Complex CMD commands — special characters, variables, subroutines
+// ===========================================================================
+
+TEST(ShellCommandTest, CmdDoubleQuotesWithAmpersand) {
+#if defined(_WIN32)
+  buffer out;
+  // Double quotes protect the & from being interpreted as command separator
+  int ret = run($shell, "echo \"hello & world\"", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "\"hello & world\"\r\n");
+#else
+  GTEST_SKIP() << "cmd.exe is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, CmdPercentVariableExpansion) {
+#if defined(_WIN32)
+  buffer out;
+  // In cmd /c mode, %FOO% is expanded at parse time (before set runs).
+  // Use 'set FOO' (without value) to display the variable instead.
+  int ret = run($shell, "set FOO=hello_cmd_var & set FOO", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("FOO=hello_cmd_var") != std::string::npos);
+#else
+  GTEST_SKIP() << "cmd.exe is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, CmdIfElseConditional) {
+#if defined(_WIN32)
+  buffer out;
+  // cmd supports if/else blocks with parentheses
+  int ret = run($shell,
+                "if 1==1 (echo yes_branch) else (echo no_branch)",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("yes_branch") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("no_branch") == std::string::npos);
+#else
+  GTEST_SKIP() << "cmd.exe is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, CmdForLoopCounting) {
+#if defined(_WIN32)
+  buffer out;
+  int ret = run($shell, "for /L %i in (1,1,3) do @echo %i", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "1\r\n2\r\n3\r\n");
+#else
+  GTEST_SKIP() << "cmd.exe is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, CmdErrorlevelPropagation) {
+#if defined(_WIN32)
+  int ret = run($shell, "(call) & exit /b 99");
+  ASSERT_EQ(ret, 99);
+
+  ret = run($shell, "ver >nul & exit /b %errorlevel%");
+  ASSERT_EQ(ret, 0);
+#else
+  GTEST_SKIP() << "cmd.exe is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, CmdVariableInNestedExpansion) {
+#if defined(_WIN32)
+  buffer out;
+  // In cmd /c, variables set earlier in the line are available via call echo
+  // because call triggers a second parse pass.
+  int ret = run($shell, "set X=inner_value & call echo %X%", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  // %X% is expanded on the second parse triggered by 'call'
+  ASSERT_TRUE(out.to_string().find("inner_value") != std::string::npos);
+#else
+  GTEST_SKIP() << "cmd.exe is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, CmdConditionalExecution) {
+#if defined(_WIN32)
+  buffer out;
+  // && means execute next only if previous succeeded
+  int ret = run($shell,
+                "echo success_msg && echo also_ran",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("success_msg") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("also_ran") != std::string::npos);
+
+  // || means execute next only if previous failed
+  // 'find' with a non-matching string returns errorlevel 1
+  out.clear();
+  ret = run($shell,
+            "echo test | findstr /c:nomatch >nul || echo previous_failed",
+            $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("previous_failed") != std::string::npos);
+#else
+  GTEST_SKIP() << "cmd.exe is Windows-only";
+#endif
+}
+
+// ===========================================================================
+// Complex PowerShell commands — functions, script blocks, pipelines
+// ===========================================================================
+
+TEST(ShellCommandTest, PowerShellFunctionDefinition) {
+#if defined(_WIN32)
+  buffer out;
+  int ret = run(powershell,
+                "function Test-Func { param($Name) \"Hello, $Name!\" }; Test-Func -Name World",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("Hello, World!") != std::string::npos);
+#else
+  GTEST_SKIP() << "powershell is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, PowerShellScriptBlock) {
+#if defined(_WIN32)
+  buffer out;
+  int ret = run(powershell,
+                "& { param($x) $x * $x } 7",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("49") != std::string::npos);
+#else
+  GTEST_SKIP() << "powershell is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, PowerShellPipelineWithWhere) {
+#if defined(_WIN32)
+  buffer out;
+  int ret = run(powershell,
+                "1,2,3,4,5 | Where-Object { $_ -gt 3 } | ForEach-Object { Write-Output $_ }",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("4") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("5") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("3") == std::string::npos);
+#else
+  GTEST_SKIP() << "powershell is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, PowerShellHereString) {
+#if defined(_WIN32)
+  buffer out;
+  // PowerShell here-string: @' ... '@ must have content on separate lines.
+  // Use embedded newlines (backtick-n) in a regular string for single-line
+  // commands, or use a verbatim string with actual newlines.
+  int ret = run(powershell,
+                "$msg = \"double-quoted`nmulti-line`nstring\"; Write-Output $msg",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("double-quoted") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("multi-line") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("string") != std::string::npos);
+#else
+  GTEST_SKIP() << "powershell is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, PowerShellErrorActionPreference) {
+#if defined(_WIN32)
+  buffer out, err;
+  int ret = run(powershell,
+                "$ErrorActionPreference = 'Stop'; try { Get-Item nonexistent_path } catch { Write-Output 'caught' }",
+                $stdout > out, $stderr > err);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("caught") != std::string::npos);
+#else
+  GTEST_SKIP() << "powershell is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, PowerShellSpecialCharactersInString) {
+#if defined(_WIN32)
+  buffer out;
+  int ret = run(powershell,
+                "Write-Output 'dollar$sign backtick`n newline ampersand& pipe|'",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("dollar$sign") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("ampersand&") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("pipe|") != std::string::npos);
+#else
+  GTEST_SKIP() << "powershell is Windows-only";
+#endif
+}
+
+TEST(ShellCommandTest, PowerShellCalculatedProperty) {
+#if defined(_WIN32)
+  buffer out;
+  int ret = run(powershell,
+                "[PSCustomObject]@{Name='test';Value=42} | Select-Object Name,Value",
+                $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("test") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("42") != std::string::npos);
+#else
+  GTEST_SKIP() << "powershell is Windows-only";
+#endif
+}
+
+// ===========================================================================
+// Cross-shell: mixed stdout/stderr with complex content
+// ===========================================================================
+
+TEST(ShellCommandTest, ComplexMixedStdoutStderr) {
+#if defined(_WIN32)
+  buffer out, err;
+  // cmd: odd numbers to stdout, even to stderr
+  int ret = run($shell,
+                "(echo 1 & echo 2 >&2 & echo 3 & echo 4 >&2 & echo 5) & exit /b 0",
+                $stdout > out, $stderr > err);
+  ASSERT_EQ(ret, 0);
+  ASSERT_TRUE(out.to_string().find("1") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("3") != std::string::npos);
+  ASSERT_TRUE(out.to_string().find("5") != std::string::npos);
+  ASSERT_FALSE(err.empty());
+#else
+  buffer out, err;
+  // bash: odd numbers to stdout, even to stderr
+  int ret = run($shell,
+                "for i in 1 2 3 4 5; do if [ $((i%2)) -eq 0 ]; then echo -n $i >&2; else echo -n $i; fi; done",
+                $stdout > out, $stderr > err);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "135");
+  ASSERT_EQ(err, "24");
+#endif
+}

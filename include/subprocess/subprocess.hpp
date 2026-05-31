@@ -644,7 +644,7 @@ inline void append_windows_arg(std::vector<wchar_t>& cmd,
   cmd.push_back(L'"');
 }
 
-inline std::vector<wchar_t> argv_to_command_line_string(
+inline std::vector<wchar_t> argv_to_command_line(
     std::wstring app, std::vector<std::basic_string<wchar_t>> const& args) {
   std::vector<wchar_t> command;
 
@@ -668,6 +668,36 @@ inline std::vector<wchar_t> argv_to_command_line_string(
     } else {
       append_windows_arg(command, *it);
     }
+  }
+  command.push_back(L'\0');
+  return command;
+}
+
+inline std::vector<wchar_t> argv_to_command_line_for_cmd(
+    std::wstring app, std::vector<std::basic_string<wchar_t>> const& args) {
+  std::vector<wchar_t> command;
+
+  append_windows_arg(command, app);
+
+  auto it = args.begin();
+  while (it != args.end()) {
+    if (!it->empty() && (*it)[0] == L'/') {
+      command.push_back(L' ');
+      command.insert(command.end(), it->begin(), it->end());
+      ++it;
+      continue;
+    }
+    break;
+  }
+  if (it != args.end()) {
+    command.push_back(L' ');
+    command.push_back(L'"');
+    command.insert(command.end(), it->begin(), it->end());
+    while (++it != args.end()) {
+      command.push_back(L' ');
+      command.insert(command.end(), it->begin(), it->end());
+    }
+    command.push_back(L'"');
   }
   command.push_back(L'\0');
   return command;
@@ -2265,38 +2295,57 @@ struct env_operator {
 
 class Shell {
  public:
+#if defined(_WIN32)
+  using argv_to_command_line_fn_ptr =
+      std::vector<wchar_t> (*)(std::wstring, std::vector<std::wstring> const&);
+#endif
   NativeString shell_cmd() const {
-    auto cmds = default_shell_cmds_fn();
+    auto cmds = shell_prefix_commands();
     return cmds[0];
   }
   std::vector<NativeString> shell_args() const {
-    auto cmds = default_shell_cmds_fn();
+    auto cmds = shell_prefix_commands();
     cmds.erase(cmds.begin());
     return cmds;
   }
+
 #if defined(_WIN32)
+  argv_to_command_line_fn_ptr argv_to_command_line_func() {
+    return nullptr == argv_to_command_line_fn ? &detail::argv_to_command_line
+                                              : argv_to_command_line_fn;
+  }
+#endif
+#if defined(_WIN32)
+  constexpr Shell cmd() const {
+    Shell shell;
+    shell.shell_prefix_commands = &Shell::cmd_cmds;
+    shell.argv_to_command_line_fn = &detail::argv_to_command_line_for_cmd;
+    return shell;
+  }
+  constexpr static Shell Cmd() { return Shell().cmd(); }
+
   constexpr Shell powershell() const {
     Shell shell;
-    shell.default_shell_cmds_fn = &Shell::powershell_cmds;
+    shell.shell_prefix_commands = &Shell::powershell_cmds;
     return shell;
   }
   constexpr static Shell Powershell() { return Shell().powershell(); }
+#else
+  constexpr Shell sh() const {
+    Shell shell;
+    shell.shell_prefix_commands = &Shell::sh_cmds;
+    return shell;
+  }
+  constexpr static Shell Sh() { return Shell().sh(); }
 #endif
   constexpr Shell bash() const {
     Shell shell;
-    shell.default_shell_cmds_fn = &Shell::bash_cmds;
+    shell.shell_prefix_commands = &Shell::bash_cmds;
     return shell;
   }
   constexpr static Shell Bash() { return Shell().bash(); }
 
  private:
-  static std::vector<NativeString> default_shell_cmds() {
-#if defined(_WIN32)
-    return cmd_cmds();
-#else
-    return shell_cmds();
-#endif
-  }
 #if defined(_WIN32)
   static std::vector<NativeString> cmd_cmds() {
     std::vector<NativeString> ret;
@@ -2312,20 +2361,14 @@ class Shell {
     } else {
       ret.push_back(L"cmd.exe");
     }
+    ret.push_back(L"/d");
+    ret.push_back(L"/s");
     ret.push_back(L"/c");
     return ret;
   }
 #else
-  static std::vector<NativeString> shell_cmds() {
-    std::vector<NativeString> ret;
-    auto* shell = std::getenv("SHELL");
-    if (shell != nullptr) {
-      ret.push_back(shell);
-    } else {
-      ret.push_back("/bin/sh");
-    }
-    ret.push_back("-c");
-    return ret;
+  static std::vector<NativeString> sh_cmds() {
+    return std::vector<NativeString>{"/bin/sh", "-c"};
   }
 #endif
 
@@ -2343,8 +2386,12 @@ class Shell {
     return std::vector<NativeString>{L"powershell", L"-NoProfile", L"-Command"};
   }
 #endif
-  std::vector<NativeString> (*default_shell_cmds_fn)() =
-      &Shell::default_shell_cmds;
+  std::vector<NativeString> (*shell_prefix_commands)() = nullptr;
+
+#if defined(_WIN32)
+  argv_to_command_line_fn_ptr argv_to_command_line_fn = nullptr;
+#endif
+  Shell() = default;
 };
 
 namespace named_args {
@@ -2353,11 +2400,13 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static auto devttyout = Device{L"CONOUT$"};
 [[maybe_unused]] inline constexpr static auto devttyin = Device{L"CONIN$"};
 [[maybe_unused]] inline constexpr static Shell powershell = Shell::Powershell();
+[[maybe_unused]] inline constexpr static Shell shell{Shell::Cmd()};
 #else
 [[maybe_unused]] inline constexpr static auto devnull = Device{"/dev/null"};
 [[maybe_unused]] inline constexpr static auto devtty = Device{"/dev/tty"};
 [[maybe_unused]] inline constexpr static auto devttyout = devtty;
 [[maybe_unused]] inline constexpr static auto devttyin = devtty;
+[[maybe_unused]] inline constexpr static Shell shell{Shell::Sh()};
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector std_in;
 [[maybe_unused]] inline constexpr static stdout_redirector std_out;
@@ -2367,15 +2416,16 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static timeout_operator timeout;
 [[maybe_unused]] inline constexpr static int timeout_infinite = INT_MAX;
 [[maybe_unused]] inline constexpr static newgroup_operator newgroup;
-[[maybe_unused]] inline constexpr static Shell shell;
 [[maybe_unused]] inline constexpr static Shell bash{Shell::Bash()};
 
 #if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
 #if defined(_WIN32)
 [[maybe_unused]] inline constexpr static Shell $powershell =
     Shell::Powershell();
+[[maybe_unused]] inline constexpr static Shell $shell{Shell::Cmd()};
 #else
 [[maybe_unused]] inline constexpr static auto $devtty = devtty;
+[[maybe_unused]] inline constexpr static Shell $shell{Shell::Sh()};
 #endif
 [[maybe_unused]] inline constexpr static auto $devnull = devnull;
 [[maybe_unused]] inline constexpr static auto $devttyout = devttyout;
@@ -2388,7 +2438,6 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static timeout_operator $timeout;
 [[maybe_unused]] inline constexpr static int $timeout_infinite = INT_MAX;
 [[maybe_unused]] inline constexpr static newgroup_operator $newgroup;
-[[maybe_unused]] inline constexpr static Shell $shell;
 [[maybe_unused]] inline constexpr static Shell $bash{Shell::Bash()};
 #endif
 }  // namespace named_args
@@ -2622,7 +2671,11 @@ class subprocess {
               ret.emplace_back(std::move(command));
               return ret;
             }(std::move(command)),
-            std::forward<Args>(named_args)...) {}
+            std::forward<Args>(named_args)...) {
+#if defined(_WIN32)
+    this->argv_to_command_line_fn = shell.argv_to_command_line_func();
+#endif
+  }
 
 #if defined(_WIN32)
   template <named_argument_type... T>
@@ -2876,7 +2929,7 @@ class subprocess {
 
     auto app_path = find_executable(app_, cwd_);
 
-    auto command = argv_to_command_line_string(app_, args_);
+    auto command = argv_to_command_line_fn(app_, args_);
 
     auto env_block = create_environment_string_data(env_);
 
@@ -2921,7 +2974,7 @@ class subprocess {
     si.cb = sizeof(si);
 
     auto app_path = find_executable(app_, cwd_);
-    auto command = argv_to_command_line_string(app_, args_);
+    auto command = argv_to_command_line_fn(app_, args_);
     auto env_block = create_environment_string_data(env_);
 
     PROCESS_INFORMATION pi{};
@@ -3111,6 +3164,9 @@ class subprocess {
   std::vector<unsigned char> proc_thread_attr_list_;
   std::vector<std::thread> pump_threads_;
   bool newgroup_{false};
+  std::vector<wchar_t> (*argv_to_command_line_fn)(
+      std::wstring,
+      std::vector<std::wstring> const&) = &detail::argv_to_command_line;
 #else
   detail::Timer watchdog_;
   unique_pid pid_{-1};
