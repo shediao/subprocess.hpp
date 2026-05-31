@@ -1102,11 +1102,26 @@ class Timer {
 #pragma warning(pop)
 #endif
 
+class Readable {
+ public:
+  virtual ~Readable() = default;
+  virtual ssize_t read(void* data, size_t size) = 0;
+};
+
+class Writable {
+ public:
+  virtual ~Writable() = default;
+  virtual ssize_t write(void const* data, size_t size) = 0;
+};
+
 struct Device {
   NativeStringView name_;
 };
 
 class Pipe {
+  friend class PipeReader;
+  friend class PipeWriter;
+
  public:
   Pipe(Pipe&& other) = default;
   Pipe& operator=(Pipe&& other) = default;
@@ -1210,6 +1225,54 @@ class Pipe {
     pair.wfd_.reset(fds[1]);
   }
   std::shared_ptr<pipe_pair> pair_{std::make_shared<pipe_pair>()};
+};
+
+class PipeReader : public Readable {
+ public:
+  PipeReader() = default;
+  ~PipeReader() override = default;
+  explicit PipeReader(Pipe& pipe) : pair_(pipe.pair_) {}
+
+  PipeReader(PipeReader const& pipe) = delete;
+  PipeReader& operator=(PipeReader const&) = delete;
+
+  PipeReader(PipeReader&& other) = default;
+  PipeReader& operator=(PipeReader&& other) = default;
+
+  ssize_t read(void* data, size_t size) override {
+    if (!pair_) {
+      throw std::runtime_error("Invalid pipe");
+    }
+    return detail::read_some(pair_->rfd_, data, size);
+  }
+
+ private:
+  std::shared_ptr<Pipe::pipe_pair> pair_;
+};
+
+class PipeWriter : public Writable {
+ public:
+  PipeWriter() = default;
+  ~PipeWriter() override = default;
+  explicit PipeWriter(Pipe& pipe) : pair_(pipe.pair_) {}
+
+  PipeWriter(PipeWriter const& pipe) = delete;
+  PipeWriter& operator=(PipeWriter const&) = delete;
+
+  PipeWriter(PipeWriter&& other) = default;
+  PipeWriter& operator=(PipeWriter&& other) = default;
+
+  ssize_t write(void const* data, size_t size) override {
+    if (!pair_) {
+      throw std::runtime_error("Invalid pipe");
+    }
+    return detail::write_some(pair_->wfd_, data, size);
+  }
+
+  void close() { pair_->wfd_.close(); }
+
+ private:
+  std::shared_ptr<Pipe::pipe_pair> pair_;
 };
 
 class File {
