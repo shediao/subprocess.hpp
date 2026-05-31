@@ -2331,12 +2331,12 @@ class Shell {
   }
   constexpr static Shell Powershell() { return Shell().powershell(); }
 #else
-  constexpr Shell sh() const {
+  constexpr Shell posix() const {
     Shell shell;
     shell.shell_prefix_commands = &Shell::sh_cmds;
     return shell;
   }
-  constexpr static Shell Sh() { return Shell().sh(); }
+  constexpr static Shell Posix() { return Shell().posix(); }
 #endif
   constexpr Shell bash() const {
     Shell shell;
@@ -2406,7 +2406,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static auto devtty = Device{"/dev/tty"};
 [[maybe_unused]] inline constexpr static auto devttyout = devtty;
 [[maybe_unused]] inline constexpr static auto devttyin = devtty;
-[[maybe_unused]] inline constexpr static Shell shell{Shell::Sh()};
+[[maybe_unused]] inline constexpr static Shell shell{Shell::Posix()};
 #endif
 [[maybe_unused]] inline constexpr static stdin_redirector std_in;
 [[maybe_unused]] inline constexpr static stdout_redirector std_out;
@@ -2425,7 +2425,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static Shell $shell{Shell::Cmd()};
 #else
 [[maybe_unused]] inline constexpr static auto $devtty = devtty;
-[[maybe_unused]] inline constexpr static Shell $shell{Shell::Sh()};
+[[maybe_unused]] inline constexpr static Shell $shell{Shell::Posix()};
 #endif
 [[maybe_unused]] inline constexpr static auto $devnull = devnull;
 [[maybe_unused]] inline constexpr static auto $devttyout = devttyout;

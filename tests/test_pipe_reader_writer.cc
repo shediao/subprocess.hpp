@@ -578,7 +578,8 @@ TEST(PipeReaderWriterTest, ReadFromStdout) {
   subprocess::detail::subprocess proc($shell, "<nul set /p=hello&exit /b 0",
                                       $stdout > pipe);
 #else
-  subprocess::detail::subprocess proc($shell, "echo -n hello", $stdout > pipe);
+  subprocess::detail::subprocess proc($shell, "printf '%s' hello",
+                                      $stdout > pipe);
 #endif
   proc.spawn();
 

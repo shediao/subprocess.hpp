@@ -96,7 +96,7 @@ TEST(ShellCommandTest, StdoutCaptureBash) {
 #if defined(_WIN32)
   int ret = run($shell, "echo hello_shell", $stdout > out);
 #else
-  int ret = run($shell, "echo -n hello_shell", $stdout > out);
+  int ret = run($shell, "printf '%s' hello_shell", $stdout > out);
 #endif
   ASSERT_EQ(ret, 0);
 #if defined(_WIN32)
@@ -141,7 +141,7 @@ TEST(ShellCommandTest, StderrCaptureBash) {
 #if defined(_WIN32)
   int ret = run($shell, "echo error_text >&2", $stderr > err);
 #else
-  int ret = run($shell, "echo -n error_text >&2", $stderr > err);
+  int ret = run($shell, "printf '%s' error_text >&2", $stderr > err);
 #endif
   ASSERT_EQ(ret, 0);
   ASSERT_FALSE(err.empty());
@@ -168,7 +168,7 @@ TEST(ShellCommandTest, CaptureRunBash) {
       $shell, "(echo stdout_text & echo stderr_text >&2) & exit /b 5");
 #else
   auto [exit_code, out, err] = capture_run(
-      $shell, "echo -n stdout_text; echo -n stderr_text >&2; exit 5");
+      $shell, "printf '%s' stdout_text; printf '%s' stderr_text >&2; exit 5");
 #endif
   ASSERT_EQ(exit_code, 5);
 #if defined(_WIN32)
@@ -205,7 +205,7 @@ TEST(ShellCommandTest, ShellRunWithEnv) {
   ASSERT_EQ(out, "env_value_from_shell\r\n");
 #else
   int ret =
-      run($shell, "echo -n $SHELL_TEST_VAR",
+      run($shell, "printf '%s' \"$SHELL_TEST_VAR\"",
           $env = {{"SHELL_TEST_VAR", "env_value_from_shell"}}, $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "env_value_from_shell");
@@ -218,7 +218,7 @@ TEST(ShellCommandTest, ShellRunWithEnvAppend) {
   int ret = run($shell, "echo %PATH%",
                 $env += {{"SHELL_APPEND_VAR", "appended_val"}}, $stdout > out);
 #else
-  int ret = run($shell, "echo -n $SHELL_APPEND_VAR",
+  int ret = run($shell, "printf '%s' \"$SHELL_APPEND_VAR\"",
                 $env += {{"SHELL_APPEND_VAR", "appended_val"}}, $stdout > out);
 #endif
   ASSERT_EQ(ret, 0);
@@ -294,7 +294,7 @@ TEST(ShellCommandTest, ShellRunStderrToDevnull) {
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "visible \r\n");
 #else
-  int ret = run($shell, "echo -n visible; echo hidden >&2; exit 0",
+  int ret = run($shell, "printf '%s' visible; echo hidden >&2; exit 0",
                 $stdout > out, $stderr > $devnull);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "visible");
@@ -323,7 +323,7 @@ TEST(ShellCommandTest, VariadicShellCaptureRun) {
   ASSERT_EQ(out, "variadic_capture \r\n");
 #else
   auto [exit_code, out, err] =
-      capture_run($shell, "echo -n variadic_capture; exit 88");
+      capture_run($shell, "printf '%s' variadic_capture; exit 88");
   ASSERT_EQ(exit_code, 88);
   ASSERT_EQ(out, "variadic_capture");
 #endif
@@ -373,7 +373,7 @@ TEST(ShellCommandTest, ShellRunMultiLineCommand) {
   ASSERT_EQ(out, "line1 \r\nline2 \r\nline3\r\n");
 #else
   int ret =
-      run($shell, "echo -e 'line1\\nline2\\nline3'; exit 0", $stdout > out);
+      run($shell, "printf 'line1\\nline2\\nline3\\n'; exit 0", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "line1\nline2\nline3\n");
 #endif
@@ -405,7 +405,7 @@ TEST(ShellCommandTest, ShellCaptureBothStdoutAndStderr) {
   ASSERT_EQ(out, "to_out \r\n");
   ASSERT_FALSE(err.empty());
 #else
-  int ret = run($shell, "echo -n to_out; echo -n to_err >&2; exit 0",
+  int ret = run($shell, "printf '%s' to_out; printf '%s' to_err >&2; exit 0",
                 $stdout > out, $stderr > err);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "to_out");
@@ -457,7 +457,9 @@ static bool is_bash_available() {
 // --- Bash: double quotes with variable expansion ---
 
 TEST(ShellCommandTest, BashDoubleQuotesWithVarExpansion) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   int ret = run($bash, "FOO='hello world'; echo \"$FOO\"", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -465,7 +467,9 @@ TEST(ShellCommandTest, BashDoubleQuotesWithVarExpansion) {
 }
 
 TEST(ShellCommandTest, BashEscapedDoubleQuotesInsideString) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   int ret = run($bash, "echo \"quoted string with spaces\"", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -473,7 +477,9 @@ TEST(ShellCommandTest, BashEscapedDoubleQuotesInsideString) {
 }
 
 TEST(ShellCommandTest, BashSingleQuotesLiteral) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   // Single quotes prevent expansion: $HOME is literal
   int ret = run($bash, "echo 'literal $HOME'", $stdout > out);
@@ -484,38 +490,41 @@ TEST(ShellCommandTest, BashSingleQuotesLiteral) {
 // --- Bash: function definition and call ---
 
 TEST(ShellCommandTest, BashFunctionDefinitionSimple) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
-  int ret = run($bash,
-                "myfunc() { echo -n 'called'; }; myfunc",
-                $stdout > out);
+  int ret = run($bash, "myfunc() { echo -n 'called'; }; myfunc", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "called");
 }
 
 TEST(ShellCommandTest, BashFunctionWithArguments) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
-  int ret = run($bash,
-                "greet() { echo -n \"Hello, $1!\"; }; greet World",
+  int ret = run($bash, "greet() { echo -n \"Hello, $1!\"; }; greet World",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "Hello, World!");
 }
 
 TEST(ShellCommandTest, BashFunctionWithReturnValue) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
-  int ret = run($bash,
-                "is_even() { return $(($1 % 2)); }; is_even 42");
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
+  int ret = run($bash, "is_even() { return $(($1 % 2)); }; is_even 42");
   ASSERT_EQ(ret, 0);
 
-  ret = run($bash,
-            "is_even() { return $(($1 % 2)); }; is_even 7");
+  ret = run($bash, "is_even() { return $(($1 % 2)); }; is_even 7");
   ASSERT_EQ(ret, 1);
 }
 
 TEST(ShellCommandTest, BashFunctionCallingAnotherFunction) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   int ret = run($bash,
                 "get_msg() { echo -n 'nested call'; };"
@@ -529,7 +538,9 @@ TEST(ShellCommandTest, BashFunctionCallingAnotherFunction) {
 // --- Bash: special characters ---
 
 TEST(ShellCommandTest, BashCommandSubstitution) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   int ret = run($bash, "echo -n $(echo inner)", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -537,7 +548,9 @@ TEST(ShellCommandTest, BashCommandSubstitution) {
 }
 
 TEST(ShellCommandTest, BashArithmeticExpansion) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   int ret = run($bash, "echo -n $((3 * 7 + 1))", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -545,33 +558,36 @@ TEST(ShellCommandTest, BashArithmeticExpansion) {
 }
 
 TEST(ShellCommandTest, BashBackslashEscapes) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
-  int ret = run($bash,
-                "echo -ne 'tab:\\t newline:\\n backslash:\\\\'",
+  int ret = run($bash, "echo -ne 'tab:\\t newline:\\n backslash:\\\\'",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "tab:\t newline:\n backslash:\\");
 }
 
 TEST(ShellCommandTest, BashPipeChainWithSpecialChars) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
-  int ret = run($bash,
-                "echo -n 'a b c d e' | tr ' ' '|' | tr 'a-z' 'A-Z'",
+  int ret = run($bash, "echo -n 'a b c d e' | tr ' ' '|' | tr 'a-z' 'A-Z'",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "A|B|C|D|E");
 }
 
 TEST(ShellCommandTest, BashRedirectStderrToStdout) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   // Redirect stderr (fd 2) to stdout (fd 1) within the shell command itself.
   // The 2>&1 merges both streams before they reach separate pipes,
   // so all output appears on stdout.
-  int ret = run($bash,
-                "exec 2>&1; echo -n to_out; echo -n to_err >&2",
+  int ret = run($bash, "exec 2>&1; echo -n to_out; echo -n to_err >&2",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "to_outto_err");
@@ -580,17 +596,20 @@ TEST(ShellCommandTest, BashRedirectStderrToStdout) {
 // --- Bash: loops ---
 
 TEST(ShellCommandTest, BashForLoop) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
-  int ret = run($bash,
-                "for i in 1 2 3; do echo -n \"$i \"; done",
-                $stdout > out);
+  int ret =
+      run($bash, "for i in 1 2 3; do echo -n \"$i \"; done", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "1 2 3 ");
 }
 
 TEST(ShellCommandTest, BashWhileLoop) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   int ret = run($bash,
                 "i=0; while [ $i -lt 3 ]; do echo -n \"$i \"; i=$((i+1)); done",
@@ -602,31 +621,35 @@ TEST(ShellCommandTest, BashWhileLoop) {
 // --- Bash: complex one-liners ---
 
 TEST(ShellCommandTest, BashIfElseConditional) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
-  int ret = run($bash,
-                "if [ 5 -gt 3 ]; then echo -n yes; else echo -n no; fi",
+  int ret = run($bash, "if [ 5 -gt 3 ]; then echo -n yes; else echo -n no; fi",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "yes");
 }
 
 TEST(ShellCommandTest, BashCaseStatement) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
   int ret = run($bash,
-                "x='two'; case $x in one) echo -n 1;; two) echo -n 2;; *) echo -n x;; esac",
+                "x='two'; case $x in one) echo -n 1;; two) echo -n 2;; *) echo "
+                "-n x;; esac",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "2");
 }
 
 TEST(ShellCommandTest, BashHereStringIntoGrep) {
-  if (!is_bash_available()) GTEST_SKIP() << "bash not available";
+  if (!is_bash_available()) {
+    GTEST_SKIP() << "bash not available";
+  }
   buffer out;
-  int ret = run($bash,
-                "grep -o world <<< 'hello world'",
-                $stdout > out);
+  int ret = run($bash, "grep -o world <<< 'hello world'", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "world\n");
 }
@@ -664,8 +687,7 @@ TEST(ShellCommandTest, CmdIfElseConditional) {
 #if defined(_WIN32)
   buffer out;
   // cmd supports if/else blocks with parentheses
-  int ret = run($shell,
-                "if 1==1 (echo yes_branch) else (echo no_branch)",
+  int ret = run($shell, "if 1==1 (echo yes_branch) else (echo no_branch)",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("yes_branch") != std::string::npos);
@@ -716,9 +738,7 @@ TEST(ShellCommandTest, CmdConditionalExecution) {
 #if defined(_WIN32)
   buffer out;
   // && means execute next only if previous succeeded
-  int ret = run($shell,
-                "echo success_msg && echo also_ran",
-                $stdout > out);
+  int ret = run($shell, "echo success_msg && echo also_ran", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("success_msg") != std::string::npos);
   ASSERT_TRUE(out.to_string().find("also_ran") != std::string::npos);
@@ -726,9 +746,9 @@ TEST(ShellCommandTest, CmdConditionalExecution) {
   // || means execute next only if previous failed
   // 'find' with a non-matching string returns errorlevel 1
   out.clear();
-  ret = run($shell,
-            "echo test | findstr /c:nomatch >nul || echo previous_failed",
-            $stdout > out);
+  ret =
+      run($shell, "echo test | findstr /c:nomatch >nul || echo previous_failed",
+          $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("previous_failed") != std::string::npos);
 #else
@@ -744,7 +764,8 @@ TEST(ShellCommandTest, PowerShellFunctionDefinition) {
 #if defined(_WIN32)
   buffer out;
   int ret = run(powershell,
-                "function Test-Func { param($Name) \"Hello, $Name!\" }; Test-Func -Name World",
+                "function Test-Func { param($Name) \"Hello, $Name!\" }; "
+                "Test-Func -Name World",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("Hello, World!") != std::string::npos);
@@ -756,9 +777,7 @@ TEST(ShellCommandTest, PowerShellFunctionDefinition) {
 TEST(ShellCommandTest, PowerShellScriptBlock) {
 #if defined(_WIN32)
   buffer out;
-  int ret = run(powershell,
-                "& { param($x) $x * $x } 7",
-                $stdout > out);
+  int ret = run(powershell, "& { param($x) $x * $x } 7", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("49") != std::string::npos);
 #else
@@ -770,7 +789,8 @@ TEST(ShellCommandTest, PowerShellPipelineWithWhere) {
 #if defined(_WIN32)
   buffer out;
   int ret = run(powershell,
-                "1,2,3,4,5 | Where-Object { $_ -gt 3 } | ForEach-Object { Write-Output $_ }",
+                "1,2,3,4,5 | Where-Object { $_ -gt 3 } | ForEach-Object { "
+                "Write-Output $_ }",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("4") != std::string::npos);
@@ -787,9 +807,10 @@ TEST(ShellCommandTest, PowerShellHereString) {
   // PowerShell here-string: @' ... '@ must have content on separate lines.
   // Use embedded newlines (backtick-n) in a regular string for single-line
   // commands, or use a verbatim string with actual newlines.
-  int ret = run(powershell,
-                "$msg = \"double-quoted`nmulti-line`nstring\"; Write-Output $msg",
-                $stdout > out);
+  int ret =
+      run(powershell,
+          "$msg = \"double-quoted`nmulti-line`nstring\"; Write-Output $msg",
+          $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("double-quoted") != std::string::npos);
   ASSERT_TRUE(out.to_string().find("multi-line") != std::string::npos);
@@ -803,7 +824,8 @@ TEST(ShellCommandTest, PowerShellErrorActionPreference) {
 #if defined(_WIN32)
   buffer out, err;
   int ret = run(powershell,
-                "$ErrorActionPreference = 'Stop'; try { Get-Item nonexistent_path } catch { Write-Output 'caught' }",
+                "$ErrorActionPreference = 'Stop'; try { Get-Item "
+                "nonexistent_path } catch { Write-Output 'caught' }",
                 $stdout > out, $stderr > err);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("caught") != std::string::npos);
@@ -815,9 +837,10 @@ TEST(ShellCommandTest, PowerShellErrorActionPreference) {
 TEST(ShellCommandTest, PowerShellSpecialCharactersInString) {
 #if defined(_WIN32)
   buffer out;
-  int ret = run(powershell,
-                "Write-Output 'dollar$sign backtick`n newline ampersand& pipe|'",
-                $stdout > out);
+  int ret =
+      run(powershell,
+          "Write-Output 'dollar$sign backtick`n newline ampersand& pipe|'",
+          $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("dollar$sign") != std::string::npos);
   ASSERT_TRUE(out.to_string().find("ampersand&") != std::string::npos);
@@ -830,9 +853,10 @@ TEST(ShellCommandTest, PowerShellSpecialCharactersInString) {
 TEST(ShellCommandTest, PowerShellCalculatedProperty) {
 #if defined(_WIN32)
   buffer out;
-  int ret = run(powershell,
-                "[PSCustomObject]@{Name='test';Value=42} | Select-Object Name,Value",
-                $stdout > out);
+  int ret =
+      run(powershell,
+          "[PSCustomObject]@{Name='test';Value=42} | Select-Object Name,Value",
+          $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("test") != std::string::npos);
   ASSERT_TRUE(out.to_string().find("42") != std::string::npos);
@@ -849,9 +873,10 @@ TEST(ShellCommandTest, ComplexMixedStdoutStderr) {
 #if defined(_WIN32)
   buffer out, err;
   // cmd: odd numbers to stdout, even to stderr
-  int ret = run($shell,
-                "(echo 1 & echo 2 >&2 & echo 3 & echo 4 >&2 & echo 5) & exit /b 0",
-                $stdout > out, $stderr > err);
+  int ret =
+      run($shell,
+          "(echo 1 & echo 2 >&2 & echo 3 & echo 4 >&2 & echo 5) & exit /b 0",
+          $stdout > out, $stderr > err);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("1") != std::string::npos);
   ASSERT_TRUE(out.to_string().find("3") != std::string::npos);
@@ -861,7 +886,8 @@ TEST(ShellCommandTest, ComplexMixedStdoutStderr) {
   buffer out, err;
   // bash: odd numbers to stdout, even to stderr
   int ret = run($shell,
-                "for i in 1 2 3 4 5; do if [ $((i%2)) -eq 0 ]; then echo -n $i >&2; else echo -n $i; fi; done",
+                "for i in 1 2 3 4 5; do if [ $((i%2)) -eq 0 ]; then printf "
+                "'%s' $i >&2; else printf '%s' $i; fi; done",
                 $stdout > out, $stderr > err);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "135");
