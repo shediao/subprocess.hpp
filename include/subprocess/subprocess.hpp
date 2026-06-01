@@ -2638,11 +2638,17 @@ class process {
     return !!pid_;
 #endif
   }
-// TODO:
-// bool running() { return true; }
+  [[nodiscard]] bool running() {
+    if (!is_valid()) {
+      return false;
+    }
+    update_status();
+    return !exited_;
+  }
 // TODO:
 // void wait_for(std::chrono::milliseconds timeout) {}
 #if defined(_WIN32)
+  int decode(DWORD status) { return static_cast<int>(status); }
   int wait() {
     auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
     auto threads_guard =
@@ -2650,39 +2656,46 @@ class process {
     if (!process_handle_) {
       return 127;
     }
+    if (exited_ && exit_code_ != kNotExited) {
+      process_handle_.reset(INVALID_NATIVE_HANDLE_VALUE);
+      return decode(exit_code_);
+    }
     auto rc = WaitForSingleObject(process_handle_.get(), INFINITE);
     if (rc == WAIT_OBJECT_0) {
-      DWORD ret{127};
-      GetExitCodeProcess(process_handle_.get(), &ret);
-      return static_cast<int>(ret);
+      GetExitCodeProcess(process_handle_.get(), &exit_code_);
+      process_handle_.reset(INVALID_NATIVE_HANDLE_VALUE);
+      return decode(exit_code_);
     }
+
+    process_handle_.reset(INVALID_NATIVE_HANDLE_VALUE);
     return 127;
   }
 #else
+  int decode(int status) {
+    if (WIFEXITED(status)) {
+      return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+      return 128 + (WTERMSIG(status));
+    }
+    return status;
+  }
   int wait() {
     auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
     if (!pid_) {
       return 127;
     }
-    int status = 0;
-    if (!child_reaped_early_) {
-      int wait_ret;
-      do {
-        wait_ret = waitpid(pid_.get(), &status, 0);
-      } while (wait_ret == -1 && errno == EINTR);
-    } else {
-      status = early_exit_status_;
+    if (exited_ && exit_code_ != kNotExited) {
+      pid_.reset(-1);
+      return decode(exit_code_);
     }
-
-    auto return_code = -1;
-    if (WIFEXITED(status)) {
-      return_code = WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-      return_code = 128 + (WTERMSIG(status));
-    }
+    int wait_ret;
+    do {
+      wait_ret = waitpid(pid_.get(), &exit_code_, 0);
+    } while (wait_ret == -1 && errno == EINTR);
 
     pid_.reset(-1);
-    return return_code;
+    return decode(exit_code_);
   }
 #endif
 
@@ -2743,7 +2756,7 @@ class process {
     close_child_end();
     read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
                                   stderr_.get_buffer(), pid_.get(),
-                                  &early_exit_status_);
+                                  &exit_code_);
     {
       int status = 0;
       pid_t result;
@@ -2751,10 +2764,10 @@ class process {
         result = ::waitpid(pid_.get(), &status, WNOHANG);
       } while (result == -1 && errno == EINTR);
       if (result > 0) {
-        early_exit_status_ = status;
-        child_reaped_early_ = true;
+        exited_ = true;
+        exit_code_ = status;
       } else if (result == -1 && errno == ECHILD) {
-        child_reaped_early_ = true;
+        exited_ = true;
       }
     }
   }
@@ -2773,6 +2786,29 @@ class process {
     stderr_.close_child_end();
   }
 
+  void update_status() {
+    if (!is_valid() || exited_) {
+      return;
+    }
+#if defined(_WIN32)
+    auto rc = WaitForSingleObject(process_handle_.get(), 0);
+    if (rc == WAIT_OBJECT_0) {
+      exited_ = true;
+      GetExitCodeProcess(process_handle_.get(), &exit_code_);
+    }
+#else
+    int status;
+    pid_t rc;
+    do {
+      rc = waitpid(pid_.get(), &status, WNOHANG);
+    } while (rc == -1 && errno == EINTR);
+    if (rc == pid_.get()) {
+      exit_code_ = status;
+      exited_ = true;
+    }
+#endif
+  }
+
 #if defined(_WIN32)
   unique_fd process_handle_{INVALID_NATIVE_HANDLE_VALUE};
   unique_fd thread_handle_{INVALID_NATIVE_HANDLE_VALUE};
@@ -2782,14 +2818,20 @@ class process {
 #else
   unique_pid pid_{-1};
   unique_pid pgid_{-1};
-  int early_exit_status_{0};
-  bool child_reaped_early_{false};
 #endif
   StdinRedirector stdin_;
   StdoutRedirector stdout_;
   StderrRedirector stderr_;
   std::optional<std::chrono::milliseconds> timeout_{std::nullopt};
   detail::Timer watchdog_;
+  bool exited_{false};
+#if defined(_WIN32)
+  static constexpr DWORD kNotExited = 259;  // STILL_ACTIVE
+  DWORD exit_code_{kNotExited};
+#else
+  static constexpr int kNotExited = 0x17f;
+  int exit_code_{kNotExited};
+#endif
 };
 
 class builder {
