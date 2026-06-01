@@ -58,13 +58,13 @@ TEST(PipelineTest, ThreeProcessManualChain) {
   auto pipe1 = subprocess::detail::Pipe::create();
   auto pipe2 = subprocess::detail::Pipe::create();
 
-  subprocess::detail::subprocess p1(
-      "cmd.exe"s, {"/c", "echo 123&echo 124&echo 456&exit /b 0"},
-      $stdout > pipe1);
-  subprocess::detail::subprocess p2("findstr.exe"s, {"2"},
-                                    $stdin<pipe1, $stdout> pipe2);
-  subprocess::detail::subprocess p3("findstr.exe"s, {"4"},
-                                    $stdin<pipe2, $stdout> out);
+  subprocess::detail::builder p1("cmd.exe"s,
+                                 {"/c", "echo 123&echo 124&echo 456&exit /b 0"},
+                                 $stdout > pipe1);
+  subprocess::detail::builder p2("findstr.exe"s, {"2"},
+                                 $stdin<pipe1, $stdout> pipe2);
+  subprocess::detail::builder p3("findstr.exe"s, {"4"},
+                                 $stdin<pipe2, $stdout> out);
 
   p1.spawn();
   p2.spawn();
@@ -82,10 +82,10 @@ TEST(PipelineTest, ThreeProcessManualChain) {
   auto pipe1 = subprocess::detail::Pipe::create();
   auto pipe2 = subprocess::detail::Pipe::create();
 
-  subprocess::detail::subprocess p1("echo", {"123\n456"}, $stdout > pipe1);
-  subprocess::detail::subprocess p2("sed", {"-e", "s/3/4/g"},
-                                    $stdin<pipe1, $stdout> pipe2);
-  subprocess::detail::subprocess p3("grep", {"4"}, $stdin<pipe2, $stdout> out);
+  subprocess::detail::builder p1("echo", {"123\n456"}, $stdout > pipe1);
+  subprocess::detail::builder p2("sed", {"-e", "s/3/4/g"},
+                                 $stdin<pipe1, $stdout> pipe2);
+  subprocess::detail::builder p3("grep", {"4"}, $stdin<pipe2, $stdout> out);
 
   p1.spawn();
   p2.spawn();
@@ -107,11 +107,10 @@ TEST(PipelineTest, ThreeProcessManualChain) {
 TEST(PipelineTest, ThreeProcessPipeOperator) {
 #if defined(_WIN32)
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess(
-          "cmd.exe"s, {"/c", "echo 123&echo 124&echo 456&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"2"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"4"}, $stdout > out);
+  auto subs = subprocess::detail::builder(
+                  "cmd.exe"s, {"/c", "echo 123&echo 124&echo 456&exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"2"}) |
+              subprocess::detail::builder("findstr.exe"s, {"4"}, $stdout > out);
 
   subs.run();
   auto exit_codes = subs.exit_codes();
@@ -122,9 +121,9 @@ TEST(PipelineTest, ThreeProcessPipeOperator) {
   ASSERT_EQ(out, "124\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("echo"s, {"123\n456"}) |
-              subprocess::detail::subprocess("sed"s, {"-e", "s/3/4/g"}) |
-              subprocess::detail::subprocess("grep"s, {"4"}, $stdout > out);
+  auto subs = subprocess::detail::builder("echo"s, {"123\n456"}) |
+              subprocess::detail::builder("sed"s, {"-e", "s/3/4/g"}) |
+              subprocess::detail::builder("grep"s, {"4"}, $stdout > out);
 
   subs.run();
   auto exit_codes = subs.exit_codes();
@@ -143,9 +142,9 @@ TEST(PipelineTest, TwoProcessPipeOperator) {
 #if defined(_WIN32)
   buffer out;
   auto subs =
-      subprocess::detail::subprocess(
-          "cmd.exe"s, {"/c", "echo Hello&echo World&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"Wor"}, $stdout > out);
+      subprocess::detail::builder("cmd.exe"s,
+                                  {"/c", "echo Hello&echo World&exit /b 0"}) |
+      subprocess::detail::builder("findstr.exe"s, {"Wor"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -155,8 +154,8 @@ TEST(PipelineTest, TwoProcessPipeOperator) {
   ASSERT_EQ(out, "World\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("printf"s, {"Hello\\nWorld\\n"}) |
-              subprocess::detail::subprocess("grep"s, {"Wor"}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"Hello\\nWorld\\n"}) |
+              subprocess::detail::builder("grep"s, {"Wor"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -173,14 +172,13 @@ TEST(PipelineTest, TwoProcessPipeOperator) {
 TEST(PipelineTest, FourProcessPipeOperator) {
 #if defined(_WIN32)
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c",
-                                      "echo Apple&echo Banana&echo "
-                                      "Apricot&echo Cherry&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"A"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"p"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"r"}, $stdout > out);
+  auto subs = subprocess::detail::builder("cmd.exe"s,
+                                          {"/c",
+                                           "echo Apple&echo Banana&echo "
+                                           "Apricot&echo Cherry&exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"A"}) |
+              subprocess::detail::builder("findstr.exe"s, {"p"}) |
+              subprocess::detail::builder("findstr.exe"s, {"r"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -193,11 +191,11 @@ TEST(PipelineTest, FourProcessPipeOperator) {
   ASSERT_EQ(out, "Apricot\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess(
+  auto subs = subprocess::detail::builder(
                   "printf"s, {"Apple\\nBanana\\nApricot\\nCherry\\n"}) |
-              subprocess::detail::subprocess("grep"s, {"A"}) |
-              subprocess::detail::subprocess("grep"s, {"p"}) |
-              subprocess::detail::subprocess("grep"s, {"r"}, $stdout > out);
+              subprocess::detail::builder("grep"s, {"A"}) |
+              subprocess::detail::builder("grep"s, {"p"}) |
+              subprocess::detail::builder("grep"s, {"r"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -219,8 +217,8 @@ TEST(PipelineTest, StdinFromBufferIntoPipeChain) {
   buffer in{"Line1\nLine2\nLine3\n"};
   buffer out;
   auto subs =
-      subprocess::detail::subprocess("findstr.exe"s, {"2"}, $stdin < in) |
-      subprocess::detail::subprocess("findstr.exe"s, {"Line"}, $stdout > out);
+      subprocess::detail::builder("findstr.exe"s, {"2"}, $stdin < in) |
+      subprocess::detail::builder("findstr.exe"s, {"Line"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -230,8 +228,8 @@ TEST(PipelineTest, StdinFromBufferIntoPipeChain) {
 #else
   buffer in{"Line1\nLine2\nLine3\n"};
   buffer out;
-  auto subs = subprocess::detail::subprocess("grep"s, {"2"}, $stdin < in) |
-              subprocess::detail::subprocess("grep"s, {"Line"}, $stdout > out);
+  auto subs = subprocess::detail::builder("grep"s, {"2"}, $stdin < in) |
+              subprocess::detail::builder("grep"s, {"Line"}, $stdout > out);
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -247,10 +245,9 @@ TEST(PipelineTest, StdinFromBufferIntoPipeChain) {
 TEST(PipelineTest, PipeChainStdoutToBuffer) {
 #if defined(_WIN32)
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c", "echo AAA&echo BBB&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"A"}, $stdout > out);
+  auto subs = subprocess::detail::builder(
+                  "cmd.exe"s, {"/c", "echo AAA&echo BBB&exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"A"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes()[0], 0);
@@ -258,8 +255,8 @@ TEST(PipelineTest, PipeChainStdoutToBuffer) {
   ASSERT_EQ(out, "AAA\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("printf"s, {"AAA\\nBBB\\n"}) |
-              subprocess::detail::subprocess("grep"s, {"A"}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"AAA\\nBBB\\n"}) |
+              subprocess::detail::builder("grep"s, {"A"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes()[0], 0);
@@ -275,17 +272,16 @@ TEST(PipelineTest, BufferToBufferViaPipe) {
 #if defined(_WIN32)
   buffer in{"one\ntwo\nthree\nfour\nfive\n"};
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("findstr.exe"s, {"o"}, $stdin < in) |
-      subprocess::detail::subprocess("findstr.exe"s, {"f"}, $stdout > out);
+  auto subs = subprocess::detail::builder("findstr.exe"s, {"o"}, $stdin < in) |
+              subprocess::detail::builder("findstr.exe"s, {"f"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(out, "four\n");
 #else
   buffer in{"one\ntwo\nthree\nfour\nfive\n"};
   buffer out;
-  auto subs = subprocess::detail::subprocess("grep"s, {"o"}, $stdin < in) |
-              subprocess::detail::subprocess("grep"s, {"f"}, $stdout > out);
+  auto subs = subprocess::detail::builder("grep"s, {"o"}, $stdin < in) |
+              subprocess::detail::builder("grep"s, {"f"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(out, "four\n");
@@ -298,13 +294,13 @@ TEST(PipelineTest, BufferToBufferViaPipe) {
 TEST(PipelineTest, PipeWithStderrCapture) {
 #if defined(_WIN32)
   buffer err_out;
-  auto subs = subprocess::detail::subprocess(
+  auto subs = subprocess::detail::builder(
                   "cmd.exe"s,
                   {"/c",
                    "(echo stdout_line_1 & echo stderr_line_1>&2 & echo "
                    "stdout_line_2 & echo stderr_line_2>&2) & exit /b 0"},
                   $stderr > err_out) |
-              subprocess::detail::subprocess("findstr.exe"s, {"stdout"});
+              subprocess::detail::builder("findstr.exe"s, {"stdout"});
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -317,13 +313,13 @@ TEST(PipelineTest, PipeWithStderrCapture) {
   EXPECT_NE(err_str.find("stderr_line_2"), std::string::npos);
 #else
   buffer err_out;
-  auto subs = subprocess::detail::subprocess(
+  auto subs = subprocess::detail::builder(
                   "bash"s,
                   {"-c",
                    "echo stdout_line_1; echo stderr_line_1>&2; echo "
                    "stdout_line_2; echo stderr_line_2>&2"},
                   $stderr > err_out) |
-              subprocess::detail::subprocess("grep"s, {"stdout"});
+              subprocess::detail::builder("grep"s, {"stdout"});
 
   int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -344,17 +340,16 @@ TEST(PipelineTest, EmptyInputThroughPipe) {
 #if defined(_WIN32)
   buffer in{};
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("findstr.exe"s, {"x"}, $stdin < in) |
-      subprocess::detail::subprocess("findstr.exe"s, {"y"}, $stdout > out);
+  auto subs = subprocess::detail::builder("findstr.exe"s, {"x"}, $stdin < in) |
+              subprocess::detail::builder("findstr.exe"s, {"y"}, $stdout > out);
 
   subs.run();
   EXPECT_TRUE(out.empty());
 #else
   buffer in{};
   buffer out;
-  auto subs = subprocess::detail::subprocess("grep"s, {"x"}, $stdin < in) |
-              subprocess::detail::subprocess("grep"s, {"y"}, $stdout > out);
+  auto subs = subprocess::detail::builder("grep"s, {"x"}, $stdin < in) |
+              subprocess::detail::builder("grep"s, {"y"}, $stdout > out);
 
   subs.run();
   EXPECT_TRUE(out.empty());
@@ -374,8 +369,8 @@ TEST(PipelineTest, LargeDataThroughPipe) {
   buffer in{input_data};
   buffer out;
   auto subs =
-      subprocess::detail::subprocess("findstr.exe"s, {"line_"}, $stdin < in) |
-      subprocess::detail::subprocess("findstr.exe"s, {"line_"}, $stdout > out);
+      subprocess::detail::builder("findstr.exe"s, {"line_"}, $stdin < in) |
+      subprocess::detail::builder("findstr.exe"s, {"line_"}, $stdout > out);
 
   subs.run();
   std::string result = out.to_string();
@@ -383,8 +378,8 @@ TEST(PipelineTest, LargeDataThroughPipe) {
 #else
   buffer in{input_data};
   buffer out;
-  auto subs = subprocess::detail::subprocess("grep"s, {"line_"}, $stdin < in) |
-              subprocess::detail::subprocess("grep"s, {"line_"}, $stdout > out);
+  auto subs = subprocess::detail::builder("grep"s, {"line_"}, $stdin < in) |
+              subprocess::detail::builder("grep"s, {"line_"}, $stdout > out);
 
   subs.run();
   std::string result = out.to_string();
@@ -400,22 +395,22 @@ TEST(PipelineTest, PipeChainWithStderrToDevnull) {
 #if defined(_WIN32)
   buffer out;
   auto subs =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c",
-                                      "echo keep_me&echo ignore_me>&2&exit "
-                                      "/b 0"},
-                                     $stderr > $devnull) |
-      subprocess::detail::subprocess("findstr.exe"s, {"keep"}, $stdout > out);
+      subprocess::detail::builder("cmd.exe"s,
+                                  {"/c",
+                                   "echo keep_me&echo ignore_me>&2&exit "
+                                   "/b 0"},
+                                  $stderr > $devnull) |
+      subprocess::detail::builder("findstr.exe"s, {"keep"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(out, "keep_me\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess(
+  auto subs = subprocess::detail::builder(
                   "bash"s, {"-c", "echo keep_me; echo ignore_me>&2"},
                   $stderr > $devnull) |
-              subprocess::detail::subprocess("grep"s, {"keep"}, $stdout > out);
+              subprocess::detail::builder("grep"s, {"keep"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -430,7 +425,7 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 #if defined(_WIN32)
   auto pipe = subprocess::detail::Pipe::create();
 
-  subprocess::detail::subprocess p(
+  subprocess::detail::builder p(
       "cmd.exe"s, {"/c"s, "echo single_pipe_test&exit /b 0"}, $stdout > pipe);
 
   p.spawn();
@@ -441,8 +436,8 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 #else
   auto pipe = subprocess::detail::Pipe::create();
 
-  subprocess::detail::subprocess p("printf", {"single_pipe_test\\n"},
-                                   $stdout > pipe);
+  subprocess::detail::builder p("printf", {"single_pipe_test\\n"},
+                                $stdout > pipe);
 
   p.spawn();
   buffer tmp;
@@ -459,18 +454,18 @@ TEST(PipelineTest, PipeChainWithCwd) {
 #if defined(_WIN32)
   buffer out;
   auto subs =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "cmd.exe"s, {"/c", "echo cwd_test_line&exit /b 0"}, $cwd = "C:\\") |
-      subprocess::detail::subprocess("findstr.exe"s, {"cwd"}, $stdout > out);
+      subprocess::detail::builder("findstr.exe"s, {"cwd"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(out, "cwd_test_line\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("printf"s, {"cwd_test_line\\n"},
-                                             $cwd = "/tmp") |
-              subprocess::detail::subprocess("grep"s, {"cwd"}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"cwd_test_line\\n"},
+                                          $cwd = "/tmp") |
+              subprocess::detail::builder("grep"s, {"cwd"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -485,20 +480,20 @@ TEST(PipelineTest, PipeChainWithEnv) {
 #if defined(_WIN32)
   buffer out;
   auto subs =
-      subprocess::detail::subprocess(
-          "cmd.exe"s, {"/c", "echo %MY_PIPE_VAR%&exit /b 0"},
-          $env = {{"MY_PIPE_VAR", "piped_env_value"}}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"piped"}, $stdout > out);
+      subprocess::detail::builder("cmd.exe"s,
+                                  {"/c", "echo %MY_PIPE_VAR%&exit /b 0"},
+                                  $env = {{"MY_PIPE_VAR", "piped_env_value"}}) |
+      subprocess::detail::builder("findstr.exe"s, {"piped"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(out, "piped_env_value\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  "bash"s, {"-c", "echo $MY_PIPE_VAR"},
-                  $env = {{"MY_PIPE_VAR", "piped_env_value"}}) |
-              subprocess::detail::subprocess("grep"s, {"piped"}, $stdout > out);
+  auto subs =
+      subprocess::detail::builder("bash"s, {"-c", "echo $MY_PIPE_VAR"},
+                                  $env = {{"MY_PIPE_VAR", "piped_env_value"}}) |
+      subprocess::detail::builder("grep"s, {"piped"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -512,11 +507,10 @@ TEST(PipelineTest, PipeChainWithEnv) {
 TEST(PipelineTest, NonZeroExitInMiddleOfChain) {
 #if defined(_WIN32)
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c", "echo data_line&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"no_such_string"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"."}, $stdout > out);
+  auto subs = subprocess::detail::builder("cmd.exe"s,
+                                          {"/c", "echo data_line&exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"no_such_string"}) |
+              subprocess::detail::builder("findstr.exe"s, {"."}, $stdout > out);
 
   [[maybe_unused]] int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -527,9 +521,9 @@ TEST(PipelineTest, NonZeroExitInMiddleOfChain) {
   EXPECT_TRUE(out.empty());
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("printf"s, {"data_line\\n"}) |
-              subprocess::detail::subprocess("grep"s, {"no_such_string"}) |
-              subprocess::detail::subprocess("grep"s, {"."}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"data_line\\n"}) |
+              subprocess::detail::builder("grep"s, {"no_such_string"}) |
+              subprocess::detail::builder("grep"s, {"."}, $stdout > out);
 
   [[maybe_unused]] int ret = subs.run();
   auto codes = subs.exit_codes();
@@ -547,18 +541,17 @@ TEST(PipelineTest, NonZeroExitInMiddleOfChain) {
 TEST(PipelineTest, IdentityPipeChain) {
 #if defined(_WIN32)
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c", "echo identity_test&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"."}, $stdout > out);
+  auto subs = subprocess::detail::builder(
+                  "cmd.exe"s, {"/c", "echo identity_test&exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"."}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes().size(), 2u);
   ASSERT_EQ(out, "identity_test\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("printf"s, {"identity_test\\n"}) |
-              subprocess::detail::subprocess("cat"s, {}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"identity_test\\n"}) |
+              subprocess::detail::builder("cat"s, {}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(subs.exit_codes().size(), 2u);
@@ -573,12 +566,12 @@ TEST(PipelineTest, PipeChainCaptureBothStdoutAndStderrAtEnd) {
 #if defined(_WIN32)
   buffer out;
   buffer err;
-  auto subs = subprocess::detail::subprocess(
-                  "cmd.exe"s, {"/c",
-                               "echo to_stdout&echo to_stderr>&2&"
-                               "exit /b 0"}) |
-              subprocess::detail::subprocess("findstr.exe"s, {"to_"},
-                                             $stdout > out, $stderr > err);
+  auto subs = subprocess::detail::builder("cmd.exe"s,
+                                          {"/c",
+                                           "echo to_stdout&echo to_stderr>&2&"
+                                           "exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"to_"},
+                                          $stdout > out, $stderr > err);
 
   subs.run();
   ASSERT_FALSE(out.empty());
@@ -587,10 +580,10 @@ TEST(PipelineTest, PipeChainCaptureBothStdoutAndStderrAtEnd) {
 #else
   buffer out;
   buffer err;
-  auto subs = subprocess::detail::subprocess(
+  auto subs = subprocess::detail::builder(
                   "bash"s, {"-c", "echo to_stdout; echo to_stderr>&2"}) |
-              subprocess::detail::subprocess("grep"s, {"to_"}, $stdout > out,
-                                             $stderr > err);
+              subprocess::detail::builder("grep"s, {"to_"}, $stdout > out,
+                                          $stderr > err);
 
   subs.run();
   ASSERT_FALSE(out.empty());
@@ -606,15 +599,13 @@ TEST(PipelineTest, MultipleIndependentPipeChains) {
 #if defined(_WIN32)
   buffer outA;
   auto chainA =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c", "echo Apple&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"App"}, $stdout > outA);
+      subprocess::detail::builder("cmd.exe"s, {"/c", "echo Apple&exit /b 0"}) |
+      subprocess::detail::builder("findstr.exe"s, {"App"}, $stdout > outA);
 
   buffer outB;
   auto chainB =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c", "echo Banana&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"Ban"}, $stdout > outB);
+      subprocess::detail::builder("cmd.exe"s, {"/c", "echo Banana&exit /b 0"}) |
+      subprocess::detail::builder("findstr.exe"s, {"Ban"}, $stdout > outB);
 
   chainA.run();
   chainB.run();
@@ -623,14 +614,12 @@ TEST(PipelineTest, MultipleIndependentPipeChains) {
   ASSERT_EQ(outB, "Banana\r\n");
 #else
   buffer outA;
-  auto chainA =
-      subprocess::detail::subprocess("printf"s, {"Apple\\n"}) |
-      subprocess::detail::subprocess("grep"s, {"App"}, $stdout > outA);
+  auto chainA = subprocess::detail::builder("printf"s, {"Apple\\n"}) |
+                subprocess::detail::builder("grep"s, {"App"}, $stdout > outA);
 
   buffer outB;
-  auto chainB =
-      subprocess::detail::subprocess("printf"s, {"Banana\\n"}) |
-      subprocess::detail::subprocess("grep"s, {"Ban"}, $stdout > outB);
+  auto chainB = subprocess::detail::builder("printf"s, {"Banana\\n"}) |
+                subprocess::detail::builder("grep"s, {"Ban"}, $stdout > outB);
 
   chainA.run();
   chainB.run();
@@ -648,12 +637,12 @@ TEST(PipelineTest, IncrementalPipeChainBuilding) {
   buffer out;
 
   subprocess::detail::pipeline chain =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c", "echo first_phase&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"first"});
+      subprocess::detail::builder("cmd.exe"s,
+                                  {"/c", "echo first_phase&exit /b 0"}) |
+      subprocess::detail::builder("findstr.exe"s, {"first"});
 
-  chain = std::move(chain) | subprocess::detail::subprocess(
-                                 "findstr.exe"s, {"phase"}, $stdout > out);
+  chain = std::move(chain) |
+          subprocess::detail::builder("findstr.exe"s, {"phase"}, $stdout > out);
 
   chain.run();
   ASSERT_EQ(out, "first_phase\r\n");
@@ -661,11 +650,11 @@ TEST(PipelineTest, IncrementalPipeChainBuilding) {
   buffer out;
 
   subprocess::detail::pipeline chain =
-      subprocess::detail::subprocess("printf"s, {"first_phase\\n"}) |
-      subprocess::detail::subprocess("grep"s, {"first"});
+      subprocess::detail::builder("printf"s, {"first_phase\\n"}) |
+      subprocess::detail::builder("grep"s, {"first"});
 
   chain = std::move(chain) |
-          subprocess::detail::subprocess("grep"s, {"phase"}, $stdout > out);
+          subprocess::detail::builder("grep"s, {"phase"}, $stdout > out);
 
   chain.run();
   ASSERT_EQ(out, "first_phase\n");
@@ -678,18 +667,18 @@ TEST(PipelineTest, IncrementalPipeChainBuilding) {
 TEST(PipelineTest, PipeWithLineCounting) {
 #if defined(_WIN32)
   buffer out;
-  auto subs = subprocess::detail::subprocess(
-                  "cmd.exe"s, {"/c", "echo A&echo B&echo C&exit /b 0"}) |
-              subprocess::detail::subprocess("find.exe"s, {"/c", "/v", ""},
-                                             $stdout > out);
+  auto subs =
+      subprocess::detail::builder("cmd.exe"s,
+                                  {"/c", "echo A&echo B&echo C&exit /b 0"}) |
+      subprocess::detail::builder("find.exe"s, {"/c", "/v", ""}, $stdout > out);
 
   subs.run();
   std::string result = out.to_string();
   EXPECT_NE(result.find("3"), std::string::npos);
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("printf"s, {"A\\nB\\nC\\n"}) |
-              subprocess::detail::subprocess("wc"s, {"-l"}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"A\\nB\\nC\\n"}) |
+              subprocess::detail::builder("wc"s, {"-l"}, $stdout > out);
 
   subs.run();
   std::string result = out.to_string();
@@ -712,9 +701,8 @@ TEST(PipelineTest, BinaryLikeDataThroughPipe) {
 #if defined(_WIN32)
   buffer in{input};
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("findstr.exe"s, {"."}, $stdin < in) |
-      subprocess::detail::subprocess("findstr.exe"s, {"."}, $stdout > out);
+  auto subs = subprocess::detail::builder("findstr.exe"s, {"."}, $stdin < in) |
+              subprocess::detail::builder("findstr.exe"s, {"."}, $stdout > out);
 
   subs.run();
   std::string result = out.to_string();
@@ -722,8 +710,8 @@ TEST(PipelineTest, BinaryLikeDataThroughPipe) {
 #else
   buffer in{input};
   buffer out;
-  auto subs = subprocess::detail::subprocess("cat"s, {}, $stdin < in) |
-              subprocess::detail::subprocess("cat"s, {}, $stdout > out);
+  auto subs = subprocess::detail::builder("cat"s, {}, $stdin < in) |
+              subprocess::detail::builder("cat"s, {}, $stdout > out);
 
   subs.run();
   std::string result = out.to_string();
@@ -739,17 +727,17 @@ TEST(PipelineTest, TopLevelRunWithPipeOperator) {
 #if defined(_WIN32)
   buffer out;
   auto subs =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c", "echo top_level&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"top"}, $stdout > out);
+      subprocess::detail::builder("cmd.exe"s,
+                                  {"/c", "echo top_level&exit /b 0"}) |
+      subprocess::detail::builder("findstr.exe"s, {"top"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(out, "top_level\r\n");
 #else
   buffer out;
-  auto subs = subprocess::detail::subprocess("printf"s, {"top_level\\n"}) |
-              subprocess::detail::subprocess("grep"s, {"top"}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"top_level\\n"}) |
+              subprocess::detail::builder("grep"s, {"top"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -763,24 +751,23 @@ TEST(PipelineTest, TopLevelRunWithPipeOperator) {
 TEST(PipelineTest, OnlyStdoutGoesThroughPipe) {
 #if defined(_WIN32)
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("cmd.exe"s,
-                                     {"/c",
-                                      "echo goes_to_pipe&echo "
-                                      "goes_to_stderr_only>&2&exit /b 0"},
-                                     $stderr > $devnull) |
-      subprocess::detail::subprocess("findstr.exe"s, {"goes_to_pipe"},
-                                     $stdout > out);
+  auto subs = subprocess::detail::builder("cmd.exe"s,
+                                          {"/c",
+                                           "echo goes_to_pipe&echo "
+                                           "goes_to_stderr_only>&2&exit /b 0"},
+                                          $stderr > $devnull) |
+              subprocess::detail::builder("findstr.exe"s, {"goes_to_pipe"},
+                                          $stdout > out);
 
   subs.run();
   ASSERT_EQ(out, "goes_to_pipe\r\n");
 #else
   buffer out;
   auto subs =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "bash"s, {"-c", "echo goes_to_pipe; echo goes_to_stderr_only>&2"},
           $stderr > $devnull) |
-      subprocess::detail::subprocess("grep"s, {"goes_to_pipe"}, $stdout > out);
+      subprocess::detail::builder("grep"s, {"goes_to_pipe"}, $stdout > out);
 
   subs.run();
   ASSERT_EQ(out, "goes_to_pipe\n");
@@ -795,11 +782,10 @@ TEST(PipelineTest, ExplicitPipeClosedAfterUse) {
   {
     auto pipe = subprocess::detail::Pipe::create();
 #if defined(_WIN32)
-    subprocess::detail::subprocess p(
+    subprocess::detail::builder p(
         "cmd.exe"s, {"/c"s, "echo pipe_raii&exit /b 0"}, $stdout > pipe);
 #else
-    subprocess::detail::subprocess p("printf", {"pipe_raii\\n"},
-                                     $stdout > pipe);
+    subprocess::detail::builder p("printf", {"pipe_raii\\n"}, $stdout > pipe);
 #endif
     p.spawn();
     read_from_native_handle(pipe.rfd(), captured);
@@ -840,7 +826,7 @@ TEST(PipelineTest, PipeChainEquivalentToCaptureRun) {
 TEST(PipelineTest, SingleProcessRedirectStdoutOnly) {
 #if defined(_WIN32)
   buffer out;
-  int ret = subprocess::detail::subprocess(
+  int ret = subprocess::detail::builder(
                 "cmd.exe"s,
                 {"/c", "echo hello_stdout&echo hello_stderr>&2&exit /b 3"},
                 $stdout > out)
@@ -850,7 +836,7 @@ TEST(PipelineTest, SingleProcessRedirectStdoutOnly) {
 #else
   buffer out;
   int ret =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "bash"s, {"-c", "echo hello_stdout; echo hello_stderr>&2; exit 3"},
           $stdout > out)
           .run();
@@ -866,7 +852,7 @@ TEST(PipelineTest, SingleProcessRedirectStderrOnly) {
 #if defined(_WIN32)
   buffer err;
   int ret =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "cmd.exe"s, {"/c", "echo to_stdout&echo to_stderr>&2&exit /b 5"},
           $stderr > err)
           .run();
@@ -874,7 +860,7 @@ TEST(PipelineTest, SingleProcessRedirectStderrOnly) {
   ASSERT_EQ(err, "to_stderr\r\n");
 #else
   buffer err;
-  int ret = subprocess::detail::subprocess(
+  int ret = subprocess::detail::builder(
                 "bash"s, {"-c", "echo to_stdout; echo to_stderr>&2; exit 5"},
                 $stderr > err)
                 .run();
@@ -889,14 +875,12 @@ TEST(PipelineTest, SingleProcessRedirectStderrOnly) {
 TEST(PipelineTest, SingleProcessRedirectStdinOnly) {
 #if defined(_WIN32)
   buffer in("hello_via_stdin");
-  int ret =
-      subprocess::detail::subprocess("findstr.exe"s, {"hello"s}, $stdin < in)
-          .run();
+  int ret = subprocess::detail::builder("findstr.exe"s, {"hello"s}, $stdin < in)
+                .run();
   EXPECT_EQ(ret, 0);
 #else
   buffer in("hello_via_stdin\n");
-  int ret =
-      subprocess::detail::subprocess("grep"s, {"hello"s}, $stdin < in).run();
+  int ret = subprocess::detail::builder("grep"s, {"hello"s}, $stdin < in).run();
   EXPECT_EQ(ret, 0);
 #endif
 }
@@ -908,17 +892,17 @@ TEST(PipelineTest, SingleProcessRedirectStdinStdoutStderrDefault) {
 #if defined(_WIN32)
   buffer in("input_data");
   buffer out;
-  int ret = subprocess::detail::subprocess("findstr.exe"s, {"data"s},
-                                           $stdin<in, $stdout> out)
+  int ret = subprocess::detail::builder("findstr.exe"s, {"data"s},
+                                        $stdin<in, $stdout> out)
                 .run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(out, "input_data\r\n");
 #else
   buffer in("input_data\n");
   buffer out;
-  int ret = subprocess::detail::subprocess("grep"s, {"data"s},
-                                           $stdin<in, $stdout> out)
-                .run();
+  int ret =
+      subprocess::detail::builder("grep"s, {"data"s}, $stdin<in, $stdout> out)
+          .run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(out, "input_data\n");
 #endif
@@ -930,7 +914,7 @@ TEST(PipelineTest, SingleProcessRedirectStdinStdoutStderrDefault) {
 TEST(PipelineTest, SingleProcessRedirectStdoutStderrStdinDefault) {
 #if defined(_WIN32)
   buffer out, err;
-  int ret = subprocess::detail::subprocess(
+  int ret = subprocess::detail::builder(
                 "cmd.exe"s, {"/c", "echo to_out&echo to_err>&2&exit /b 9"},
                 $stdout > out, $stderr > err)
                 .run();
@@ -939,7 +923,7 @@ TEST(PipelineTest, SingleProcessRedirectStdoutStderrStdinDefault) {
   ASSERT_EQ(err, "to_err\r\n");
 #else
   buffer out, err;
-  int ret = subprocess::detail::subprocess(
+  int ret = subprocess::detail::builder(
                 "bash"s, {"-c", "echo to_out; echo to_err>&2; exit 9"},
                 $stdout > out, $stderr > err)
                 .run();
@@ -956,7 +940,7 @@ TEST(PipelineTest, SingleProcessRedirectStdinStderrStdoutDefault) {
 #if defined(_WIN32)
   buffer in("needle");
   buffer err;
-  int ret = subprocess::detail::subprocess(
+  int ret = subprocess::detail::builder(
                 "cmd.exe"s, {"/c", "findstr needle&echo to_err>&2&exit /b 0"},
                 $stdin<in, $stderr> err)
                 .run();
@@ -965,9 +949,9 @@ TEST(PipelineTest, SingleProcessRedirectStdinStderrStdoutDefault) {
 #else
   buffer in("needle\n");
   buffer err;
-  int ret = subprocess::detail::subprocess(
-                "bash"s, {"-c", "grep needle; echo to_err>&2"},
-                $stdin<in, $stderr> err)
+  int ret = subprocess::detail::builder("bash"s,
+                                        {"-c", "grep needle; echo to_err>&2"},
+                                        $stdin<in, $stderr> err)
                 .run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(err, "to_err\n");
@@ -981,7 +965,7 @@ TEST(PipelineTest, SingleProcessRedirectAllThree) {
 #if defined(_WIN32)
   buffer in("all_three");
   buffer out, err;
-  int ret = subprocess::detail::subprocess(
+  int ret = subprocess::detail::builder(
                 "cmd.exe"s, {"/c", "findstr three&echo to_err>&2&exit /b 7"},
                 $stdin<in, $stdout> out, $stderr > err)
                 .run();
@@ -991,7 +975,7 @@ TEST(PipelineTest, SingleProcessRedirectAllThree) {
 #else
   buffer in("all_three\n");
   buffer out, err;
-  int ret = subprocess::detail::subprocess(
+  int ret = subprocess::detail::builder(
                 "bash"s, {"-c", "grep three; echo to_err>&2; exit 7"},
                 $stdin<in, $stdout> out, $stderr > err)
                 .run();
@@ -1006,11 +990,10 @@ TEST(PipelineTest, SingleProcessRedirectAllThree) {
 // ---------------------------------------------------------------------------
 TEST(PipelineTest, SingleProcessNoRedirects) {
 #if defined(_WIN32)
-  int ret =
-      subprocess::detail::subprocess("cmd.exe"s, {"/c", "exit /b 11"}).run();
+  int ret = subprocess::detail::builder("cmd.exe"s, {"/c", "exit /b 11"}).run();
   EXPECT_EQ(ret, 11);
 #else
-  int ret = subprocess::detail::subprocess("true"s, {}).run();
+  int ret = subprocess::detail::builder("true"s, {}).run();
   EXPECT_EQ(ret, 0);
 #endif
 }
@@ -1024,10 +1007,10 @@ TEST(PipelineTest, PipeFirstStderrRedirectedSecondAllDefaults) {
 #if defined(_WIN32)
   buffer err_out;
   auto subs =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "cmd.exe"s, {"/c", "echo first_out&echo first_err>&2&exit /b 0"},
           $stderr > err_out) |
-      subprocess::detail::subprocess("findstr.exe"s, {"first_out"});
+      subprocess::detail::builder("findstr.exe"s, {"first_out"});
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1035,10 +1018,10 @@ TEST(PipelineTest, PipeFirstStderrRedirectedSecondAllDefaults) {
   EXPECT_NE(err_out.to_string().find("first_err"), std::string::npos);
 #else
   buffer err_out;
-  auto subs = subprocess::detail::subprocess(
+  auto subs = subprocess::detail::builder(
                   "bash"s, {"-c", "echo first_out; echo first_err>&2"},
                   $stderr > err_out) |
-              subprocess::detail::subprocess("grep"s, {"first_out"});
+              subprocess::detail::builder("grep"s, {"first_out"});
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1055,15 +1038,15 @@ TEST(PipelineTest, PipeFirstStderrRedirectedSecondAllDefaults) {
 // ---------------------------------------------------------------------------
 TEST(PipelineTest, PipeFirstNoRedirectsSecondStdoutStderrDefault) {
 #if defined(_WIN32)
-  auto subs = subprocess::detail::subprocess(
-                  "cmd.exe"s, {"/c", "echo simple_out&exit /b 0"}) |
-              subprocess::detail::subprocess("findstr.exe"s, {"simple_out"});
+  auto subs = subprocess::detail::builder("cmd.exe"s,
+                                          {"/c", "echo simple_out&exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"simple_out"});
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
 #else
-  auto subs = subprocess::detail::subprocess("printf"s, {"simple_out\\n"}) |
-              subprocess::detail::subprocess("grep"s, {"simple_out"});
+  auto subs = subprocess::detail::builder("printf"s, {"simple_out\\n"}) |
+              subprocess::detail::builder("grep"s, {"simple_out"});
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1080,10 +1063,10 @@ TEST(PipelineTest, PipeFirstAllRedirectedSecondStdoutStderrDefault) {
 #if defined(_WIN32)
   buffer err_out;
   auto subs =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "cmd.exe"s, {"/c", "echo pipe_data&echo pipe_err>&2&exit /b 0"},
           $stderr > err_out) |
-      subprocess::detail::subprocess("findstr.exe"s, {"pipe_data"});
+      subprocess::detail::builder("findstr.exe"s, {"pipe_data"});
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1091,10 +1074,10 @@ TEST(PipelineTest, PipeFirstAllRedirectedSecondStdoutStderrDefault) {
   EXPECT_NE(err_out.to_string().find("pipe_err"), std::string::npos);
 #else
   buffer err_out;
-  auto subs = subprocess::detail::subprocess(
+  auto subs = subprocess::detail::builder(
                   "bash"s, {"-c", "echo pipe_data; echo pipe_err>&2"},
                   $stderr > err_out) |
-              subprocess::detail::subprocess("grep"s, {"pipe_data"});
+              subprocess::detail::builder("grep"s, {"pipe_data"});
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1113,12 +1096,11 @@ TEST(PipelineTest, PipeFirstStderrDefaultSecondBothRedirected) {
 #if defined(_WIN32)
   buffer first_err, second_out, second_err;
   auto subs =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "cmd.exe"s, {"/c", "echo data_out&echo data_err>&2&exit /b 0"},
           $stderr > first_err) |
-      subprocess::detail::subprocess("findstr.exe"s, {"data_out"},
-                                     $stdout > second_out,
-                                     $stderr > second_err);
+      subprocess::detail::builder("findstr.exe"s, {"data_out"},
+                                  $stdout > second_out, $stderr > second_err);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1129,11 +1111,11 @@ TEST(PipelineTest, PipeFirstStderrDefaultSecondBothRedirected) {
 #else
   buffer first_err, second_out, second_err;
   auto subs =
-      subprocess::detail::subprocess("bash"s,
-                                     {"-c", "echo data_out; echo data_err>&2"},
-                                     $stderr > first_err) |
-      subprocess::detail::subprocess(
-          "grep"s, {"data_out"}, $stdout > second_out, $stderr > second_err);
+      subprocess::detail::builder("bash"s,
+                                  {"-c", "echo data_out; echo data_err>&2"},
+                                  $stderr > first_err) |
+      subprocess::detail::builder("grep"s, {"data_out"}, $stdout > second_out,
+                                  $stderr > second_err);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1153,21 +1135,19 @@ TEST(PipelineTest, PipeFirstStderrDefaultSecondBothRedirected) {
 TEST(PipelineTest, ThreeProcessMiddleAllDefaults) {
 #if defined(_WIN32)
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess(
-          "cmd.exe"s, {"/c", "echo AAA&echo BBB&echo CCC&exit /b 0"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"A"}) |
-      subprocess::detail::subprocess("findstr.exe"s, {"A"}, $stdout > out);
+  auto subs = subprocess::detail::builder(
+                  "cmd.exe"s, {"/c", "echo AAA&echo BBB&echo CCC&exit /b 0"}) |
+              subprocess::detail::builder("findstr.exe"s, {"A"}) |
+              subprocess::detail::builder("findstr.exe"s, {"A"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
   ASSERT_EQ(out, "AAA\r\n");
 #else
   buffer out;
-  auto subs =
-      subprocess::detail::subprocess("printf"s, {"AAA\\nBBB\\nCCC\\n"}) |
-      subprocess::detail::subprocess("grep"s, {"A"}) |
-      subprocess::detail::subprocess("grep"s, {"A"}, $stdout > out);
+  auto subs = subprocess::detail::builder("printf"s, {"AAA\\nBBB\\nCCC\\n"}) |
+              subprocess::detail::builder("grep"s, {"A"}) |
+              subprocess::detail::builder("grep"s, {"A"}, $stdout > out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1184,17 +1164,16 @@ TEST(PipelineTest, ThreeProcessMiddleAllDefaults) {
 TEST(PipelineTest, FourProcessMixedRedirectsAndDefaults) {
 #if defined(_WIN32)
   buffer p1_err, p3_err, final_out;
-  auto subs = subprocess::detail::subprocess(
-                  "cmd.exe"s,
-                  {"/c",
-                   "echo Apple&echo Banana&echo Avocado&echo Blueberry&exit "
-                   "/b 0"},
-                  $stderr > p1_err) |
-              subprocess::detail::subprocess("findstr.exe"s, {"A"}) |
-              subprocess::detail::subprocess("findstr.exe"s, {"Avo"},
-                                             $stderr > p3_err) |
-              subprocess::detail::subprocess("findstr.exe"s, {"Avo"},
-                                             $stdout > final_out);
+  auto subs =
+      subprocess::detail::builder(
+          "cmd.exe"s,
+          {"/c",
+           "echo Apple&echo Banana&echo Avocado&echo Blueberry&exit "
+           "/b 0"},
+          $stderr > p1_err) |
+      subprocess::detail::builder("findstr.exe"s, {"A"}) |
+      subprocess::detail::builder("findstr.exe"s, {"Avo"}, $stderr > p3_err) |
+      subprocess::detail::builder("findstr.exe"s, {"Avo"}, $stdout > final_out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1202,13 +1181,13 @@ TEST(PipelineTest, FourProcessMixedRedirectsAndDefaults) {
 #else
   buffer p1_err, p3_err, final_out;
   auto subs =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "bash"s,
           {"-c", "echo Apple; echo Banana; echo Avocado; echo Blueberry"},
           $stderr > p1_err) |
-      subprocess::detail::subprocess("grep"s, {"A"}) |
-      subprocess::detail::subprocess("grep"s, {"Avo"}, $stderr > p3_err) |
-      subprocess::detail::subprocess("grep"s, {"Avo"}, $stdout > final_out);
+      subprocess::detail::builder("grep"s, {"A"}) |
+      subprocess::detail::builder("grep"s, {"Avo"}, $stderr > p3_err) |
+      subprocess::detail::builder("grep"s, {"Avo"}, $stdout > final_out);
 
   int ret = subs.run();
   EXPECT_EQ(ret, 0);
@@ -1224,10 +1203,10 @@ TEST(PipelineTest, MultipleIndependentPipelinesMixedRedirects) {
   // Chain A: first process stderr -> buffer, second process stdout default
   buffer errA;
   auto chainA =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "cmd.exe"s, {"/c", "echo chainA_out&echo chainA_err>&2&exit /b 0"},
           $stderr > errA) |
-      subprocess::detail::subprocess("findstr.exe"s, {"chainA_out"});
+      subprocess::detail::builder("findstr.exe"s, {"chainA_out"});
   int retA = chainA.run();
   EXPECT_EQ(retA, 0);
   ASSERT_FALSE(errA.empty());
@@ -1235,10 +1214,10 @@ TEST(PipelineTest, MultipleIndependentPipelinesMixedRedirects) {
 
   // Chain B: first process no redirects, second process stdout -> buffer
   buffer outB;
-  auto chainB = subprocess::detail::subprocess(
+  auto chainB = subprocess::detail::builder(
                     "cmd.exe"s, {"/c", "echo chainB_data&exit /b 0"}) |
-                subprocess::detail::subprocess("findstr.exe"s, {"chainB_data"},
-                                               $stdout > outB);
+                subprocess::detail::builder("findstr.exe"s, {"chainB_data"},
+                                            $stdout > outB);
   int retB = chainB.run();
   EXPECT_EQ(retB, 0);
   ASSERT_EQ(outB, "chainB_data\r\n");
@@ -1246,11 +1225,11 @@ TEST(PipelineTest, MultipleIndependentPipelinesMixedRedirects) {
   // Chain C: both processes have at least one buffer redirect
   buffer errC, outC;
   auto chainC =
-      subprocess::detail::subprocess(
+      subprocess::detail::builder(
           "cmd.exe"s, {"/c", "echo chainC_out&echo chainC_err>&2&exit /b 0"},
           $stderr > errC) |
-      subprocess::detail::subprocess("findstr.exe"s, {"chainC_out"},
-                                     $stdout > outC);
+      subprocess::detail::builder("findstr.exe"s, {"chainC_out"},
+                                  $stdout > outC);
   int retC = chainC.run();
   EXPECT_EQ(retC, 0);
   ASSERT_FALSE(errC.empty());
@@ -1259,10 +1238,10 @@ TEST(PipelineTest, MultipleIndependentPipelinesMixedRedirects) {
 #else
   // Chain A
   buffer errA;
-  auto chainA = subprocess::detail::subprocess(
+  auto chainA = subprocess::detail::builder(
                     "bash"s, {"-c", "echo chainA_out; echo chainA_err>&2"},
                     $stderr > errA) |
-                subprocess::detail::subprocess("grep"s, {"chainA_out"});
+                subprocess::detail::builder("grep"s, {"chainA_out"});
   int retA = chainA.run();
   EXPECT_EQ(retA, 0);
   ASSERT_FALSE(errA.empty());
@@ -1271,8 +1250,8 @@ TEST(PipelineTest, MultipleIndependentPipelinesMixedRedirects) {
   // Chain B
   buffer outB;
   auto chainB =
-      subprocess::detail::subprocess("printf"s, {"chainB_data\\n"}) |
-      subprocess::detail::subprocess("grep"s, {"chainB_data"}, $stdout > outB);
+      subprocess::detail::builder("printf"s, {"chainB_data\\n"}) |
+      subprocess::detail::builder("grep"s, {"chainB_data"}, $stdout > outB);
   int retB = chainB.run();
   EXPECT_EQ(retB, 0);
   ASSERT_EQ(outB, "chainB_data\n");
@@ -1280,10 +1259,10 @@ TEST(PipelineTest, MultipleIndependentPipelinesMixedRedirects) {
   // Chain C
   buffer errC, outC;
   auto chainC =
-      subprocess::detail::subprocess(
-          "bash"s, {"-c", "echo chainC_out; echo chainC_err>&2"},
-          $stderr > errC) |
-      subprocess::detail::subprocess("grep"s, {"chainC_out"}, $stdout > outC);
+      subprocess::detail::builder("bash"s,
+                                  {"-c", "echo chainC_out; echo chainC_err>&2"},
+                                  $stderr > errC) |
+      subprocess::detail::builder("grep"s, {"chainC_out"}, $stdout > outC);
   int retC = chainC.run();
   EXPECT_EQ(retC, 0);
   ASSERT_FALSE(errC.empty());

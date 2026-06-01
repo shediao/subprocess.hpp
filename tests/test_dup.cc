@@ -205,10 +205,10 @@ TEST(DupTest, PipeDupWithSubprocess) {
   // Run a process writing to p1.  Use spawn + wait so that
   // the child completes before we attempt to read from p2.
 #if defined(_WIN32)
-  S::subprocess proc("cmd.exe"s, {"/c"s, "echo dup_subprocess_test&exit /b 0"},
-                     $stdout > p1);
+  S::builder proc("cmd.exe"s, {"/c"s, "echo dup_subprocess_test&exit /b 0"},
+                  $stdout > p1);
 #else
-  S::subprocess proc("echo", {"-n", "dup_subprocess_test"}, $stdout > p1);
+  S::builder proc("echo", {"-n", "dup_subprocess_test"}, $stdout > p1);
 #endif
   proc.spawn();
   proc.wait();
@@ -500,10 +500,10 @@ TEST(DupTest, PipeDupBeforeSubprocessPattern) {
   auto p_reader = p.dup();
 
 #if defined(_WIN32)
-  S::subprocess proc("cmd.exe", {"/c", "echo dup_before_sp&exit /b 0"},
-                     $stdout > p);
+  S::builder proc("cmd.exe", {"/c", "echo dup_before_sp&exit /b 0"},
+                  $stdout > p);
 #else
-  S::subprocess proc("/bin/echo", {"-n", "dup_before_sp"}, $stdout > p);
+  S::builder proc("/bin/echo", {"-n", "dup_before_sp"}, $stdout > p);
 #endif
   proc.spawn();
   proc.wait();

@@ -575,11 +575,10 @@ TEST(PipeReaderWriterTest, ReadFromStdout) {
   auto pipe = Pipe::create();
   PipeReader reader(pipe);
 #if defined(_WIN32)
-  subprocess::detail::subprocess proc($shell, "<nul set /p=hello&exit /b 0",
-                                      $stdout > pipe);
+  subprocess::detail::builder proc($shell, "<nul set /p=hello&exit /b 0",
+                                   $stdout > pipe);
 #else
-  subprocess::detail::subprocess proc($shell, "printf '%s' hello",
-                                      $stdout > pipe);
+  subprocess::detail::builder proc($shell, "printf '%s' hello", $stdout > pipe);
 #endif
   proc.spawn();
 
@@ -596,10 +595,10 @@ TEST(PipeReaderWriterTest, WriteToStdin) {
   PipeWriter writer(pipe);
   subprocess::buffer outbuf;
 #if defined(_WIN32)
-  subprocess::detail::subprocess proc("more.com", {},
-                                      $stdin<pipe, $stdout> outbuf);
+  subprocess::detail::builder proc("more.com", {},
+                                   $stdin<pipe, $stdout> outbuf);
 #else
-  subprocess::detail::subprocess proc("cat", {}, $stdin<pipe, $stdout> outbuf);
+  subprocess::detail::builder proc("cat", {}, $stdin<pipe, $stdout> outbuf);
 #endif
 
   std::string_view data = "hello";

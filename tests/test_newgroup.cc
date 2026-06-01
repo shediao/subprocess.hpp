@@ -151,7 +151,7 @@ TEST(NewgroupTest, NewgroupTrueRunDoesNotAutoRedirectStdin) {
 
 #if !defined(_WIN32)
 TEST(NewgroupTest, PidAccessorReturnsValidPid) {
-  subprocess::detail::subprocess proc(CMD_SLEEP_1);
+  subprocess::detail::builder proc(CMD_SLEEP_1);
 
   proc.spawn();
   auto pid = proc.pid();
@@ -167,7 +167,7 @@ TEST(NewgroupTest, PidAccessorReturnsValidPid) {
 }
 
 TEST(NewgroupTest, PidAccessorInNewgroupMode) {
-  subprocess::detail::subprocess proc(CMD_SLEEP_1, newgroup = true);
+  subprocess::detail::builder proc(CMD_SLEEP_1, newgroup = true);
 
   proc.spawn();
   auto pid = proc.pid();
@@ -184,7 +184,7 @@ TEST(NewgroupTest, PidAccessorInNewgroupMode) {
 }
 
 TEST(NewgroupTest, PidAccessorNoNewgroupNoProcessGroup) {
-  subprocess::detail::subprocess proc(CMD_SLEEP_1, newgroup = false);
+  subprocess::detail::builder proc(CMD_SLEEP_1, newgroup = false);
 
   proc.spawn();
   auto pid = proc.pid();
@@ -287,10 +287,10 @@ TEST(NewgroupTest, CaptureRunNewgroupProducesOutput) {
 TEST(NewgroupTest, PipelineWithNewgroupOnWindows) {
   using std::string_literals::operator""s;
   subprocess::buffer out;
-  auto pipeline = subprocess::detail::subprocess(
+  auto pipeline = subprocess::detail::builder(
                       "cmd.exe"s, {"/c", "echo hello_pipeline&exit /b 0"},
                       newgroup = true) |
-                  subprocess::detail::subprocess(
+                  subprocess::detail::builder(
                       "findstr.exe"s, {"hello_pipeline"}, $stdout > out);
 
   int ret = pipeline.run();

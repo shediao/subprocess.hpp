@@ -156,7 +156,7 @@ extern char** environ;
 namespace subprocess {
 
 namespace detail {
-class subprocess;
+class builder;
 class Redirector;
 class StdinRedirector;
 class StdoutRedirector;
@@ -2573,13 +2573,13 @@ struct named_arg_type_list<Head, Tails...> {
 template <typename... T>
 using named_arg_type_list_t = named_arg_type_list<T...>::type;
 
-class subprocess {
+class builder {
   friend class pipeline;
 
  public:
   template <named_argument_type... T>
-  explicit subprocess(NativeString app, std::vector<NativeString> args,
-                      T&&... named_args)
+  explicit builder(NativeString app, std::vector<NativeString> args,
+                   T&&... named_args)
       : app_(std::move(app)), args_(std::move(args)) {
     std::map<NativeString, NativeString> environments;
     std::map<NativeString, NativeString> env_appends;
@@ -2663,8 +2663,8 @@ class subprocess {
   }
 
   template <named_argument_type... Args>
-  subprocess(Shell shell, NativeString command, Args&&... named_args)
-      : subprocess(
+  builder(Shell shell, NativeString command, Args&&... named_args)
+      : builder(
             shell.shell_cmd(),
             [&shell](NativeString command) {
               std::vector<NativeString> ret{shell.shell_args()};
@@ -2679,9 +2679,9 @@ class subprocess {
 
 #if defined(_WIN32)
   template <named_argument_type... T>
-  explicit subprocess(std::string const& app,
-                      std::vector<std::string> const& args, T&&... named_args)
-      : subprocess(
+  explicit builder(std::string const& app, std::vector<std::string> const& args,
+                   T&&... named_args)
+      : builder(
             TO_NATIVE_STRING(app),
             [](auto const& args) {
               std::vector<NativeString> ret;
@@ -2691,17 +2691,17 @@ class subprocess {
             }(args),
             std::forward<T>(named_args)...) {}
   template <named_argument_type... Args>
-  subprocess(Shell shell, std::string command, Args&&... named_args)
-      : subprocess(shell, utf8_to_utf16(std::move(command)),
-                   std::forward<Args>(named_args)...) {}
+  builder(Shell shell, std::string command, Args&&... named_args)
+      : builder(shell, utf8_to_utf16(std::move(command)),
+                std::forward<Args>(named_args)...) {}
 #endif
 
-  subprocess(subprocess&&) noexcept = default;
-  subprocess& operator=(subprocess&&) noexcept = default;
-  subprocess(const subprocess&) = delete;
-  subprocess& operator=(const subprocess&) = delete;
+  builder(builder&&) noexcept = default;
+  builder& operator=(builder&&) noexcept = default;
+  builder(const builder&) = delete;
+  builder& operator=(const builder&) = delete;
 
-  ~subprocess() {
+  ~builder() {
     terminate();
 #if defined(_WIN32)
     join_pump_threads();
@@ -3179,12 +3179,12 @@ class subprocess {
 
 class pipeline {
  public:
-  explicit pipeline(subprocess&& sub) { subs_.push_back(std::move(sub)); }
+  explicit pipeline(builder&& sub) { subs_.push_back(std::move(sub)); }
   pipeline(pipeline&&) = default;
   pipeline& operator=(pipeline&&) = default;
   pipeline(pipeline const&) = delete;
   pipeline& operator=(pipeline const&) = delete;
-  pipeline& append(subprocess&& sub) {
+  pipeline& append(builder&& sub) {
     subs_.push_back(std::move(sub));
     return *this;
   }
@@ -3235,17 +3235,17 @@ class pipeline {
   [[nodiscard]] std::vector<int> exit_codes() const { return exit_codes_; }
 
  private:
-  std::vector<subprocess> subs_;
+  std::vector<builder> subs_;
   std::vector<int> exit_codes_;
 };
 
-inline pipeline operator|(subprocess&& lhs, subprocess&& rhs) {
+inline pipeline operator|(builder&& lhs, builder&& rhs) {
   pipeline subs(std::move(lhs));
   subs.append(std::move(rhs));
   return subs;
 }
 
-inline pipeline operator|(pipeline lhs, subprocess&& rhs) {
+inline pipeline operator|(pipeline lhs, builder&& rhs) {
   lhs.append(std::move(rhs));
   return lhs;
 }
@@ -3293,8 +3293,8 @@ using detail::named_args::powershell;
 template <detail::string_like_type T, detail::named_argument_type... Args>
 inline int run(T&& app, std::vector<detail::to_string_t<T>> args,
                Args&&... named_args) {
-  return detail::subprocess(detail::to_string_t<T>(std::forward<T>(app)),
-                            std::move(args), std::forward<Args>(named_args)...)
+  return detail::builder(detail::to_string_t<T>(std::forward<T>(app)),
+                         std::move(args), std::forward<Args>(named_args)...)
       .run();
 }
 
@@ -3340,7 +3340,7 @@ inline int run(T&& app, Args... args) {
 
 template <detail::string_like_type Command, detail::named_argument_type... Args>
 inline int run(detail::Shell s, Command&& command, Args&&... args) {
-  return detail::subprocess(
+  return detail::builder(
              s, detail::to_string_t<Command>(std::forward<Command>(command)),
              std::forward<Args>(args)...)
       .run();
@@ -3408,7 +3408,7 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
   std::tuple<int, buffer, buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ =
-      detail::subprocess(
+      detail::builder(
           s, detail::to_string_t<Command>(std::forward<Command>(command)),
           StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
           std::forward<Args>(args)..., StdoutRedirector{std_out_},
@@ -3423,7 +3423,7 @@ inline bool detach_run(T app, std::vector<detail::to_string_t<T>> args,
                        Args&&... named_args) {
   using namespace named_arguments;
   using namespace detail;
-  return detail::subprocess(
+  return detail::builder(
              detail::to_string_t<T>(std::forward<T>(app)), std::move(args),
              std::forward<Args>(named_args)...,
              StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
@@ -3458,7 +3458,7 @@ template <detail::string_like_type Command,
 inline bool detach_run(detail::Shell s, Command&& command, Args&&... args) {
   using namespace named_arguments;
   using namespace detail;
-  return detail::subprocess(
+  return detail::builder(
              s, detail::to_string_t<Command>(std::forward<Command>(command)),
              std::forward<Args>(args)...,
              StdinRedirector(File{devnull, File::OpenType::ReadOnly}),
