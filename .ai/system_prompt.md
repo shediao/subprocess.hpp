@@ -1,6 +1,5 @@
-# Ai.md
 
-This file provides guidance to Ai Coder when working with code in this repository.
+This Content provides guidance to Ai Coder when working with code in this repository.
 
 ## Build Commands
 
@@ -140,7 +139,7 @@ gh run view <run-id> --log --job <job-id>
 
 **When fetching logs with `gh` commands, always prefer getting only the key information rather than the full logs unless absolutely necessary.** For example:
 
-- Use `gh run view <run-id> --log --failed` to get only failed step logs (if supported).
+- Use `gh run view <run-id> --log-failed` to get only failed step logs (if supported).
 - Pipe through `grep` to filter for error messages, failed test names, or compilation errors: `gh run view <run-id> --log 2>&1 | grep -E '(error:|FAILED|failure)'`.
 - For test failures, look for the specific test output rather than the entire build log.
 - Only fetch full logs when the filtered output does not provide enough context to diagnose the issue.
@@ -158,7 +157,7 @@ If the corresponding cross-compilation environment does not exist locally, just 
 
 ## Architecture
 
-This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) for running child processes on Windows, Linux, and macOS. The entire implementation lives in a single header (~3492 lines).
+This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) for running child processes on Windows, Linux, and macOS. The entire implementation lives in a single header (~3564 lines).
 
 ### Namespace & Macro Controls
 
@@ -169,7 +168,7 @@ This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) fo
 
 ### RAII & Platform Primitives (`detail` namespace)
 
-- **`detail::unique_fd_base`** — CRTP base class template for RAII handle wrappers. Templated on handle type, derived type, and deleter function. Provides move semantics, invalid-value tracking, and comparison operators.
+- **`detail::unique_fd_base`** — CRTP base class template for RAII handle wrappers. Templated on handle type (`T`), derived type (`Derived`), deleter function (`void(*)(T&)`), and traits (`Trait = fd_traits<T>`). Provides move semantics, invalid-value tracking, comparison operators, and `swap`.
 - **`detail::unique_fd`** — RAII wrapper over `NativeHandle` (Windows `HANDLE` / Unix `int` fd). Inherits from `unique_fd_base` with `close_native_handle` deleter. Supports `dup()`, `close()`, `isatty()`, and `set_nonblocking()` (Unix only).
 - **`detail::unique_pid`** — (Unix only) RAII wrapper over `pid_t` with a no-op deleter, using the `unique_fd_base` CRTP. Used for child process and process group IDs.
 - **`detail::scope_exit`** — scope guard utility, similar to `std::experimental::scope_exit`. Used for cleanup: watchdog thread stop, pump thread join. Create with `make_scope_exit(fn)`.
@@ -201,9 +200,13 @@ This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) fo
   - On Unix: walks `PATH` entries, checks with `stat()` + `access(X_OK)`, resolves paths containing `/` via `realpath`.
 - **`convert_to_string<ToCharT>()`** — template helper that converts between narrow and wide string types. On Windows, uses `utf8_to_utf16`/`utf16_to_utf8` for cross-encoding conversion.
 
-### Core class: `detail::subprocess`
+### Core classes: `detail::builder` + `detail::process`
 
-The main implementation class. Holds the command vector, I/O redirectors, environment, cwd, timeout, newgroup flags, and platform-specific process handles.
+The old monolithic `detail::subprocess` class has been split into two classes with clear responsibilities:
+
+#### `detail::builder` — configuration & spawning
+
+Holds all pre-spawn configuration: the command vector, I/O redirectors, environment, cwd, timeout, newgroup flags, and platform-specific handles.
 
 **Key fields:**
 
@@ -212,14 +215,37 @@ The main implementation class. Holds the command vector, I/O redirectors, enviro
 - `env_`: `map<wstring,wstring>` on Windows, `map<string,string>` on Unix.
 - `stdin_`, `stdout_`, `stderr_`: `StdinRedirector`, `StdoutRedirector`, `StderrRedirector` respectively.
 - `timeout_`: `optional<chrono::milliseconds>` on both platforms.
-- **Windows-specific**: `shared_ptr<unique_fd> job_handle_` (Job Object), `unique_fd process_handle_` + `thread_handle_`, `vector<unsigned char> proc_thread_attr_list_` (for explicit handle inheritance), `vector<thread> pump_threads_`, `bool newgroup_`, `argv_to_command_line_fn` function pointer.
-- **Unix-specific**: `detail::Timer watchdog_`, `unique_pid pid_` + `pgid_`, `optional<pid_t> requested_pgid_`, `int early_exit_status_` + `bool child_reaped_early_` (for handling grandchildren that hold pipe write-ends open).
+- **Windows-specific**: `shared_ptr<unique_fd> job_handle_` (Job Object), `vector<unsigned char> proc_thread_attr_list_` (for explicit handle inheritance), `bool newgroup_`, `argv_to_command_line_fn` function pointer.
+- **Unix-specific**: `optional<pid_t> requested_pgid_` (signal for newgroup / pipeline pgid joining).
 
 **Key methods:**
 
-- `spawn()` — the main entry point for running a subprocess. Calls `prepare_for_child()` → platform-specific spawn → `close_child_end()` → `pump_pipe_data()`.
-- `detach_spawn()` — spawns a detached/daemonized process. On Unix: double-fork + `setsid()`. On Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`. stdin/stdout/stderr are redirected to `/dev/null` (or `NUL` on Windows). Returns `true` if spawn succeeded (but exec failures are invisible on Unix).
-- `run()` — calls `spawn()` then `wait()`.
+- `spawn()` — the main entry point for running a subprocess. Calls `prepare_for_child()` → platform-specific spawn function → returns a `process` object. A scope guard calls `close_child_end()` on exit.
+  - **Windows (`spawn_win()`)**: Creates Job Object, sets up `STARTUPINFOEXW` with explicit handle inheritance via `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, calls `CreateProcessW`. Returns `process(pi.hProcess, pi.hThread, stdin_, stdout_, stderr_, timeout_, job_handle_)`.
+  - **Unix (`spawn_posix()`)**: `fork()` — child calls `execute_command_in_child()`; parent calls `setpgid()` and returns `process(pid, pgid, stdin_, stdout_, stderr_, timeout_)`.
+- `detach_spawn()` — spawns a detached/daemonized process. On Unix: double-fork + `setsid()`. On Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`. stdin/stdout/stderr default to `/dev/null` (or `NUL` on Windows). Returns `true` if spawn succeeded.
+- `run()` — calls `spawn()` then `process::wait()`.
+- `prepare_for_child()` / `close_child_end()` — delegate to each redirector's lifecycle methods.
+- `execute_command_in_child()` — (Unix, child-side after fork) closes parent-end fds, `chdir()` to cwd, resolves executable via `find_executable()`, calls `execve()` or `execv()`.
+
+**Constructors**:
+- `builder(NativeString app, vector<NativeString> args, named_args...)` — processes all named argument types via fold expression. Environment cascade: base → `Env` (replacement) → `EnvAppend` (merge) → `EnvItemAppend` (append/prepend). On Windows, env keys are upper-cased for case-insensitive matching. If `EnvAppend`/`EnvItemAppend` are used without `Env`, current process env is used as base.
+- `builder(Shell, command, named_args...)` — builds command from shell's executable + prefix args + user command. On Windows with `Shell::Cmd()`, sets `argv_to_command_line_fn` to `argv_to_command_line_for_cmd`.
+
+#### `detail::process` — running process handle
+
+Represents a spawned child process. Its constructor immediately starts I/O pumping. Holds the platform process handle/pid, I/O redirectors, and runtime state.
+
+**Key fields:**
+
+- **Windows-specific**: `unique_fd process_handle_` + `thread_handle_`, `shared_ptr<unique_fd> job_handle_`, `vector<thread> pump_threads_`.
+- **Unix-specific**: `unique_pid pid_` + `pgid_`, `detail::Timer watchdog_`, `int early_exit_status_` + `bool child_reaped_early_`.
+- `stdin_`, `stdout_`, `stderr_`: moved from builder after spawn.
+- `timeout_`: `optional<chrono::milliseconds>`.
+
+**Key methods:**
+
+- (constructor) — calls `launch_watchdog()` (Unix, if timeout set) then `pump_pipe_data()`.
 - `wait()` — blocks until the child exits, then returns the exit code.
   - **Windows**: `WaitForSingleObject` on process handle, with optional timeout; calls `terminate()` on timeout. Joins pump threads via scope guard.
   - **Unix**: Calls `waitpid()`, unless the child was already reaped early by the I/O pump (stored in `early_exit_status_`). Converts signal exit to `128 + signo`. Stops watchdog via scope guard.
@@ -227,17 +253,18 @@ The main implementation class. Holds the command vector, I/O redirectors, enviro
   - **Windows**: `TerminateJobObject` first (closes child's inherited pipe handles, unblocking I/O threads), falls back to `TerminateProcess`. Then closes all redirectors.
   - **Unix**: `kill(-pid, SIGTERM)` with 100ms grace period polling, then `kill(-pid, SIGKILL)`. Only uses process group kill when the child is the process group leader (`pid == pgid`).
 - `pid()` — returns the native process ID (`HANDLE` on Windows, `pid_t` on Unix).
-
-**Constructor**: The subprocess constructor takes an executable name, argument vector, and named arguments. It processes all named argument types (stdin/stdout/stderr redirectors, `Env`, `EnvAppend`, `EnvItemAppend`, `Cwd`, `Newgroup`, `Timeout`) and builds the final environment via a cascade: base environment → `Env` (replacement) → `EnvAppend` (merge) → `EnvItemAppend` (append/prepend to specific keys). On Windows, env keys are upper-cased for case-insensitive matching.
+- `is_valid()` / `operator bool()` — checks if the process handle is valid.
+- `~process()` — calls `terminate()`, then (Windows) `join_pump_threads()`.
+- (private) `pump_pipe_data()`, `close_child_end()`, `launch_watchdog()`, `stop_watchdog()` — internal helpers.
 
 ### Shell Support
 
-- **`detail::Shell`** — represents a shell interpreter. Provides `shell_cmd()` and `shell_args()` to get the shell executable and its prefix arguments. Factory methods:
-  - `.bash()` / `Shell::Bash()` — `bash -c` (Unix: `/bin/bash`, Windows: `bash`)
-  - `.sh()` / `Shell::Sh()` — `sh -c` (Unix only: `/bin/sh`)
-  - `.cmd()` / `Shell::Cmd()` — `cmd.exe /d /s /c` (Windows only, resolves via `COMSPEC` or `SystemRoot`)
+- **`detail::Shell`** — represents a shell interpreter. Uses a function-pointer-based factory pattern: each factory method sets `shell_prefix_commands` to a static function, and (on Windows) optionally sets `argv_to_command_line_fn`. Provides `shell_cmd()` (first element) and `shell_args()` (remaining elements). Factory methods:
+  - `.bash()` / `Shell::Bash()` — `bash -c` (cross-platform: `/bin/bash` on Unix, `bash` on Windows)
+  - `.posix()` / `Shell::Posix()` — `sh -c` (Unix only: `/bin/sh`)
+  - `.cmd()` / `Shell::Cmd()` — `cmd.exe /d /s /c` (Windows only, resolves via `COMSPEC` or `SystemRoot`). Also sets `argv_to_command_line_fn` to `argv_to_command_line_for_cmd`.
   - `.powershell()` / `Shell::Powershell()` — `powershell -NoProfile -Command` (Windows only)
-- **Pre-built instances**: `detail::named_args::shell`, `detail::named_args::bash`, `detail::named_args::powershell` (Windows). Dollar-named versions: `$shell`, `$bash`, `$powershell`.
+- **Pre-built instances**: `detail::named_args::shell` (Windows: `Shell::Cmd()`, Unix: `Shell::Posix()`), `detail::named_args::bash` (`Shell::Bash()`), `detail::named_args::powershell` (Windows only: `Shell::Powershell()`). Dollar-named versions: `$shell`, `$bash`, `$powershell` (Windows).
 - **`subprocess(Shell, command, named_args...)` constructor** — builds the subprocess with the shell's executable and prefix args, appending the user's command as the final argument. On Windows with cmd.exe, automatically uses `argv_to_command_line_for_cmd()`.
 - **Public API overloads**: `run(Shell, command, args...)`, `capture_run(Shell, command, args...)`, `detach_run(Shell, command, args...)` — accept a `Shell` instance as the first argument.
 
@@ -344,12 +371,12 @@ The **variadic template functions** partition arguments at compile time using C+
 auto exit_code = (subprocess("prog1") | subprocess("prog2") | subprocess("prog3")).run();
 ```
 
-- On construction/append, pipes are created between adjacent subprocesses: `subproc_n.stdout` → pipe → `subproc_{n+1}.stdin`.
-- On Windows, all subprocesses share the first subprocess's `job_handle_`.
-- On Unix, the first subprocess creates a new process group; subsequent subprocesses join that group (`requested_pgid_ = first.pid()`).
-- `run()` launches all subprocesses sequentially via `spawn()`, then waits for all to exit. Returns the last subprocess's exit code.
+- Pipes are created between adjacent builders: `builder_n.stdout` → pipe → `builder_{n+1}.stdin`.
+- On Windows, all builders share the first builder's `job_handle_`.
+- On Unix, the first builder creates a new process group (`requested_pgid_ = 0`); subsequent builders join that group (`requested_pgid_ = first_sub.pid()`).
+- `run()` calls `spawn()` on each builder sequentially, then `wait()` on each resulting `process`. Returns the last subprocess's exit code.
 - `exit_codes()` returns all exit codes as a `vector<int>`.
-- `terminate()` delegates to the first subprocess's `terminate()`, which kills the entire job/process group.
+- `terminate()` delegates to the first `process` in `subs_`, which kills the entire job/process group.
 
 ### I/O Pump Strategy
 
@@ -390,7 +417,7 @@ auto exit_code = (subprocess("prog1") | subprocess("prog2") | subprocess("prog3"
 
 ### Environment Handling
 
-- Environment cascade in the `subprocess` constructor: base (current env) → `Env` (full replacement) → `EnvAppend` (merge) → `EnvItemAppend` (append/prepend to specific keys). If `EnvAppend` or `EnvItemAppend` are used without `Env`, the current process environment is used as the base.
+- Environment cascade in the `builder` constructor: base (current env) → `Env` (full replacement) → `EnvAppend` (merge) → `EnvItemAppend` (append/prepend to specific keys). If `EnvAppend` or `EnvItemAppend` are used without `Env`, the current process environment is used as the base.
 - On Windows, env keys are case-insensitive: they are uppercased during lookup.
 
 ### Tests
