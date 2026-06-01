@@ -184,7 +184,7 @@ This is a **header-only** C++20 library (`include/subprocess/subprocess.hpp`) fo
 
 ### Timer Class
 
-- **`detail::Timer`** — general-purpose async timer using `std::thread` + `condition_variable`. Supports `start(fn, duration)`, `stop()`, `running()`, and static `after(fn, duration)`. Uses `std::shared_ptr<State>` for safe move semantics and destruction-from-own-thread handling. Used on Unix as the watchdog timer instead of a raw thread.
+- **`detail::Timer`** — general-purpose async timer using `std::thread` + `condition_variable`. Supports `start(fn, duration)`, `stop()`, `running()`, and static `after(fn, duration)`. Uses `std::shared_ptr<State>` for safe move semantics and destruction-from-own-thread handling. Used on both platforms as the watchdog timer for timeout enforcement.
 
 ### String & Command-Line Utilities
 
@@ -239,15 +239,16 @@ Represents a spawned child process. Its constructor immediately starts I/O pumpi
 **Key fields:**
 
 - **Windows-specific**: `unique_fd process_handle_` + `thread_handle_`, `shared_ptr<unique_fd> job_handle_`, `vector<thread> pump_threads_`.
-- **Unix-specific**: `unique_pid pid_` + `pgid_`, `detail::Timer watchdog_`, `int early_exit_status_` + `bool child_reaped_early_`.
+- **Unix-specific**: `unique_pid pid_` + `pgid_`, `int early_exit_status_` + `bool child_reaped_early_`.
 - `stdin_`, `stdout_`, `stderr_`: moved from builder after spawn.
 - `timeout_`: `optional<chrono::milliseconds>`.
+- `watchdog_`: `detail::Timer` (common) — async timer for timeout enforcement.
 
 **Key methods:**
 
-- (constructor) — calls `launch_watchdog()` (Unix, if timeout set) then `pump_pipe_data()`.
+- (constructor) — calls `launch_watchdog()` (if timeout set) then `pump_pipe_data()` (both platforms).
 - `wait()` — blocks until the child exits, then returns the exit code.
-  - **Windows**: `WaitForSingleObject` on process handle, with optional timeout; calls `terminate()` on timeout. Joins pump threads via scope guard.
+  - **Windows**: `WaitForSingleObject(INFINITE)` on process handle (watchdog handles timeout). Joins pump threads and stops watchdog via scope guards.
   - **Unix**: Calls `waitpid()`, unless the child was already reaped early by the I/O pump (stored in `early_exit_status_`). Converts signal exit to `128 + signo`. Stops watchdog via scope guard.
 - `terminate()` — kills the process tree.
   - **Windows**: `TerminateJobObject` first (closes child's inherited pipe handles, unblocking I/O threads), falls back to `TerminateProcess`. Then closes all redirectors.
@@ -389,8 +390,10 @@ auto exit_code = (subprocess("prog1") | subprocess("prog2") | subprocess("prog3"
 
 ### Timeout Mechanism
 
-- **Unix**: Uses `detail::Timer` (a `shared_ptr<State>` based async timer with `condition_variable`). On timeout, calls `terminate()`. `stop_watchdog()` signals the timer to cancel in `wait()`.
-- **Windows**: No separate watchdog thread. Instead, `WaitForSingleObject` in `wait()` directly uses the timeout value. If it times out, `terminate()` is called (which closes child handles, unblocking the I/O threads).
+Both platforms use a `detail::Timer`-based watchdog launched in the `process` constructor via `launch_watchdog()`. On timeout, the watchdog thread calls `terminate()`, which kills the process group / job object and closes I/O handles. This ensures the timeout is enforced even if the user delays calling `wait()`.
+
+- **Windows**: `wait()` uses `WaitForSingleObject(INFINITE)` and stops the watchdog via scope guard (`stop_watchdog()`). The watchdog handles the actual timeout.
+- **Unix**: `wait()` calls `waitpid()` and stops the watchdog via scope guard. If the I/O pump already reaped the child (stored in `early_exit_status_`), that exit code is used.
 
 ### Detach Mechanism
 
@@ -408,7 +411,7 @@ auto exit_code = (subprocess("prog1") | subprocess("prog2") | subprocess("prog3"
 | Handle inheritance   | Explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`       | FDs set `O_CLOEXEC` / `FD_CLOEXEC` by default; parent-end closed after fork |
 | Pipe creation        | `CreatePipe` (non-inheritable)                     | `pipe2(O_CLOEXEC)` on Linux, `pipe` + `fcntl(FD_CLOEXEC)` elsewhere         |
 | I/O pump             | Multi-threaded `WriteFile`/`ReadFile`              | Single-threaded `poll()` + non-blocking I/O                                 |
-| Timeout              | `WaitForSingleObject` timeout                      | `detail::Timer` + `condition_variable`                                      |
+| Timeout              | `detail::Timer` watchdog (launched in constructor) | `detail::Timer` watchdog (launched in constructor)                          |
 | String encoding      | UTF-16 (`wstring`) everywhere internally           | UTF-8 (`string`) internally                                                 |
 | Environment          | `GetEnvironmentStringsW`, null-delimited block     | `environ`, null-delimited strings                                           |
 | Error output         | `WriteConsoleW` (VT-aware) fallback to `WriteFile` | `write(STDERR_FILENO, ...)` with EINTR retry                                |

@@ -264,3 +264,56 @@ TEST(TimeoutTest, QuickCommandWithProcessGroupNoSideEffect) {
 }
 
 #endif  // !_WIN32
+
+// =============================================================================
+// Test that timeout fires independently of wait().
+// The watchdog is launched in the process constructor and kills the child
+// even if the user delays calling wait(). Before the Windows watchdog fix,
+// timeout on Windows only took effect inside wait() via WaitForSingleObject.
+// =============================================================================
+TEST(TimeoutTest, TimeoutFiresWithoutCallingWait) {
+  auto start = std::chrono::steady_clock::now();
+
+  // Spawn a long-sleeping process with a short timeout, but delay wait().
+  // The watchdog must kill the child on its own.
+  {
+    subprocess::detail::builder b(
+#if defined(_WIN32)
+        TEXT("cmd.exe"), {TEXT("/c"), TEXT("ping 127.0.0.1 -n 21 > nul")},
+#else
+        "sleep", {"20"},
+#endif
+        $timeout = std::chrono::milliseconds(500));
+    auto proc = b.spawn();
+    ASSERT_TRUE(proc.is_valid());
+
+    // Sleep long enough for the watchdog to fire (~500ms timeout),
+    // but not so long that the child would exit naturally (20s sleep).
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // wait() should return quickly — the watchdog already killed it.
+    auto exit_code = proc.wait();
+
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+    // If the watchdog worked, total time ≪ 20s.  If we were blocked in
+    // WaitForSingleObject(INFINITE) without a watchdog, the sleep would
+    // still be running and wait() would block for ~20s.
+    EXPECT_LT(elapsed_ms, 10000);
+
+    // The process was killed by the watchdog, not a clean exit.
+#if !defined(_WIN32)
+    EXPECT_EQ(exit_code, 143);  // 128 + SIGTERM
+#else
+    EXPECT_NE(exit_code, 0);
+#endif
+  }
+
+  // Verify total time is reasonable.
+  auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - start)
+                      .count();
+  EXPECT_LT(total_ms, 10000);
+}

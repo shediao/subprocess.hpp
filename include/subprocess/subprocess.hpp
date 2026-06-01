@@ -2591,6 +2591,7 @@ class process {
     if (!process_handle_) {
       return;
     }
+    launch_watchdog();
     pump_pipe_data();
   }
 #else
@@ -2643,23 +2644,17 @@ class process {
 // void wait_for(std::chrono::milliseconds timeout) {}
 #if defined(_WIN32)
   int wait() {
+    auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
     auto threads_guard =
         detail::make_scope_exit([this] { join_pump_threads(); });
     if (!process_handle_) {
       return 127;
     }
-    auto rc = WaitForSingleObject(
-        process_handle_.get(),
-        timeout_.has_value() ? static_cast<DWORD>(timeout_.value().count())
-                             : INFINITE);
+    auto rc = WaitForSingleObject(process_handle_.get(), INFINITE);
     if (rc == WAIT_OBJECT_0) {
       DWORD ret{127};
       GetExitCodeProcess(process_handle_.get(), &ret);
       return static_cast<int>(ret);
-    }
-    if (rc == WAIT_TIMEOUT) {
-      terminate();  // close_all() unblocks I/O threads
-      return 127;
     }
     return 127;
   }
@@ -2763,15 +2758,15 @@ class process {
       }
     }
   }
+#endif
   void launch_watchdog() {
     if (!timeout_.has_value()) {
       return;
     }
     watchdog_ = Timer::after([this]() { terminate(); }, *timeout_);
-  };
+  }
 
   void stop_watchdog() { watchdog_.stop(); }
-#endif
   void close_child_end() {
     stdin_.close_child_end();
     stdout_.close_child_end();
@@ -2787,7 +2782,6 @@ class process {
 #else
   unique_pid pid_{-1};
   unique_pid pgid_{-1};
-  detail::Timer watchdog_;
   int early_exit_status_{0};
   bool child_reaped_early_{false};
 #endif
@@ -2795,6 +2789,7 @@ class process {
   StdoutRedirector stdout_;
   StderrRedirector stderr_;
   std::optional<std::chrono::milliseconds> timeout_{std::nullopt};
+  detail::Timer watchdog_;
 };
 
 class builder {
