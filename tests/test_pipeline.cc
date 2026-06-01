@@ -58,17 +58,17 @@ TEST(PipelineTest, ThreeProcessManualChain) {
   auto pipe1 = subprocess::detail::Pipe::create();
   auto pipe2 = subprocess::detail::Pipe::create();
 
-  subprocess::detail::builder p1("cmd.exe"s,
+  subprocess::detail::builder b1("cmd.exe"s,
                                  {"/c", "echo 123&echo 124&echo 456&exit /b 0"},
                                  $stdout > pipe1);
-  subprocess::detail::builder p2("findstr.exe"s, {"2"},
+  subprocess::detail::builder b2("findstr.exe"s, {"2"},
                                  $stdin<pipe1, $stdout> pipe2);
-  subprocess::detail::builder p3("findstr.exe"s, {"4"},
+  subprocess::detail::builder b3("findstr.exe"s, {"4"},
                                  $stdin<pipe2, $stdout> out);
 
-  p1.spawn();
-  p2.spawn();
-  p3.spawn();
+  auto p1 = b1.spawn();
+  auto p2 = b2.spawn();
+  auto p3 = b3.spawn();
 
   auto r1 = p1.wait();
   auto r2 = p2.wait();
@@ -82,14 +82,14 @@ TEST(PipelineTest, ThreeProcessManualChain) {
   auto pipe1 = subprocess::detail::Pipe::create();
   auto pipe2 = subprocess::detail::Pipe::create();
 
-  subprocess::detail::builder p1("echo", {"123\n456"}, $stdout > pipe1);
-  subprocess::detail::builder p2("sed", {"-e", "s/3/4/g"},
+  subprocess::detail::builder b1("echo", {"123\n456"}, $stdout > pipe1);
+  subprocess::detail::builder b2("sed", {"-e", "s/3/4/g"},
                                  $stdin<pipe1, $stdout> pipe2);
-  subprocess::detail::builder p3("grep", {"4"}, $stdin<pipe2, $stdout> out);
+  subprocess::detail::builder b3("grep", {"4"}, $stdin<pipe2, $stdout> out);
 
-  p1.spawn();
-  p2.spawn();
-  p3.spawn();
+  auto p1 = b1.spawn();
+  auto p2 = b2.spawn();
+  auto p3 = b3.spawn();
 
   auto r1 = p1.wait();
   auto r2 = p2.wait();
@@ -425,10 +425,10 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 #if defined(_WIN32)
   auto pipe = subprocess::detail::Pipe::create();
 
-  subprocess::detail::builder p(
+  subprocess::detail::builder b(
       "cmd.exe"s, {"/c"s, "echo single_pipe_test&exit /b 0"}, $stdout > pipe);
 
-  p.spawn();
+  auto p = b.spawn();
   buffer tmp;
   read_from_native_handle(pipe.rfd(), tmp);
   p.wait();
@@ -436,10 +436,10 @@ TEST(PipelineTest, SingleProcessWithExplicitPipe) {
 #else
   auto pipe = subprocess::detail::Pipe::create();
 
-  subprocess::detail::builder p("printf", {"single_pipe_test\\n"},
+  subprocess::detail::builder b("printf", {"single_pipe_test\\n"},
                                 $stdout > pipe);
 
-  p.spawn();
+  auto p = b.spawn();
   buffer tmp;
   read_from_native_handle(pipe.rfd(), tmp);
   p.wait();
@@ -782,12 +782,12 @@ TEST(PipelineTest, ExplicitPipeClosedAfterUse) {
   {
     auto pipe = subprocess::detail::Pipe::create();
 #if defined(_WIN32)
-    subprocess::detail::builder p(
+    subprocess::detail::builder b(
         "cmd.exe"s, {"/c"s, "echo pipe_raii&exit /b 0"}, $stdout > pipe);
 #else
-    subprocess::detail::builder p("printf", {"pipe_raii\\n"}, $stdout > pipe);
+    subprocess::detail::builder b("printf", {"pipe_raii\\n"}, $stdout > pipe);
 #endif
-    p.spawn();
+    auto p = b.spawn();
     read_from_native_handle(pipe.rfd(), captured);
     p.wait();
   }

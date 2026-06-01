@@ -210,8 +210,7 @@ TEST(DupTest, PipeDupWithSubprocess) {
 #else
   S::builder proc("echo", {"-n", "dup_subprocess_test"}, $stdout > p1);
 #endif
-  proc.spawn();
-  proc.wait();
+  proc.run();
 
   // The child has exited, closing its stdout (a dup of the pipe write end).
   // close_child_end() already closed p1.wfd().  p2.wfd() still refers
@@ -505,8 +504,7 @@ TEST(DupTest, PipeDupBeforeSubprocessPattern) {
 #else
   S::builder proc("/bin/echo", {"-n", "dup_before_sp"}, $stdout > p);
 #endif
-  proc.spawn();
-  proc.wait();
+  proc.run();
 
   // p's fds were closed by the child; p_reader is independent.
   p_reader.close_write();

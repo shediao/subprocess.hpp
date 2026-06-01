@@ -580,13 +580,13 @@ TEST(PipeReaderWriterTest, ReadFromStdout) {
 #else
   subprocess::detail::builder proc($shell, "printf '%s' hello", $stdout > pipe);
 #endif
-  proc.spawn();
+  auto p = proc.spawn();
 
   char buf[16];
   auto n = reader.read(buf, sizeof(buf));
   ASSERT_GT(n, 0);
   ASSERT_EQ(std::string(buf, static_cast<size_t>(n)), "hello");
-  proc.wait();
+  p.wait();
 }
 
 TEST(PipeReaderWriterTest, WriteToStdin) {
@@ -607,8 +607,7 @@ TEST(PipeReaderWriterTest, WriteToStdin) {
     writer.write(data.data(), data.size());
     writer.close();
   });
-  proc.spawn();
-  proc.wait();
+  proc.run();
   writer_thread.join();
 
   auto output = outbuf.to_string();

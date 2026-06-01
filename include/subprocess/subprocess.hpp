@@ -2573,6 +2573,230 @@ struct named_arg_type_list<Head, Tails...> {
 template <typename... T>
 using named_arg_type_list_t = named_arg_type_list<T...>::type;
 
+class process {
+ public:
+#if defined(_WIN32)
+  process(unique_fd process_handle, unique_fd thread_handle,
+          StdinRedirector _stdin, StdoutRedirector _stdout,
+          StderrRedirector _stderr,
+          std::optional<std::chrono::milliseconds> timeout,
+          std::shared_ptr<unique_fd> job_handle)
+      : process_handle_(std::move(process_handle)),
+        thread_handle_(std::move(thread_handle)),
+        job_handle_(job_handle),
+        stdin_(std::move(_stdin)),
+        stdout_(std::move(_stdout)),
+        stderr_(std::move(_stderr)),
+        timeout_(timeout) {
+    if (!process_handle_) {
+      return;
+    }
+    pump_pipe_data();
+  }
+#else
+  process(unique_pid pid, unique_pid pgid, StdinRedirector _stdin,
+          StdoutRedirector _stdout, StderrRedirector _stderr,
+          std::optional<std::chrono::milliseconds> timeout)
+      : pid_(std::move(pid)),
+        pgid_(std::move(pgid)),
+        stdin_(std::move(_stdin)),
+        stdout_(std::move(_stdout)),
+        stderr_(std::move(_stderr)),
+        timeout_(std::move(timeout)) {
+    if (!pid_) {
+      return;
+    }
+    launch_watchdog();
+    pump_pipe_data();
+  }
+#endif
+
+  process(process const&) = delete;
+  process& operator=(process const&) = delete;
+
+  process(process&& other) = default;
+  process& operator=(process&& other) = default;
+
+  ~process() {
+    terminate();
+#if defined(_WIN32)
+    join_pump_threads();
+#endif
+  }
+
+#if defined(_WIN32)
+  [[nodiscard]] NativeHandle pid() const { return process_handle_.get(); }
+#else
+  [[nodiscard]] pid_t pid() const { return pid_.get(); }
+#endif
+  explicit operator bool() const { return is_valid(); }
+  bool is_valid() const {
+#if defined(_WIN32)
+    return !!process_handle_;
+#else
+    return !!pid_;
+#endif
+  }
+// TODO:
+// bool running() { return true; }
+// TODO:
+// void wait_for(std::chrono::milliseconds timeout) {}
+#if defined(_WIN32)
+  int wait() {
+    auto threads_guard =
+        detail::make_scope_exit([this] { join_pump_threads(); });
+    if (!process_handle_) {
+      return 127;
+    }
+    auto rc = WaitForSingleObject(
+        process_handle_.get(),
+        timeout_.has_value() ? static_cast<DWORD>(timeout_.value().count())
+                             : INFINITE);
+    if (rc == WAIT_OBJECT_0) {
+      DWORD ret{127};
+      GetExitCodeProcess(process_handle_.get(), &ret);
+      return static_cast<int>(ret);
+    }
+    if (rc == WAIT_TIMEOUT) {
+      terminate();  // close_all() unblocks I/O threads
+      return 127;
+    }
+    return 127;
+  }
+#else
+  int wait() {
+    auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
+    if (!pid_) {
+      return 127;
+    }
+    int status = 0;
+    if (!child_reaped_early_) {
+      int wait_ret;
+      do {
+        wait_ret = waitpid(pid_.get(), &status, 0);
+      } while (wait_ret == -1 && errno == EINTR);
+    } else {
+      status = early_exit_status_;
+    }
+
+    auto return_code = -1;
+    if (WIFEXITED(status)) {
+      return_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+      return_code = 128 + (WTERMSIG(status));
+    }
+
+    pid_.reset(-1);
+    return return_code;
+  }
+#endif
+
+  void terminate() {
+    auto close_all_guard = detail::make_scope_exit([this] {
+      stdin_.close_all();
+      stdout_.close_all();
+      stderr_.close_all();
+    });
+#if defined(_WIN32)
+    if (job_handle_ && *job_handle_) {
+      TerminateJobObject(job_handle_->get(), 1);
+      job_handle_->close();
+    } else if (process_handle_) {
+      TerminateProcess(process_handle_.get(), 1);
+    }
+#else
+    if (-1 == pid_) {
+      return;
+    }
+    auto kill_pid = pid_.get();
+    if ((-1 != pgid_) && (pid_ == pgid_ || 0 == pgid_)) {
+      kill_pid = -pid_.get();
+    }
+    kill(kill_pid, SIGTERM);
+    auto sigkill_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    while (std::chrono::steady_clock::now() < sigkill_deadline) {
+      if (kill(kill_pid, 0) != 0) {
+        return;  // all processes in the group have already exited
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    kill(kill_pid, SIGKILL);
+    // TODO: set pid_ to -1 ?
+#endif
+  }
+
+ private:
+#if defined(_WIN32)
+  void join_pump_threads() {
+    for (auto& t : pump_threads_) {
+      if (t.joinable()) {
+        t.join();
+      }
+    }
+    pump_threads_.clear();
+  }
+  // parent pump data to/from child processes
+  void pump_pipe_data() {
+    close_child_end();
+    pump_threads_ = read_write_to_buffer_with_threads(
+        stdin_.get_buffer(), stdout_.get_buffer(), stderr_.get_buffer());
+  }
+#else
+  // parent pump data to/from child processes
+  void pump_pipe_data() {
+    close_child_end();
+    read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
+                                  stderr_.get_buffer(), pid_.get(),
+                                  &early_exit_status_);
+    {
+      int status = 0;
+      pid_t result;
+      do {
+        result = ::waitpid(pid_.get(), &status, WNOHANG);
+      } while (result == -1 && errno == EINTR);
+      if (result > 0) {
+        early_exit_status_ = status;
+        child_reaped_early_ = true;
+      } else if (result == -1 && errno == ECHILD) {
+        child_reaped_early_ = true;
+      }
+    }
+  }
+  void launch_watchdog() {
+    if (!timeout_.has_value()) {
+      return;
+    }
+    watchdog_ = Timer::after([this]() { terminate(); }, *timeout_);
+  };
+
+  void stop_watchdog() { watchdog_.stop(); }
+#endif
+  void close_child_end() {
+    stdin_.close_child_end();
+    stdout_.close_child_end();
+    stderr_.close_child_end();
+  }
+
+#if defined(_WIN32)
+  unique_fd process_handle_{INVALID_NATIVE_HANDLE_VALUE};
+  unique_fd thread_handle_{INVALID_NATIVE_HANDLE_VALUE};
+  std::shared_ptr<unique_fd> job_handle_{std::make_shared<unique_fd>()};
+  std::vector<unsigned char> proc_thread_attr_list_;
+  std::vector<std::thread> pump_threads_;
+#else
+  unique_pid pid_{-1};
+  unique_pid pgid_{-1};
+  detail::Timer watchdog_;
+  int early_exit_status_{0};
+  bool child_reaped_early_{false};
+#endif
+  StdinRedirector stdin_;
+  StdoutRedirector stdout_;
+  StderrRedirector stderr_;
+  std::optional<std::chrono::milliseconds> timeout_{std::nullopt};
+};
+
 class builder {
   friend class pipeline;
 
@@ -2701,25 +2925,17 @@ class builder {
   builder(const builder&) = delete;
   builder& operator=(const builder&) = delete;
 
-  ~builder() {
-    terminate();
-#if defined(_WIN32)
-    join_pump_threads();
-#endif
-  }
+  ~builder() = default;
 
-  bool spawn() {
+  process spawn() {
     prepare_for_child();
+    auto close_child_end_guard =
+        detail::make_scope_exit([this]() { close_child_end(); });
 #if defined(_WIN32)
-    bool success = spawn_win();
+    return spawn_win();
 #else
-    bool success = spawn_posix();
+    return spawn_posix();
 #endif  // !_WIN32
-    close_child_end();
-    if (success) {
-      pump_pipe_data();
-    }
-    return success;
   }
 
   bool detach_spawn() {
@@ -2733,128 +2949,20 @@ class builder {
   }
 
   int run() {
-    bool spawned = spawn();
-    if (!spawned) {
+    auto p = spawn();
+    if (!p) {
       return 127;
     }
-    return wait();
+    return p.wait();
   }
-
-#if defined(_WIN32)
-  int wait() {
-    auto threads_guard =
-        detail::make_scope_exit([this] { join_pump_threads(); });
-    if (!process_handle_) {
-      return 127;
-    }
-    auto rc = WaitForSingleObject(
-        process_handle_.get(),
-        timeout_.has_value() ? static_cast<DWORD>(timeout_.value().count())
-                             : INFINITE);
-    if (rc == WAIT_OBJECT_0) {
-      DWORD ret{127};
-      GetExitCodeProcess(process_handle_.get(), &ret);
-      return static_cast<int>(ret);
-    }
-    if (rc == WAIT_TIMEOUT) {
-      terminate();  // close_all() unblocks I/O threads
-      return 127;
-    }
-    return 127;
-  }
-#else
-  int wait() {
-    auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
-    if (!pid_) {
-      return 127;
-    }
-    int status = 0;
-    if (!child_reaped_early_) {
-      int wait_ret;
-      do {
-        wait_ret = waitpid(pid_.get(), &status, 0);
-      } while (wait_ret == -1 && errno == EINTR);
-    } else {
-      status = early_exit_status_;
-    }
-
-    auto return_code = -1;
-    if (WIFEXITED(status)) {
-      return_code = WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-      return_code = 128 + (WTERMSIG(status));
-    }
-
-    pid_.reset(-1);
-    return return_code;
-  }
-#endif
-
-#if defined(_WIN32)
-  [[nodiscard]] NativeHandle pid() const { return process_handle_.get(); }
-#else
-  [[nodiscard]] pid_t pid() const { return pid_.get(); }
-#endif
 
  private:
-  void terminate() {
-    auto close_all_guard = detail::make_scope_exit([this] {
-      stdin_.close_all();
-      stdout_.close_all();
-      stderr_.close_all();
-    });
 #if defined(_WIN32)
-    // Kill the process FIRST. This closes the child's inherited pipe handles,
-    // which unblocks any pump threads blocked on ReadFile. Only then is it
-    // safe to close our end of the pipes via close_all().
-    if (job_handle_ && *job_handle_) {
-      TerminateJobObject(job_handle_->get(), 1);
-      job_handle_->close();
-    } else if (process_handle_) {
-      TerminateProcess(process_handle_.get(), 1);
-    }
-#else
-    if (-1 == pid_) {
-      return;
-    }
-    // Only kill the entire process group when a group was explicitly
-    // created AND the child is the process group leader (pid == pgid).
-    // This prevents accidentally killing unrelated processes that may
-    // share the same process group.
-    auto kill_pid = pid_.get();
-    if ((-1 != pgid_) && pid_.get() == pgid_.get()) {
-      kill_pid = -pid_.get();
-    }
-    kill(kill_pid, SIGTERM);
-    // Give the process group a short grace period to handle SIGTERM.
-    // Use kill(pid, 0) to check liveness — unlike waitpid it does NOT
-    // reap the zombie, so wait() can later retrieve the
-    // correct exit status via its own blocking waitpid call.
-    auto sigkill_deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-    while (std::chrono::steady_clock::now() < sigkill_deadline) {
-      if (kill(kill_pid, 0) != 0) {
-        return;  // all processes in the group have already exited
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    kill(kill_pid, SIGKILL);
-#endif
-  }
+  process spawn_win() {
+    process invalid_process(unique_fd(), unique_fd(), StdinRedirector{},
+                            StdoutRedirector{}, StderrRedirector{},
+                            std::nullopt, std::make_shared<unique_fd>());
 
-#if !defined(_WIN32)
-  void launch_watchdog() {
-    if (!timeout_.has_value()) {
-      return;
-    }
-    watchdog_ = Timer::after([this]() { terminate(); }, *timeout_);
-  };
-
-  void stop_watchdog() { watchdog_.stop(); }
-#endif  // !_WIN32
-
-#if defined(_WIN32)
-  bool spawn_win() {
     if (!(*job_handle_)) {
       HANDLE hJob = CreateJobObjectW(NULL, NULL);
       if (hJob) {
@@ -2866,6 +2974,7 @@ class builder {
         *job_handle_ = unique_fd(hJob);
       }
     }
+
     STARTUPINFOEXW startup_info{};
     startup_info.StartupInfo.cb = sizeof(startup_info);
 
@@ -2913,7 +3022,7 @@ class builder {
                                              &attr_list_size)) {
         print_error(L"InitializeProcThreadAttributeList failed: " +
                     std::to_wstring(GetLastError()));
-        return false;
+        return invalid_process;
       }
       if (!UpdateProcThreadAttribute(
               attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
@@ -2922,7 +3031,7 @@ class builder {
         DeleteProcThreadAttributeList(attr_list);
         print_error(L"UpdateProcThreadAttribute failed: " +
                     std::to_wstring(GetLastError()));
-        return false;
+        return invalid_process;
       }
       startup_info.lpAttributeList = attr_list;
     }
@@ -2954,19 +3063,18 @@ class builder {
     startup_info.lpAttributeList = nullptr;
 
     if (success) {
-      process_handle_.reset(pi.hProcess);
-      thread_handle_.reset(pi.hThread);
-      if (*job_handle_) {
-        AssignProcessToJobObject(job_handle_->get(), process_handle_.get());
+      if (job_handle_ && *job_handle_) {
+        AssignProcessToJobObject(job_handle_->get(), pi.hThread);
       }
-      return true;
-    } else {
-      print_error(get_last_error_message());
-      stdin_.close_all();
-      stdout_.close_all();
-      stderr_.close_all();
-      return false;
+      return process(unique_fd(pi.hProcess), unique_fd(pi.hThread),
+                     std::move(stdin_), std::move(stdout_), std::move(stderr_),
+                     timeout_, job_handle_);
     }
+    print_error(get_last_error_message());
+    stdin_.close_all();
+    stdout_.close_all();
+    stderr_.close_all();
+    return invalid_process;
   }
 
   bool detach_spawn_win() {
@@ -2996,7 +3104,10 @@ class builder {
     return false;
   }
 #else
-  bool spawn_posix() {
+  process spawn_posix() {
+    process invalid_process{unique_pid(),       unique_pid(),
+                            StdinRedirector{},  StdoutRedirector{},
+                            StderrRedirector{}, std::nullopt};
     if (!requested_pgid_.has_value()) {
       File stdin_file{detail::named_args::devttyin, File::OpenType::ReadOnly};
       if (stdin_.inherit() && !stdin_file.fd().isatty()) {
@@ -3009,7 +3120,7 @@ class builder {
     auto pid = fork();
     if (pid < 0) {
       print_error("fork() failed");
-      return false;
+      return invalid_process;
     }
     if (pid == 0) {
       if (!invalid_handle(
@@ -3018,18 +3129,18 @@ class builder {
       }
       execute_command_in_child();
     } else {
-      pid_.reset(pid);
+      pid_t target_pgid{-1};
       if (!invalid_handle(
               requested_pgid_.value_or(INVALID_NATIVE_HANDLE_VALUE))) {
-        auto target_pgid =
+        target_pgid =
             requested_pgid_.value() == 0 ? pid : requested_pgid_.value();
         (void)setpgid(pid, target_pgid);
-        pgid_.reset(target_pgid);
       }
-
-      launch_watchdog();
+      return process{unique_pid(pid),    unique_pid(target_pgid),
+                     std::move(stdin_),  std::move(stdout_),
+                     std::move(stderr_), std::move(timeout_)};
     }
-    return true;
+    return invalid_process;
   }
   bool detach_spawn_posix() {
     auto pid = fork();
@@ -3060,17 +3171,6 @@ class builder {
   }
 #endif
 
-#if defined(_WIN32)
-  void join_pump_threads() {
-    for (auto& t : pump_threads_) {
-      if (t.joinable()) {
-        t.join();
-      }
-    }
-    pump_threads_.clear();
-  }
-#endif
-
   void prepare_for_child() {
     stdin_.prepare_for_child();
     stdout_.prepare_for_child();
@@ -3081,30 +3181,7 @@ class builder {
     stdout_.close_child_end();
     stderr_.close_child_end();
   }
-  // parent pump data to/from child processes
-  void pump_pipe_data() {
-#if defined(_WIN32)
-    pump_threads_ = read_write_to_buffer_with_threads(
-        stdin_.get_buffer(), stdout_.get_buffer(), stderr_.get_buffer());
-#else
-    read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
-                                  stderr_.get_buffer(), pid_.get(),
-                                  &early_exit_status_);
-    {
-      int status = 0;
-      pid_t result;
-      do {
-        result = ::waitpid(pid_.get(), &status, WNOHANG);
-      } while (result == -1 && errno == EINTR);
-      if (result > 0) {
-        early_exit_status_ = status;
-        child_reaped_early_ = true;
-      } else if (result == -1 && errno == ECHILD) {
-        child_reaped_early_ = true;
-      }
-    }
-#endif
-  }
+
 #if !defined(_WIN32)
   void execute_command_in_child() {
     stdin_.close_parent_end();
@@ -3158,34 +3235,26 @@ class builder {
   StderrRedirector stderr_;
   std::optional<std::chrono::milliseconds> timeout_{std::nullopt};
 #if defined(_WIN32)
-  std::shared_ptr<unique_fd> job_handle_{std::make_shared<unique_fd>()};
-  unique_fd process_handle_{INVALID_NATIVE_HANDLE_VALUE};
-  unique_fd thread_handle_{INVALID_NATIVE_HANDLE_VALUE};
   std::vector<unsigned char> proc_thread_attr_list_;
-  std::vector<std::thread> pump_threads_;
   bool newgroup_{false};
   std::vector<wchar_t> (*argv_to_command_line_fn)(
       std::wstring,
       std::vector<std::wstring> const&) = &detail::argv_to_command_line;
+  std::shared_ptr<unique_fd> job_handle_{std::make_shared<unique_fd>()};
 #else
-  detail::Timer watchdog_;
-  unique_pid pid_{-1};
-  unique_pid pgid_{-1};
   std::optional<pid_t> requested_pgid_{std::nullopt};
-  int early_exit_status_{0};
-  bool child_reaped_early_{false};
 #endif
 };
 
 class pipeline {
  public:
-  explicit pipeline(builder&& sub) { subs_.push_back(std::move(sub)); }
+  explicit pipeline(builder&& sub) { builders_.push_back(std::move(sub)); }
   pipeline(pipeline&&) = default;
   pipeline& operator=(pipeline&&) = default;
   pipeline(pipeline const&) = delete;
   pipeline& operator=(pipeline const&) = delete;
   pipeline& append(builder&& sub) {
-    subs_.push_back(std::move(sub));
+    builders_.push_back(std::move(sub));
     return *this;
   }
 
@@ -3194,24 +3263,26 @@ class pipeline {
   int run() {
     std::vector<Pipe> pipes;
 
-    for (auto it = subs_.begin(); it != subs_.end() - 1; ++it) {
+    for (auto it = builders_.begin(); it != builders_.end() - 1; ++it) {
       pipes.push_back(Pipe::create());
       it->stdout_ = (named_args::std_out > pipes.back());
       (it + 1)->stdin_ = (named_args::std_in < pipes.back());
     }
-    for (auto it = subs_.begin(); it != subs_.end(); ++it) {
+    for (auto it = builders_.begin(); it != builders_.end(); ++it) {
 #if defined(_WIN32)
-      if (it != subs_.begin()) {
-        it->job_handle_ = subs_.begin()->job_handle_;
+      if (it != builders_.begin()) {
+        it->job_handle_ = builders_.begin()->job_handle_;
       }
 #else
-      if (it == subs_.begin()) {
+      if (it == builders_.begin()) {
         it->requested_pgid_ = 0;
       } else {
         it->requested_pgid_ = subs_.begin()->pid();
       }
 #endif
-      if (!it->spawn()) {
+      subs_.emplace_back(it->spawn());
+      auto& sub = subs_.back();
+      if (!sub) {
         for (auto& p : pipes) {
           p.close_all();
         }
@@ -3235,7 +3306,8 @@ class pipeline {
   [[nodiscard]] std::vector<int> exit_codes() const { return exit_codes_; }
 
  private:
-  std::vector<builder> subs_;
+  std::vector<builder> builders_;
+  std::vector<process> subs_;
   std::vector<int> exit_codes_;
 };
 
