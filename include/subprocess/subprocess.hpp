@@ -3064,7 +3064,7 @@ class builder {
 
     if (success) {
       if (job_handle_ && *job_handle_) {
-        AssignProcessToJobObject(job_handle_->get(), pi.hThread);
+        AssignProcessToJobObject(job_handle_->get(), pi.hProcess);
       }
       return process(unique_fd(pi.hProcess), unique_fd(pi.hThread),
                      std::move(stdin_), std::move(stdout_), std::move(stderr_),
