@@ -171,37 +171,158 @@ struct visitor : T... {
 using ssize_t = std::ptrdiff_t;
 #endif
 
+template <typename T>
+concept string_like_type =
+#if defined(_GLIBCXX_FILESYSTEM) || defined(_LIBCPP_FILESYSTEM) || \
+    defined(_FILESYSTEM_)
+    std::same_as<std::filesystem::path, std::decay_t<T>> ||
+#endif
 #if defined(_WIN32)
-// Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
-inline std::wstring utf8_to_utf16(const std::string_view str) {
+    std::same_as<wchar_t*, std::decay_t<T>> ||
+    std::same_as<const wchar_t*, std::decay_t<T>> ||
+    std::same_as<std::wstring, std::decay_t<T>> ||
+    std::same_as<std::wstring_view, std::decay_t<T>> ||
+#endif
+    std::same_as<char*, std::decay_t<T>> ||
+    std::same_as<const char*, std::decay_t<T>> ||
+    std::same_as<std::string, std::decay_t<T>> ||
+    std::same_as<std::string_view, std::decay_t<T>>;
+
+template <typename T>
+struct get_char_type;
+
+template <typename CharT>
+struct get_char_type<std::basic_string<CharT>> {
+  using type = CharT;
+};
+template <typename CharT>
+struct get_char_type<std::basic_string_view<CharT>> {
+  using type = CharT;
+};
+template <typename CharT>
+struct get_char_type<CharT*> {
+  using type = std::remove_cv_t<CharT>;
+};
+
+#if defined(_GLIBCXX_FILESYSTEM) || defined(_LIBCPP_FILESYSTEM) || \
+    defined(_FILESYSTEM_)
+template <>
+struct get_char_type<std::filesystem::path> {
+  using type = typename std::filesystem::path::value_type;
+};
+#endif
+
+template <typename T>
+using get_char_type_t = get_char_type<std::decay_t<T>>::type;
+
+template <typename T>
+using to_string_view_t =
+    std::basic_string_view<get_char_type_t<std::decay_t<T>>>;
+
+template <typename T>
+using to_string_t = std::basic_string<get_char_type_t<std::decay_t<T>>>;
+
+template <typename CharT>
+std::basic_string<CharT> to_lower_ascii(std::basic_string_view<CharT> str) {
+  std::basic_string<CharT> ret{str};
+  for (auto& c : ret) {
+    if (c >= static_cast<CharT>('A') && c <= static_cast<CharT>('Z')) {
+      c += static_cast<CharT>('a' - 'A');
+    }
+  }
+  return ret;
+}
+
+template <typename CharT>
+std::basic_string<CharT> to_upper_ascii(std::basic_string_view<CharT> str) {
+  std::basic_string<CharT> ret{str};
+  for (auto& c : ret) {
+    if (c >= static_cast<CharT>('a') && c <= static_cast<CharT>('z')) {
+      c -= static_cast<CharT>('a' - 'A');
+    }
+  }
+  return ret;
+}
+
+template <string_like_type String>
+auto to_lower_ascii(String&& s) {
+  using char_type = get_char_type_t<String>;
+  return to_lower_ascii<char_type>(
+      std::basic_string_view<char_type>(std::forward<String>(s)));
+}
+template <string_like_type String>
+auto to_upper_ascii(String&& s) {
+  using char_type = get_char_type_t<String>;
+  return to_upper_ascii<char_type>(
+      std::basic_string_view<char_type>(std::forward<String>(s)));
+}
+
+#if defined(_WIN32)
+inline std::wstring win_MultiByteToWideChar(std::string_view str,
+                                            UINT FromCodePage = CP_UTF8) {
   if (str.empty()) {
     return {};
   }
-  int size_needed =
-      MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
+  DWORD size_needed = ::MultiByteToWideChar(
+      FromCodePage, 0, str.data(), static_cast<DWORD>(str.size()), NULL, 0);
   if (size_needed <= 0) {
     return {};
   }
-  std::wstring wstr(static_cast<size_t>(size_needed), 0);
-  MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), wstr.data(),
-                      size_needed);
+  std::wstring wstr(static_cast<size_t>(size_needed), L'\0');
+  DWORD size = ::MultiByteToWideChar(FromCodePage, 0, str.data(),
+                                     static_cast<DWORD>(str.size()),
+                                     wstr.data(), size_needed);
+  wstr.resize(size);
   return wstr;
 }
-
-// Helper function to convert a UTF-16 std::wstring to a UTF-8 std::string
-inline std::string utf16_to_utf8(const std::wstring_view wstr) {
+inline std::string win_WideCharToMultiByte(std::wstring_view wstr,
+                                           UINT ToCodePage = CP_UTF8) {
   if (wstr.empty()) {
     return {};
   }
-  int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(),
-                                        (int)wstr.size(), NULL, 0, NULL, NULL);
+  DWORD size_needed = ::WideCharToMultiByte(ToCodePage, 0, wstr.data(),
+                                            static_cast<DWORD>(wstr.size()),
+                                            NULL, 0, NULL, NULL);
   if (size_needed <= 0) {
     return {};
   }
-  std::string str(static_cast<size_t>(size_needed), 0);
-  WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), str.data(),
-                      size_needed, NULL, NULL);
+  std::string str(static_cast<size_t>(size_needed), '\0');
+  DWORD size = ::WideCharToMultiByte(ToCodePage, 0, wstr.data(),
+                                     static_cast<DWORD>(wstr.size()),
+                                     str.data(), size_needed, NULL, NULL);
+  str.resize(size);
   return str;
+}
+
+inline std::wstring win_GetFullPathName(std::wstring const& path) {
+  DWORD size = ::GetFullPathNameW(path.c_str(), 0, 0, 0);
+
+  std::wstring fpath(size, L'\0');
+  size = ::GetFullPathNameW(path.c_str(), fpath.size(), fpath.data(), 0);
+  fpath.resize(size);
+  return fpath;
+}
+
+inline std::wstring win_SearchPath(std::wstring const& name,
+                                   std::wstring const& ext) {
+  DWORD size = ::SearchPathW(0, name.c_str(),
+                             ext.empty() ? nullptr : ext.c_str(), 0, 0, 0);
+
+  std::wstring fpath(size, L'\0');
+  size = ::SearchPathW(0, name.c_str(), ext.empty() ? nullptr : ext.c_str(),
+                       static_cast<DWORD>(fpath.size()), fpath.data(), 0);
+  fpath.resize(size);
+  return fpath;
+}
+
+// Helper function to convert a UTF-8 std::string to a UTF-16 std::wstring
+inline std::wstring utf8_to_utf16(std::string_view str_view) {
+  return win_MultiByteToWideChar(str_view, CP_UTF8);
+}
+
+// Helper function to convert a UTF-16 std::wstring to a UTF-8 std::string
+inline std::string utf16_to_utf8(std::wstring_view wstr_view) {
+  return win_WideCharToMultiByte(wstr_view, CP_UTF8);
 }
 inline void print_error(std::wstring_view msg) {
   if (msg.empty()) {
@@ -653,10 +774,8 @@ inline std::vector<wchar_t> argv_to_command_line(
 
   auto app_stem_start = path_sep == std::wstring::npos ? 0 : path_sep + 1;
   auto app_stem_end = dot == std::wstring::npos ? app.size() : dot;
-  auto app_stem = app.substr(app_stem_start, app_stem_end - app_stem_start);
-
-  std::transform(app_stem.begin(), app_stem.end(), app_stem.begin(),
-                 [](wchar_t c) { return towlower(c); });
+  auto app_stem =
+      to_lower_ascii(app.substr(app_stem_start, app_stem_end - app_stem_start));
 
   auto is_cmd = app_stem == L"cmd";
 
@@ -845,8 +964,6 @@ inline std::map<std::wstring, std::wstring> get_all_env_vars() {
     if (pos != std::wstring_view::npos) {
       auto key = std::wstring(env_string.substr(0, pos));
       auto value = std::wstring(env_string.substr(pos + 1));
-      std::transform(key.begin(), key.end(), key.begin(),
-                     [](wchar_t c) { return ::towupper(c); });
       envs[key] = value;
     }
     current_env +=
@@ -895,25 +1012,20 @@ inline std::optional<std::string> getenv(std::string const& name) {
 #endif
 
 #if defined(_WIN32)
-inline std::optional<std::wstring> find_executable(
-    std::wstring const& command, std::wstring const& cwd = {}) {
-  auto search_path =
-      [](std::wstring const& cmd,
-         std::wstring const& ext) -> std::optional<std::wstring> {
-    DWORD const size =
-        SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
-                    0, nullptr, nullptr);
-    if (size == 0) {
-      return std::nullopt;
-    }
-    std::wstring result(size, L'\0');
-    DWORD const copied =
-        SearchPathW(nullptr, cmd.c_str(), ext.empty() ? nullptr : ext.c_str(),
-                    size, result.data(), nullptr);
-    // copied does not include the null terminator
-    result.resize(copied);
-    return result;
-  };
+inline std::vector<std::wstring> find_all_command_path(
+    std::wstring const& command) {
+  if (command.find_last_of(L"/\\") != std::wstring::npos) {
+    return {};
+  }
+
+  auto exts =
+      split(to_lower_ascii(
+                detail::getenv(L"PATHEXT").value_or(L".COM;.EXE;.BAT;.CMD")),
+            L';');
+  std::erase_if(exts, [](auto const& v) { return v.empty(); });
+
+  auto paths = split(detail::getenv(L"PATH").value_or(L""), L';');
+  std::erase_if(paths, [](auto const& v) { return v.empty(); });
 
   auto is_file = [](std::wstring const& path) {
     DWORD const attr = GetFileAttributesW(path.c_str());
@@ -921,59 +1033,73 @@ inline std::optional<std::wstring> find_executable(
            !(attr & FILE_ATTRIBUTE_DIRECTORY);
   };
 
-  // Normalize forward slashes to backslashes for consistent handling.
-  std::wstring normalized = command;
-  for (auto& ch : normalized) {
-    if (ch == L'/') {
-      ch = L'\\';
-    }
-  }
-
-  // If a cwd is provided and the command is a relative path, resolve it
-  // against cwd so GetFullPathNameW uses the correct base directory
-  // (the child's future CWD, not the parent's).
-  if (!cwd.empty() && normalized.find_last_of(L'\\') != std::wstring::npos) {
-    bool is_absolute = (normalized.size() >= 2 && normalized[1] == L':') ||
-                       (normalized.size() >= 2 && normalized[0] == L'\\' &&
-                        normalized[1] == L'\\');
-    if (!is_absolute) {
-      std::wstring resolved = cwd;
-      if (resolved.back() != L'\\') {
-        resolved += L'\\';
+  auto find_in_path = [&is_file, &paths](std::wstring const& name) {
+    std::vector<std::wstring> ret;
+    for (auto const& p : paths) {
+      if (auto f = p + L'\\' + name; is_file(f)) {
+        ret.emplace_back(std::move(f));
       }
-      resolved += normalized;
-      normalized = std::move(resolved);
+    }
+    return ret;
+  };
+
+  if (auto dot = command.find_last_of(L'.');
+      dot != std::wstring::npos && dot > 0) {
+    return find_in_path(command);
+  }
+  std::vector<std::wstring> ret;
+  for (auto ext : exts) {
+    if (auto f = find_in_path(command + ext); !f.empty()) {
+      ret.insert(ret.end(), f.begin(), f.end());
     }
   }
+  return ret;
+}
+inline std::optional<std::wstring> find_executable(
+    std::wstring command, std::wstring const& cwd = L"") {
+  auto is_file = [](std::wstring const& path) {
+    DWORD const attr = GetFileAttributesW(path.c_str());
+    return attr != INVALID_FILE_ATTRIBUTES &&
+           !(attr & FILE_ATTRIBUTE_DIRECTORY);
+  };
 
-  if (normalized.find_last_of(L'\\') != std::wstring::npos) {
-    auto size = GetFullPathNameW(normalized.c_str(), 0, nullptr, nullptr);
-    if (size == 0) {
-      return std::nullopt;
+  for (auto& c : command) {
+    if (c == L'/') {
+      c = L'\\';
     }
-    std::wstring result(size, L'\0');
-    DWORD const copied =
-        GetFullPathNameW(normalized.c_str(), size, result.data(), nullptr);
-    result.resize(copied);
-    if (is_file(result)) {
-      return result;
+  }
+  if (command.find_last_of(L'\\') != std::wstring::npos) {
+    if (command.size() > 2 && command[1] == L':' && is_file(command)) {
+      return command;
+    }
+    if (command.size() > 1 && command[0] == L'\\' && is_file(command)) {
+      return command;
+    }
+    if (!cwd.empty()) {
+      if (std::wstring fpath = win_GetFullPathName(cwd + L'\\' + command);
+          is_file(fpath)) {
+        return fpath;
+      }
+    } else if (std::wstring fpath = win_GetFullPathName(command);
+               is_file(fpath)) {
+      return fpath;
+    }
+
+    return std::nullopt;
+  }
+
+  if (auto dot = command.find_last_of(L'.');
+      dot != std::wstring::npos && dot > 0) {
+    if (auto ret = win_SearchPath(command, L""); !ret.empty()) {
+      return ret;
     }
   } else {
-    if (auto dot = normalized.find_last_of(L'.');
-        dot != std::wstring::npos && dot > 0) {
-      if (auto ret = search_path(normalized, L""); ret) {
-        return *ret;
-      }
-    } else {
-      for (auto ext :
-           split(detail::getenv(L"PATHEXT").value_or(L".COM;.EXE;.BAT;.CMD"),
-                 L';')) {
-        if (ext.empty()) {
-          continue;
-        }
-        if (auto ret = search_path(normalized, ext); ret) {
-          return *ret;
-        }
+    auto exts = split(
+        detail::getenv(L"PATHEXT").value_or(L".COM;.EXE;.BAT;.CMD"), L';');
+    std::erase_if(exts, [](auto const& v) { return v.empty(); });
+    for (auto ext : exts) {
+      if (auto ret = win_SearchPath(command, ext); !ret.empty()) {
+        return ret;
       }
     }
   }
@@ -2330,14 +2456,13 @@ class Shell {
     return shell;
   }
   constexpr static Shell Powershell() { return Shell().powershell(); }
-#else
+#endif
   constexpr Shell posix() const {
     Shell shell;
     shell.shell_prefix_commands = &Shell::sh_cmds;
     return shell;
   }
   constexpr static Shell Posix() { return Shell().posix(); }
-#endif
   constexpr Shell bash() const {
     Shell shell;
     shell.shell_prefix_commands = &Shell::bash_cmds;
@@ -2366,15 +2491,52 @@ class Shell {
     ret.push_back(L"/c");
     return ret;
   }
-#else
-  static std::vector<NativeString> sh_cmds() {
-    return std::vector<NativeString>{"/bin/sh", "-c"};
-  }
 #endif
+  static std::vector<NativeString> sh_cmds() {
+#if defined(_WIN32)
+    return std::vector<NativeString>{L"sh.exe", L"-c"};
+#else
+    return std::vector<NativeString>{"/bin/sh", "-c"};
+#endif
+  }
 
   static std::vector<NativeString> bash_cmds() {
 #if defined(_WIN32)
-    std::vector<NativeString> ret{L"bash", L"-c"};
+    auto is_file = [](std::wstring const& path) {
+      DWORD const attr = GetFileAttributesW(path.c_str());
+      return attr != INVALID_FILE_ATTRIBUTES &&
+             !(attr & FILE_ATTRIBUTE_DIRECTORY);
+    };
+    std::wstring bash_path;
+    std::wstring bash_exe{L"bash.exe"};
+    auto bashs = find_all_command_path(bash_exe);
+    for (auto const& b : bashs) {
+      if (b.ends_with(L"bin\\bash.exe") || b.ends_with(L"bin/bash.exe")) {
+        bash_path = b;
+        break;
+      }
+    }
+    if (bash_path.empty()) {
+      std::wstring git_exe{L"git.exe"};
+      auto gits = find_all_command_path(git_exe);
+      for (auto const& g : gits) {
+        if (auto bash = g.substr(0, g.size() - git_exe.size()) + bash_exe;
+            is_file(bash)) {
+          bash_path = bash;
+          break;
+        }
+        if (auto bash = g.substr(0, g.size() - git_exe.size()) + L"..\\bin\\" +
+                        bash_exe;
+            is_file(bash)) {
+          bash_path = bash;
+          break;
+        }
+      }
+    }
+    if (bash_path.empty()) {
+      bash_path = L"bash";
+    }
+    std::vector<NativeString> ret{bash_path, L"-c"};
 #else
     std::vector<NativeString> ret{"bash", "-c"};
 #endif
@@ -2451,57 +2613,6 @@ concept named_argument_type = std::same_as<Env, std::decay_t<T>> ||
                               std::same_as<Newgroup, std::decay_t<T>> ||
                               std::same_as<EnvAppend, std::decay_t<T>> ||
                               std::same_as<EnvItemAppend, std::decay_t<T>>;
-template <typename T>
-concept string_like_type =
-#if defined(_GLIBCXX_FILESYSTEM) || defined(_LIBCPP_FILESYSTEM) || \
-    defined(_FILESYSTEM_)
-    std::same_as<std::filesystem::path, std::decay_t<T>> ||
-#endif
-#if defined(_WIN32)
-    std::same_as<wchar_t*, std::decay_t<T>> ||
-    std::same_as<const wchar_t*, std::decay_t<T>> ||
-    std::same_as<std::wstring, std::decay_t<T>> ||
-    std::same_as<std::wstring_view, std::decay_t<T>> ||
-#endif
-    std::same_as<char*, std::decay_t<T>> ||
-    std::same_as<const char*, std::decay_t<T>> ||
-    std::same_as<std::string, std::decay_t<T>> ||
-    std::same_as<std::string_view, std::decay_t<T>>;
-
-template <typename T>
-struct get_char_type;
-
-template <typename CharT>
-struct get_char_type<std::basic_string<CharT>> {
-  using type = CharT;
-};
-template <typename CharT>
-struct get_char_type<std::basic_string_view<CharT>> {
-  using type = CharT;
-};
-template <typename CharT>
-struct get_char_type<CharT*> {
-  using type = std::remove_cv_t<CharT>;
-};
-
-#if defined(_GLIBCXX_FILESYSTEM) || defined(_LIBCPP_FILESYSTEM) || \
-    defined(_FILESYSTEM_)
-template <>
-struct get_char_type<std::filesystem::path> {
-  using type = typename std::filesystem::path::value_type;
-};
-#endif
-
-template <typename T>
-using get_char_type_t = get_char_type<std::decay_t<T>>::type;
-
-template <typename T>
-using to_string_view_t =
-    std::basic_string_view<get_char_type_t<std::decay_t<T>>>;
-
-template <typename T>
-using to_string_t = std::basic_string<get_char_type_t<std::decay_t<T>>>;
-
 template <typename ToCharT, string_like_type From>
 std::basic_string<ToCharT> convert_to_string(From&& from) {
   if constexpr (std::is_same_v<get_char_type_t<From>, ToCharT>) {
@@ -2892,21 +3003,34 @@ class builder {
         environments.empty()) {
       environments = get_all_env_vars();
     }
-    environments.insert(env_appends.begin(), env_appends.end());
+    for (auto const& [key, val] : env_appends) {
+#ifdef _WIN32
+      auto it = std::find_if(
+          environments.begin(), environments.end(), [&key](auto const& kv) {
+            return to_lower_ascii(kv.first) == to_lower_ascii(key);
+          });
+      if (it != environments.end()) {
+        it->second = val;
+      } else {
+        environments.insert({key, val});
+      }
+#else
+      environments[key] = val;
+#endif
+    }
 #ifdef _WIN32
     wchar_t path_env_sep = L';';
 #else
     char path_env_sep = ':';
 #endif
     for (auto const& [name, value, is_append] : env_item_appends) {
-      auto it = environments.find(name);
 #ifdef _WIN32
-      if (it == environments.end()) {
-        auto upper_key = name;
-        std::transform(upper_key.begin(), upper_key.end(), upper_key.begin(),
-                       [](wchar_t c) { return ::towupper(c); });
-        it = environments.find(upper_key);
-      }
+      auto it = std::find_if(environments.begin(), environments.end(),
+                             [name = to_lower_ascii(name)](auto const& kv) {
+                               return to_lower_ascii(kv.first) == name;
+                             });
+#else
+      auto it = environments.find(name);
 #endif
       if (it == environments.end()) {
         environments.insert({name, value});
