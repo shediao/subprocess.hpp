@@ -378,6 +378,16 @@ TEST(PipeReaderWriterTest, LargeDataTransfer) {
     large[i] = static_cast<char>((i % 95) + 32);
   }
 
+  // Drain the pipe from a dedicated thread so the write never blocks.
+  std::string result;
+  std::thread reader_thread([&]() {
+    char buf[1024];
+    ssize_t n;
+    while ((n = reader.read(buf, sizeof(buf))) > 0) {
+      result.append(buf, static_cast<size_t>(n));
+    }
+  });
+
   // Write in a loop — write_some may not accept everything at once.
   size_t written = 0;
   while (written < large.size()) {
@@ -390,15 +400,10 @@ TEST(PipeReaderWriterTest, LargeDataTransfer) {
   }
   ASSERT_EQ(written, large.size());
 
-  // Signal EOF before the read loop.
+  // Signal EOF so the reader thread exits its loop.
   pipe.close_write();
+  reader_thread.join();
 
-  std::string result;
-  char buf[1024];
-  ssize_t n;
-  while ((n = reader.read(buf, sizeof(buf))) > 0) {
-    result.append(buf, static_cast<size_t>(n));
-  }
   ASSERT_EQ(result, large);
 }
 

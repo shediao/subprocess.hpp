@@ -444,11 +444,16 @@ TEST(ReadWriteSomeTest, PipeLargeDataWriteAllReadExact) {
   for (size_t i = 0; i < large.size(); ++i) {
     large[i] = static_cast<char>((i % 95) + 32);  // printable ASCII
   }
+  // Drain the pipe from a dedicated thread so the write never blocks.
+  std::string out(large.size(), '\0');
+  bool read_ok = false;
+  std::thread reader_thread(
+      [&]() { read_ok = pipe.read_exact(out.data(), out.size()); });
 
   ASSERT_TRUE(pipe.write_all(large.data(), large.size()));
 
-  std::string out(large.size(), '\0');
-  ASSERT_TRUE(pipe.read_exact(out.data(), out.size()));
+  reader_thread.join();
+  ASSERT_TRUE(read_ok);
   ASSERT_EQ(out, large);
 }
 
