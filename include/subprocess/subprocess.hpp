@@ -298,7 +298,8 @@ inline std::wstring win_GetFullPathName(std::wstring const& path) {
   DWORD size = ::GetFullPathNameW(path.c_str(), 0, 0, 0);
 
   std::wstring fpath(size, L'\0');
-  size = ::GetFullPathNameW(path.c_str(), fpath.size(), fpath.data(), 0);
+  size = ::GetFullPathNameW(path.c_str(), static_cast<DWORD>(fpath.size()),
+                            fpath.data(), 0);
   fpath.resize(size);
   return fpath;
 }
@@ -1106,30 +1107,29 @@ inline std::optional<std::wstring> find_executable(
   return std::nullopt;
 }
 #else   // _WIN32
-inline std::optional<std::string> find_executable(std::string_view exe_file) {
+inline std::optional<std::string> find_executable(std::string const& exe_file) {
   constexpr char path_env_sep = ':';
-
-  if (exe_file.find_last_of('/') != std::string_view::npos) {
-    std::string exe_str(exe_file);
-    char result[PATH_MAX];
-    if (realpath(exe_str.c_str(), result) != nullptr) {
-      return result;
-    }
-    return std::nullopt;
-  }
 
   auto is_executable = [](std::string const& f) {
     struct stat sb{};
     return (stat(f.c_str(), &sb) == 0 && S_ISREG(sb.st_mode) &&
             access(f.c_str(), X_OK) == 0);
   };
-  for (const auto paths = split(std::string(detail::getenv("PATH").value_or(
-                                    "/usr/local/bin:/usr/bin:/bin")),
-                                path_env_sep);
+
+  if (exe_file.find_last_of('/') != std::string::npos) {
+    if (is_executable(exe_file)) {
+      return exe_file;
+    }
+    return std::nullopt;
+  }
+
+  for (const auto paths =
+           split(std::string(detail::getenv("PATH").value_or(
+                     "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")),
+                 path_env_sep);
        auto& p : paths) {
     constexpr char separator = '/';
-    if (std::string f = p + separator + std::string(exe_file);
-        is_executable(f)) {
+    if (std::string f = p + separator + exe_file; is_executable(f)) {
       return f;
     }
   }

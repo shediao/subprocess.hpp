@@ -17,7 +17,6 @@
 #include <gtest/gtest.h>
 
 #include <string>
-#include <vector>
 
 #include "subprocess/subprocess.hpp"
 
