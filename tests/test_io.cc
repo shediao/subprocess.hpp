@@ -182,7 +182,7 @@ TEST(IOTest, CaptureRunLargeData) {
 #if !defined(_WIN32)
   {
     auto [exit_code, out, err] =
-        capture_run("dd", "if=/dev/zero", "bs=4M", "count=100");
+        capture_run("head", "-c", "419430400", "/dev/zero");
     ASSERT_EQ(out.size(), (100 * 4 * 1024 * 1024));
   }
 #else

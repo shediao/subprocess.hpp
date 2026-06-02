@@ -28,6 +28,28 @@ jobs:
             ctest --test-dir build --output-on-failure
 
   # ─────────────────────────────────────────────────────────────────────────
+  # NetBSD build
+  # ─────────────────────────────────────────────────────────────────────────
+  netbsd-build:
+    runs-on: ubuntu-latest
+    name: NetBSD Build
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: build on NetBSD vm
+        uses: vmactions/netbsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            uname -a
+            pkg_add -fu pcre2
+            pkg_add git cmake gcc13
+          run: |
+            cmake -B build -S . -DCMAKE_C_COMPILER=/usr/pkg/gcc13/bin/gcc -DCMAKE_CXX_COMPILER=/usr/pkg/gcc13/bin/g++  -DCMAKE_BUILD_TYPE=Release -DSUBPROCESS_BUILD_TESTS=ON
+            cmake --build build
+            ctest --test-dir build --output-on-failure
+
+  # ─────────────────────────────────────────────────────────────────────────
   # OpenBSD build
   # ─────────────────────────────────────────────────────────────────────────
   openbsd-build:
