@@ -2470,6 +2470,8 @@ class Shell {
   }
   constexpr static Shell Bash() { return Shell().bash(); }
 
+  Shell() = default;
+
  private:
 #if defined(_WIN32)
   static std::vector<NativeString> cmd_cmds() {
@@ -2553,7 +2555,6 @@ class Shell {
 #if defined(_WIN32)
   argv_to_command_line_fn_ptr argv_to_command_line_fn = nullptr;
 #endif
-  Shell() = default;
 };
 
 namespace named_args {
