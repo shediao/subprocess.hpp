@@ -333,7 +333,11 @@ TEST(BufferCallbackTest, IntegrationWithLargeOutput) {
 
 #if !defined(_WIN32)
   // Generate ~128KB of output via dd
+#if defined(__OpenBSD__)
+  int ret = run("dd", "if=/dev/zero", "bs=1024", "count=128", std_out > out);
+#else
   int ret = run("head", "-c", "131072", "/dev/zero", std_out > out);
+#endif
   EXPECT_EQ(ret, 0);
 #else
   // On Windows, use powershell to generate output
