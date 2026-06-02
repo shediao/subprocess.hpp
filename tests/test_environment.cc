@@ -285,6 +285,8 @@ TEST(EnvironmentTest, EnvItemAppendPath) {
 // Environment — item prepend (EnvItemAppend: $env["KEY"] <<= "val")
 // ===========================================================================
 
+// Basic prepend: verify the prepended value is present and some original
+// content follows (original weak test; kept for regression coverage).
 TEST(EnvironmentTest, EnvItemPrependPath) {
   buffer out;
 #if !defined(_WIN32)
@@ -297,4 +299,122 @@ TEST(EnvironmentTest, EnvItemPrependPath) {
   ASSERT_EQ(ret, 0);
   ASSERT_GT(out.size(), 10);
   ASSERT_NE(out, "XXXXXXXXX");
+
+  // Verify format: the prepended value must appear BEFORE the separator,
+  // i.e. "XXXXXXXXX:" not ":XXXXXXXXX".  This catches the bug where the
+  // two insert() calls were in the wrong order, producing ":VALUEORIGINAL"
+  // instead of "VALUE:ORIGINAL".
+  auto pos = std::string(out.to_string()).find("XXXXXXXXX");
+  ASSERT_NE(pos, std::string::npos);
+  // The prepended value must NOT be preceded by the path separator.
+  char sep =
+#if defined(_WIN32)
+      ';';
+#else
+      ':';
+#endif
+  ASSERT_FALSE(pos > 0 && out.to_string()[pos - 1] == sep)
+      << "Prepend format is wrong: separator before value means old bug "
+         "(insert() order was swapped)";
+}
+
+// Verify prepend produces VALUE:ORIGINAL format using a known base value
+// set via Env.  This isolates the prepend logic from the ambient PATH.
+TEST(EnvironmentTest, EnvItemPrependWithKnownBaseValue) {
+  buffer out;
+#if !defined(_WIN32)
+  auto ret = run("bash", "-c", "echo -n $TEST_PREPEND_VAR",
+                 $env = {{"TEST_PREPEND_VAR", "original"}},
+                 $env["TEST_PREPEND_VAR"] <<= "prepended", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "prepended:original");
+#else
+  auto ret = run("cmd.exe", "/c", "<nul set /p=%TEST_PREPEND_VAR%&exit /b 0",
+                 $env = {{"TEST_PREPEND_VAR", "original"}},
+                 $env["TEST_PREPEND_VAR"] <<= "prepended", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "prepended;original");
+#endif
+}
+
+// Verify prepend does NOT insert a leading separator before the value.
+// The buggy code (separator-first insert) produced ":VALUEORIGINAL".
+TEST(EnvironmentTest, EnvItemPrependNoLeadingSeparator) {
+  buffer out;
+#if !defined(_WIN32)
+  auto ret = run("bash", "-c", "echo -n $TEST_NOLSEP",
+                 $env = {{"TEST_NOLSEP", "base"}},
+                 $env["TEST_NOLSEP"] <<= "head", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  // Must not start with ':' on Unix or ';' on Windows
+  ASSERT_FALSE(out.empty());
+  EXPECT_NE(out.to_string()[0], ':') << "Result starts with separator — "
+                                        "this is the EnvItemPrepend bug";
+  EXPECT_EQ(out, "head:base");
+#else
+  auto ret = run("cmd.exe", "/c", "<nul set /p=%TEST_NOLSEP%&exit /b 0",
+                 $env = {{"TEST_NOLSEP", "base"}},
+                 $env["TEST_NOLSEP"] <<= "head", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_FALSE(out.empty());
+  EXPECT_NE(out.to_string()[0], ';') << "Result starts with separator — "
+                                        "this is the EnvItemPrepend bug";
+  EXPECT_EQ(out, "head;base");
+#endif
+}
+
+// Verify prepend into a non-existent key creates the key with just the
+// prepended value (no separator).
+TEST(EnvironmentTest, EnvItemPrependNewKey) {
+  buffer out;
+#if !defined(_WIN32)
+  auto ret = run("bash", "-c", "echo -n $TEST_PREPEND_NEW",
+                 $env["TEST_PREPEND_NEW"] <<= "only_me", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "only_me");
+#else
+  auto ret = run("cmd.exe", "/c", "<nul set /p=%TEST_PREPEND_NEW%&exit /b 0",
+                 $env["TEST_PREPEND_NEW"] <<= "only_me", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "only_me");
+#endif
+}
+
+// Verify prepend + append interactions: prepend then append produces the
+// correct sequence VALUE:original:suffix.
+TEST(EnvironmentTest, EnvItemPrependThenAppend) {
+  buffer out;
+#if !defined(_WIN32)
+  auto ret = run("bash", "-c", "echo -n $TEST_COMBO",
+                 $env = {{"TEST_COMBO", "mid"}}, $env["TEST_COMBO"] <<= "head",
+                 $env["TEST_COMBO"] += "tail", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "head:mid:tail");
+#else
+  auto ret = run("cmd.exe", "/c", "<nul set /p=%TEST_COMBO%&exit /b 0",
+                 $env = {{"TEST_COMBO", "mid"}}, $env["TEST_COMBO"] <<= "head",
+                 $env["TEST_COMBO"] += "tail", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "head;mid;tail");
+#endif
+}
+
+// Verify prepend with empty base value: should be just "VALUE" (no leading
+// or trailing separator).
+TEST(EnvironmentTest, EnvItemPrependEmptyBase) {
+  buffer out;
+#if !defined(_WIN32)
+  auto ret = run("bash", "-c", "echo -n $TEST_EMPTY_BASE",
+                 $env = {{"TEST_EMPTY_BASE", ""}},
+                 $env["TEST_EMPTY_BASE"] <<= "pre", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  // Behaviour: insert separator then value → "pre:"
+  ASSERT_EQ(out, "pre:");
+#else
+  auto ret = run("cmd.exe", "/c", "<nul set /p=%TEST_EMPTY_BASE%&exit /b 0",
+                 $env = {{"TEST_EMPTY_BASE", ""}},
+                 $env["TEST_EMPTY_BASE"] <<= "pre", $stdout > out);
+  ASSERT_EQ(ret, 0);
+  ASSERT_EQ(out, "pre;");
+#endif
 }

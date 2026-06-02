@@ -3040,8 +3040,8 @@ class builder {
           it->second.push_back(path_env_sep);
           it->second.append(value);
         } else {
-          it->second.insert(it->second.begin(), value.begin(), value.end());
           it->second.insert(it->second.begin(), path_env_sep);
+          it->second.insert(it->second.begin(), value.begin(), value.end());
         }
       }
     }

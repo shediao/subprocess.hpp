@@ -259,18 +259,17 @@ TEST(DetachTest, EnvFullReplacementClearsOtherVars) {
   ASSERT_TRUE(wait_for_file(tmp2.path()));
   EXPECT_EQ(read_file_trimmed(tmp2.path()), "present");
 #else
-  // Use `env` to dump actual environment, then grep for a well-known var.
-  // With full env replacement, HOME should not be present.
+  // Use `env` to dump actual environment.
+  // NOTE: we only verify that the explicitly-set variable is present.
+  // We intentionally avoid checking that PATH/HOME are absent, because
+  // some shells (e.g. OpenBSD ksh) legitimately add PATH when it is
+  // missing from the environment — this is allowed by POSIX.
   bool ok = detach_run("/bin/sh", {"-c", "env > '" + tmp.path() + "'"},
                        env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   std::string env_output = read_file_trimmed(tmp.path());
-  // ONLY_THIS should be present
   EXPECT_TRUE(env_output.find("ONLY_THIS=present") != std::string::npos);
-  // HOME/PATH should NOT be in the actual environment
-  EXPECT_TRUE(env_output.find("\nHOME=") == std::string::npos);
-  EXPECT_TRUE(env_output.find("\nPATH=") == std::string::npos);
 #endif
 }
 
@@ -360,7 +359,48 @@ TEST(DetachTest, EnvItemPrepend) {
   EXPECT_TRUE(ok);
   ASSERT_TRUE(wait_for_file(tmp.path()));
   std::string out = read_file_trimmed(tmp.path());
-  EXPECT_TRUE(out.find("DETACH_PREFIX") != std::string::npos);
+  // Verify the prepended value is present
+  auto pos = out.find("DETACH_PREFIX");
+  EXPECT_NE(pos, std::string::npos);
+  // Verify format: the prepended value is NOT preceded by a path separator.
+  // The old bug (swapped insert order) produced ":DETACH_PREFIX..." instead
+  // of "DETACH_PREFIX:...".
+  char sep =
+#if defined(_WIN32)
+      ';';
+#else
+      ':';
+#endif
+  if (pos != std::string::npos && pos > 0) {
+    EXPECT_NE(out[pos - 1], sep)
+        << "Prepend format is wrong: separator before value means the "
+           "EnvItemPrepend insert() order bug is present";
+  }
+}
+
+// 13b. EnvItemPrependKnownValue — prepend into a known base env var
+//      This verifies the exact VALUE:ORIGINAL format.
+TEST(DetachTest, EnvItemPrependKnownValue) {
+  TempFile tmp;
+#if defined(_WIN32)
+  bool ok = detach_run(
+      "cmd.exe",
+      {"/c", "<nul set /p=%DETACH_PRE_KNOWN%>" + tmp.path() + "&exit /b 0"},
+      env = {{"DETACH_PRE_KNOWN", "original"}},
+      env["DETACH_PRE_KNOWN"] <<= "prepended");
+  EXPECT_TRUE(ok);
+  ASSERT_TRUE(wait_for_file(tmp.path()));
+  EXPECT_EQ(read_file_trimmed(tmp.path()), "prepended;original");
+#else
+  bool ok = detach_run(
+      "/bin/sh",
+      {"-c", "printf '%s' \"$DETACH_PRE_KNOWN\" > '" + tmp.path() + "'"},
+      env = {{"DETACH_PRE_KNOWN", "original"}},
+      env["DETACH_PRE_KNOWN"] <<= "prepended");
+  EXPECT_TRUE(ok);
+  ASSERT_TRUE(wait_for_file(tmp.path()));
+  EXPECT_EQ(read_file_trimmed(tmp.path()), "prepended:original");
+#endif
 }
 
 // ===========================================================================

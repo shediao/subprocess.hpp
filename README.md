@@ -2,6 +2,7 @@
 
 [![CMAKE](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/cmake-multi-platform.yml)
 [![MSYS2](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/msys2.yml)
+[![BSD](https://github.com/shediao/subprocess.hpp/actions/workflows/bsd.yml/badge.svg)](https://github.com/shediao/subprocess.hpp/actions/workflows/bsd.yml)
 
 A modern, cross-platform, header-only C++20 library for running and managing subprocesses. Inspired by Python's `subprocess` module and shell syntax, it provides a simple, intuitive, and powerful API.
 
@@ -10,7 +11,7 @@ Licensed under the **MIT License**.
 ## ✨ Core Features
 
 - **Header-only**: Simply include `include/subprocess/subprocess.hpp` in your project.
-- **Cross-Platform**: Works on Windows, Linux, and macOS.
+- **Cross-Platform**: Works on Windows, Linux, macOS, FreeBSD, and OpenBSD.
 - **C++20 Standard**: Leverages modern C++ features (concepts, `std::span`, designated initializers, etc.) for a cleaner syntax and compile-time type safety.
 - **Easy to Use**: The API is designed to be simple and intuitive, resembling shell commands.
 - **Powerful I/O Redirection**:

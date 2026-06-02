@@ -83,22 +83,4 @@ jobs:
         # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
         run: ctest --build-config ${{ matrix.build_type }} --rerun-failed --output-on-failure
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # FreeBSD build
-  # ─────────────────────────────────────────────────────────────────────────
-  freebsd-build:
-    runs-on: ubuntu-latest
-    name: FreeBSD Build
-    steps:
-      - uses: actions/checkout@v5
 
-      - name: build on FreeBSD vm
-        uses: vmactions/freebsd-vm@v1
-        with:
-          usesh: true
-          prepare: |
-            pkg install -y cmake git bash
-          run: |
-            cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-            cmake --build build
-            ctest --test-dir build --output-on-failure
