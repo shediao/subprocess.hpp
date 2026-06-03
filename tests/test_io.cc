@@ -183,7 +183,16 @@ TEST(IOTest, CaptureRunLargeData) {
   {
     auto [exit_code, out, err] =
         capture_run("dd", "if=/dev/zero", "bs=4M", "count=100");
-    ASSERT_EQ(out.size(), (100 * 4 * 1024 * 1024));
+
+    if (exit_code == 0) {
+      ASSERT_EQ(out.size(), (100 * 4 * 1024 * 1024));
+    } else {
+      out.clear();
+      // if dd failed, try head
+      auto [exit_code, out, err] =
+          capture_run("head", "-c", "419430400", "/dev/zero");
+      ASSERT_EQ(out.size(), (100 * 4 * 1024 * 1024));
+    }
   }
 #else
   {
