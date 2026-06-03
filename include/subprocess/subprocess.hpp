@@ -1720,19 +1720,8 @@ class Redirector {
       return nullptr;
     }
     return std::visit(
-        visitor{
-            [](Pipe& value) -> std::unique_ptr<value_type> {
-              return std::make_unique<value_type>(value.dup());
-            },
-            [](File& value) -> std::unique_ptr<value_type> {
-              return std::make_unique<value_type>(value.dup());
-            },
-            [](FileHandler& value) -> std::unique_ptr<value_type> {
-              return std::make_unique<value_type>(value.dup());
-            },
-            [](Buffer& value) -> std::unique_ptr<value_type> {
-              return std::make_unique<value_type>(value.dup());
-            },
+        []<typename T>(T& value) -> std::unique_ptr<value_type> {
+          return std::make_unique<value_type>(value.dup());
         },
         *redirect_);
   }
