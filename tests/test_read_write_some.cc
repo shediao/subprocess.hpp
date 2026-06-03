@@ -35,6 +35,9 @@ using subprocess::detail::Buffer;
 using subprocess::detail::File;
 using subprocess::detail::FileHandler;
 using subprocess::detail::Pipe;
+using subprocess::detail::StderrRedirector;
+using subprocess::detail::StdinRedirector;
+using subprocess::detail::StdoutRedirector;
 using subprocess::detail::unique_fd;
 #if defined(_WIN32)
 using subprocess::detail::ssize_t;
@@ -467,8 +470,12 @@ TEST(ReadWriteSomeTest, PipeLargeDataWriteAllReadExact) {
 TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdsForOutputBuffers) {
   // Simulate stdout and stderr buffers that have data written to their
   // pipes.  After the pump runs, the read ends must be closed.
-  Buffer out_buf;
-  Buffer err_buf;
+  subprocess::buffer out_buf_data, err_buf_data;
+  StdinRedirector in;
+  StdoutRedirector out{out_buf_data};
+  StderrRedirector err{err_buf_data};
+  auto& out_buf = out.get<Buffer>();
+  auto& err_buf = err.get<Buffer>();
 
   // Write data into each buffer's pipe, then close the write end to signal
   // EOF — exactly what happens when the child process exits.
@@ -480,8 +487,8 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdsForOutputBuffers) {
   subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
   err_buf.close_write();
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::nullopt, std::ref(out_buf), std::ref(err_buf));
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }
@@ -497,11 +504,15 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdsForOutputBuffers) {
 
 TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdForEmptyOutputBuffer) {
   // Even when there is no data (EOF immediately), the read fd must be closed.
-  Buffer out_buf;
+  subprocess::buffer out_buf_data;
+  StdinRedirector in;
+  StdoutRedirector out{out_buf_data};
+  StderrRedirector err;
+  auto& out_buf = out.get<Buffer>();
   out_buf.close_write();  // EOF before any data
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::nullopt, std::ref(out_buf), std::nullopt);
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }
@@ -516,10 +527,13 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesWriteFdForInputBuffer) {
   // data.  (close_write() was already present before the close_read() fix;
   // this guards against future regressions.)
   subprocess::buffer data{"stdin_data_for_pump"};
-  Buffer in_buf(data);
+  StdinRedirector in{data};
+  StdoutRedirector out;
+  StderrRedirector err;
+  auto& in_buf = in.get<Buffer>();
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::ref(in_buf), std::nullopt, std::nullopt);
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }
@@ -527,29 +541,33 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesWriteFdForInputBuffer) {
   ASSERT_FALSE(in_buf.wfd()) << "stdin write fd should be closed after pump";
 
   // Read back what was written through the pipe.
-  char out[64] = {};
-  auto n = subprocess::detail::read_some(in_buf.rfd(), out, sizeof(out));
+  char read_buf[64] = {};
+  auto n =
+      subprocess::detail::read_some(in_buf.rfd(), read_buf, sizeof(read_buf));
   ASSERT_GT(n, 0);
-  ASSERT_EQ(std::string(out, static_cast<size_t>(n)), data.to_string());
+  ASSERT_EQ(std::string(read_buf, static_cast<size_t>(n)), data.to_string());
 }
-
 TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
   // Full scenario: stdin + stdout + stderr.
   subprocess::buffer in_data{"pump_full_duplex"};
-  Buffer in_buf(in_data);
+  subprocess::buffer out_buf_data, err_buf_data;
+  StdinRedirector in{in_data};
+  StdoutRedirector out{out_buf_data};
+  StderrRedirector err{err_buf_data};
+  auto& in_buf = in.get<Buffer>();
+  auto& out_buf = out.get<Buffer>();
+  auto& err_buf = err.get<Buffer>();
 
-  Buffer out_buf;
   const char out_data[] = "full_duplex_out";
   subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
   out_buf.close_write();
 
-  Buffer err_buf;
   const char err_data[] = "full_duplex_err";
   subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
   err_buf.close_write();
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }
@@ -561,9 +579,6 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
   ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
   ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
 }
-
-// ===========================================================================
-// Full lifecycle: close_child_end + pump (simulates pump_pipe_data)
 //
 // In the real subprocess flow, close_child_end() closes the child-facing
 // pipe end, then read_write_to_buffer_*() closes the parent-facing end.
@@ -573,13 +588,17 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
 
 TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdoutBuffer) {
   // stdout: child writes to wfd, parent reads from rfd
-  Buffer out_buf;
+  subprocess::buffer out_buf_data;
+  StdinRedirector in;
+  StdoutRedirector out{out_buf_data};
+  StderrRedirector err;
+  auto& out_buf = out.get<Buffer>();
   const char out_data[] = "lifecycle_stdout";
   subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
   out_buf.close_write();  // simulate child exit (close_child_end equivalent)
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::nullopt, std::ref(out_buf), std::nullopt);
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }
@@ -591,13 +610,17 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdoutBuffer) {
 
 TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStderrBuffer) {
   // stderr: child writes to wfd, parent reads from rfd
-  Buffer err_buf;
+  subprocess::buffer err_buf_data;
+  StdinRedirector in;
+  StdoutRedirector out;
+  StderrRedirector err{err_buf_data};
+  auto& err_buf = err.get<Buffer>();
   const char err_data[] = "lifecycle_stderr";
   subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
   err_buf.close_write();  // simulate child exit
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::nullopt, std::nullopt, std::ref(err_buf));
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }
@@ -612,7 +635,10 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdinBuffer) {
   // close_child_end() closes the parent's copy of the child read end,
   // but the child still has its dup'd copy — simulate with a drain thread.
   subprocess::buffer data{"lifecycle_stdin"};
-  Buffer in_buf(data);
+  StdinRedirector in{data};
+  StdoutRedirector out;
+  StderrRedirector err;
+  auto& in_buf = in.get<Buffer>();
 
   subprocess::buffer drained;
   std::thread drain_thread([&]() {
@@ -629,8 +655,8 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdinBuffer) {
   // The child's drain thread still holds the dup'd read end.
   // NOTE: we skip close_read() here because the drain thread needs it.
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::ref(in_buf), std::nullopt, std::nullopt);
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }
@@ -645,14 +671,18 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdinBuffer) {
 TEST(ReadWriteSomeTest, FullLifecycleAllThreeBuffersAllHandlesClosed) {
   // stdin + stdout + stderr, all with close_child_end simulation.
   subprocess::buffer in_data{"lifecycle_in"};
-  Buffer in_buf(in_data);
+  subprocess::buffer out_buf_data, err_buf_data;
+  StdinRedirector in{in_data};
+  StdoutRedirector out{out_buf_data};
+  StderrRedirector err{err_buf_data};
+  auto& in_buf = in.get<Buffer>();
+  auto& out_buf = out.get<Buffer>();
+  auto& err_buf = err.get<Buffer>();
 
-  Buffer out_buf;
   const char out_data[] = "lifecycle_out";
   subprocess::detail::write_some(out_buf.wfd(), out_data, strlen(out_data));
   out_buf.close_write();
 
-  Buffer err_buf;
   const char err_data[] = "lifecycle_err";
   subprocess::detail::write_some(err_buf.wfd(), err_data, strlen(err_data));
   err_buf.close_write();
@@ -669,8 +699,8 @@ TEST(ReadWriteSomeTest, FullLifecycleAllThreeBuffersAllHandlesClosed) {
     in_buf.close_read();
   });
 
-  auto _pump = subprocess::detail::read_write_to_buffer_with_threads(
-      std::ref(in_buf), std::ref(out_buf), std::ref(err_buf));
+  auto _pump =
+      subprocess::detail::read_write_to_buffer_with_threads(in, out, err);
   for (auto& t : _pump) {
     t.join();
   }

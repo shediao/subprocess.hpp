@@ -1696,48 +1696,6 @@ class Buffer {
   Pipe pipe_;
 };
 
-inline std::vector<std::thread> read_write_to_buffer_with_threads(
-    std::optional<std::reference_wrapper<Buffer>> in,
-    std::optional<std::reference_wrapper<Buffer>> out,
-    std::optional<std::reference_wrapper<Buffer>> err) {
-  std::vector<std::thread> threads;
-  if (in) {
-    threads.emplace_back(
-        [](Buffer& buf) {
-          ssize_t write_size;
-          do {
-            write_size = buf.write_some();
-          } while (write_size > 0);
-          buf.close_write();
-        },
-        std::ref(in.value()));
-  }
-  if (out) {
-    threads.emplace_back(
-        [](const Buffer& buf) {
-          ssize_t read_size;
-          do {
-            read_size = buf.read_some();
-          } while (read_size > 0);
-          buf.close_read();
-        },
-        std::ref(out.value()));
-  }
-  if (err) {
-    threads.emplace_back(
-        [](const Buffer& buf) {
-          ssize_t read_size;
-          do {
-            read_size = buf.read_some();
-          } while (read_size > 0);
-          buf.close_read();
-        },
-        std::ref(err.value()));
-  }
-
-  return threads;
-}
-
 #if !defined(_WIN32)
 // Overload that accepts a child pid. When the child process exits,
 // the poll loop stops waiting for pipe I/O and returns. This prevents
@@ -2159,27 +2117,17 @@ class Redirector {
   [[nodiscard]] virtual int fileno() const = 0;
   [[nodiscard]] bool inherit() const { return !redirect_; }
 
-  [[nodiscard]] std::optional<std::reference_wrapper<const unique_fd>>
-  get_file_fd() const {
-    if (!redirect_) {
-      return std::nullopt;
-    }
-    return std::visit(
-        visitor{
-            [](const File& value)
-                -> std::optional<std::reference_wrapper<const unique_fd>> {
-              return std::ref(value.fd());
-            },
-            [](const FileHandler& value)
-                -> std::optional<std::reference_wrapper<const unique_fd>> {
-              return std::ref(value.fd());
-            },
-            [](const auto&)
-                -> std::optional<std::reference_wrapper<const unique_fd>> {
-              return std::nullopt;
-            },
-        },
-        *redirect_);
+  template <typename T>
+  bool is() const {
+    return redirect_ && std::holds_alternative<T>(*redirect_);
+  }
+  template <typename T>
+  T& get() {
+    return std::get<T>(*redirect_);
+  }
+  template <typename T>
+  const T& get() const {
+    return std::get<T>(*redirect_);
   }
 
  protected:
@@ -2216,6 +2164,46 @@ class StderrRedirector : public Redirector {
   [[nodiscard]] int fileno() const override { return 2; }
   ~StderrRedirector() override {}
 };
+
+inline std::vector<std::thread> read_write_to_buffer_with_threads(
+    StdinRedirector& in, StdoutRedirector& out, StderrRedirector& err) {
+  std::vector<std::thread> threads;
+  if (in.is<Buffer>()) {
+    threads.emplace_back(
+        [](Buffer& buf) {
+          ssize_t write_size;
+          do {
+            write_size = buf.write_some();
+          } while (write_size > 0);
+          buf.close_write();
+        },
+        std::ref(in.get<Buffer>()));
+  }
+  if (out.is<Buffer>()) {
+    threads.emplace_back(
+        [](const Buffer& buf) {
+          ssize_t read_size;
+          do {
+            read_size = buf.read_some();
+          } while (read_size > 0);
+          buf.close_read();
+        },
+        std::ref(out.get<Buffer>()));
+  }
+  if (err.is<Buffer>()) {
+    threads.emplace_back(
+        [](const Buffer& buf) {
+          ssize_t read_size;
+          do {
+            read_size = buf.read_some();
+          } while (read_size > 0);
+          buf.close_read();
+        },
+        std::ref(err.get<Buffer>()));
+  }
+
+  return threads;
+}
 
 struct stdin_redirector {
   StdinRedirector operator<(Pipe p) const {
@@ -2859,8 +2847,7 @@ class process {
   // parent pump data to/from child processes
   void pump_pipe_data() {
     close_child_end();
-    pump_threads_ = read_write_to_buffer_with_threads(
-        stdin_.get_buffer(), stdout_.get_buffer(), stderr_.get_buffer());
+    pump_threads_ = read_write_to_buffer_with_threads(stdin_, stdout_, stderr_);
   }
 #else
   // parent pump data to/from child processes
