@@ -33,11 +33,13 @@
 using subprocess::buffer;
 using subprocess::detail::Buffer;
 using subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
+using subprocess::detail::StderrRedirector;
+using subprocess::detail::StdinRedirector;
+using subprocess::detail::StdoutRedirector;
 
-static void read_write_to_buffer_use_poll(
-    std::optional<std::reference_wrapper<Buffer>> in,
-    std::optional<std::reference_wrapper<Buffer>> out,
-    std::optional<std::reference_wrapper<Buffer>> err) {
+static void read_write_to_buffer_use_poll(StdinRedirector& in,
+                                          StdoutRedirector& out,
+                                          StderrRedirector& err) {
   subprocess::detail::read_write_to_buffer_use_poll(
       in, out, err, INVALID_NATIVE_HANDLE_VALUE);
 }
@@ -121,19 +123,25 @@ class MultiplexPollTest : public MultiplexTestBase {};
 
 TEST_F(MultiplexPollTest, AllHandlesNullopt) {
   // Should return immediately without side-effects.
-  read_write_to_buffer_use_poll(std::nullopt, std::nullopt, std::nullopt);
+  StdinRedirector in;
+  StdoutRedirector out;
+  StderrRedirector err;
+  read_write_to_buffer_use_poll(in, out, err);
   SUCCEED();
 }
 
 TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
   auto input_str = std::string("hello from stdin poll");
   buffer in_data = make_buf(input_str);
-  Buffer in_buf(in_data);  // wraps in_data, owns the pipe
+  StdinRedirector in_redir(in_data);
+  StdoutRedirector out_redir;
+  StderrRedirector err_redir;
+  auto& in_buf = in_redir.get<Buffer>();
 
   buffer drained;
   std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
 
-  read_write_to_buffer_use_poll(std::ref(in_buf), std::nullopt, std::nullopt);
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   drain_thread.join();
   EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
@@ -143,29 +151,37 @@ TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
 TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
   auto output_str = std::string("hello from stdout poll");
   buffer out_data = make_buf(output_str);
-  Buffer out_buf;  // empty internal buffer
+  buffer out_buf_data;  // empty buffer, fills via redirector
+  StdinRedirector in_redir;
+  StdoutRedirector out_redir(out_buf_data);
+  StderrRedirector err_redir;
+  auto& out_buf = out_redir.get<Buffer>();
 
   std::thread feeder([&]() { feed_and_close(out_buf.wfd(), out_data); });
 
-  read_write_to_buffer_use_poll(std::nullopt, std::ref(out_buf), std::nullopt);
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   feeder.join();
   EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(out_buf.buf(), output_str);
+  EXPECT_EQ(out_buf_data, output_str);
 }
 
 TEST_F(MultiplexPollTest, OnlyStderrActiveReadsData) {
   auto err_str = std::string("hello from stderr poll");
   buffer err_data = make_buf(err_str);
-  Buffer err_buf;
+  buffer err_buf_data;  // empty buffer, fills via redirector
+  StdinRedirector in_redir;
+  StdoutRedirector out_redir;
+  StderrRedirector err_redir(err_buf_data);
+  auto& err_buf = err_redir.get<Buffer>();
 
   std::thread feeder([&]() { feed_and_close(err_buf.wfd(), err_data); });
 
-  read_write_to_buffer_use_poll(std::nullopt, std::nullopt, std::ref(err_buf));
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   feeder.join();
   EXPECT_EQ(err_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_EQ(err_buf.buf(), err_str);
+  EXPECT_EQ(err_buf_data, err_str);
 }
 
 TEST_F(MultiplexPollTest, AllThreeActive) {
@@ -174,9 +190,14 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   auto err_str = std::string("stderr-data-poll");
 
   buffer in_data = make_buf(input_str);
-  Buffer in_buf(in_data);
-  Buffer out_buf;
-  Buffer err_buf;
+  buffer out_buf_data;
+  buffer err_buf_data;
+  StdinRedirector in_redir(in_data);
+  StdoutRedirector out_redir(out_buf_data);
+  StderrRedirector err_redir(err_buf_data);
+  auto& in_buf = in_redir.get<Buffer>();
+  auto& out_buf = out_redir.get<Buffer>();
+  auto& err_buf = err_redir.get<Buffer>();
 
   buffer drained;
   std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
@@ -185,8 +206,7 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   std::thread err_feeder(
       [&]() { feed_and_close(err_buf.wfd(), make_buf(err_str)); });
 
-  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
-                                std::ref(err_buf));
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   drain_thread.join();
   out_feeder.join();
@@ -199,28 +219,32 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   yield_for_threads();
 
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf.buf(), output_str);
-  EXPECT_EQ(err_buf.buf(), err_str);
+  EXPECT_EQ(out_buf_data, output_str);
+  EXPECT_EQ(err_buf_data, err_str);
 }
 
 TEST_F(MultiplexPollTest, EmptyStdinBuffer) {
   auto output_str = std::string("only-stdout-poll");
-  Buffer out_buf;
+  buffer in_buf_data;  // empty buffer for stdin
+  buffer out_buf_data;
+  StdinRedirector in_redir(in_buf_data);
+  StdoutRedirector out_redir(out_buf_data);
+  StderrRedirector err_redir;
+  auto& in_buf = in_redir.get<Buffer>();
+  auto& out_buf = out_redir.get<Buffer>();
 
   std::thread feeder(
       [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
   // Pass an empty stdin Buffer (no data to write → immediately closes write
   // end).
-  Buffer in_buf;  // default-constructed: empty buffer
-  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
-                                std::nullopt);
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   feeder.join();
   EXPECT_EQ(in_buf.wfd(), INVALID_NATIVE_HANDLE_VALUE);
   EXPECT_EQ(out_buf.rfd(), INVALID_NATIVE_HANDLE_VALUE);
-  EXPECT_TRUE(in_buf.buf().empty());
-  EXPECT_EQ(out_buf.buf(), output_str);
+  EXPECT_TRUE(in_buf_data.empty());
+  EXPECT_EQ(out_buf_data, output_str);
 }
 
 TEST_F(MultiplexPollTest, LargerDataTransfer) {
@@ -228,16 +252,19 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
   auto output_str = make_pattern(64 * 1024, 'a');  //  64 KiB
 
   buffer in_data = make_buf(input_str);
-  Buffer in_buf(in_data);
-  Buffer out_buf;
+  buffer out_buf_data;
+  StdinRedirector in_redir(in_data);
+  StdoutRedirector out_redir(out_buf_data);
+  StderrRedirector err_redir;
+  auto& in_buf = in_redir.get<Buffer>();
+  auto& out_buf = out_redir.get<Buffer>();
 
   buffer drained;
   std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
   std::thread feeder(
       [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
 
-  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
-                                std::nullopt);
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   drain_thread.join();
   feeder.join();
@@ -249,8 +276,8 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
 
   EXPECT_EQ(drained.size(), input_str.size());
   EXPECT_EQ(drained, input_str);
-  EXPECT_EQ(out_buf.buf().size(), output_str.size());
-  EXPECT_EQ(out_buf.buf(), output_str);
+  EXPECT_EQ(out_buf_data.size(), output_str.size());
+  EXPECT_EQ(out_buf_data, output_str);
 }
 
 // ===========================================================================
@@ -268,42 +295,53 @@ TEST_F(MultiplexPollTest, FullLifecycleStdoutBothEndsClosed) {
   // Simulates close_child_end (close child write end) + pump (close parent
   // read end).
   auto output_str = std::string("lifecycle_stdout_poll");
-  Buffer out_buf;
+  buffer out_buf_data;
+  StdinRedirector in_redir;
+  StdoutRedirector out_redir(out_buf_data);
+  StderrRedirector err_redir;
+  auto& out_buf = out_redir.get<Buffer>();
 
   // Write data into the pipe first, then close the write end (child side).
   auto out_data = make_buf(output_str);
   feed_and_close(out_buf.wfd(), out_data);
   out_buf.close_write();  // sync unique_fd state
 
-  read_write_to_buffer_use_poll(std::nullopt, std::ref(out_buf), std::nullopt);
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   // Both ends must be closed after the full cycle.
   ASSERT_FALSE(out_buf.rfd()) << "stdout parent read fd should be closed";
   ASSERT_FALSE(out_buf.wfd()) << "stdout child write fd should be closed";
-  ASSERT_EQ(out_buf.buf(), output_str);
+  ASSERT_EQ(out_buf_data, output_str);
 }
 
 TEST_F(MultiplexPollTest, FullLifecycleStderrBothEndsClosed) {
   // stderr: child writes to wfd, parent reads from rfd.
   auto err_str = std::string("lifecycle_stderr_poll");
-  Buffer err_buf;
+  buffer err_buf_data;
+  StdinRedirector in_redir;
+  StdoutRedirector out_redir;
+  StderrRedirector err_redir(err_buf_data);
+  auto& err_buf = err_redir.get<Buffer>();
 
   auto err_data = make_buf(err_str);
   feed_and_close(err_buf.wfd(), err_data);
   err_buf.close_write();  // sync unique_fd state
 
-  read_write_to_buffer_use_poll(std::nullopt, std::nullopt, std::ref(err_buf));
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd should be closed";
   ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd should be closed";
-  ASSERT_EQ(err_buf.buf(), err_str);
+  ASSERT_EQ(err_buf_data, err_str);
 }
 
 TEST_F(MultiplexPollTest, FullLifecycleStdinBothEndsClosed) {
   // stdin: parent writes to wfd, child reads from rfd.
   auto input_str = std::string("lifecycle_stdin_poll");
   buffer in_data = make_buf(input_str);
-  Buffer in_buf(in_data);
+  StdinRedirector in_redir(in_data);
+  StdoutRedirector out_redir;
+  StderrRedirector err_redir;
+  auto& in_buf = in_redir.get<Buffer>();
   // NOTE: do NOT close read end before the drain thread starts —
   // in the real subprocess the child holds a dup'd copy of the read end
   // and close_child_end() only closes the parent's copy.
@@ -314,7 +352,7 @@ TEST_F(MultiplexPollTest, FullLifecycleStdinBothEndsClosed) {
     in_buf.close_read();  // child closes its end after reading
   });
 
-  read_write_to_buffer_use_poll(std::ref(in_buf), std::nullopt, std::nullopt);
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
   drain_thread.join();
 
   ASSERT_FALSE(in_buf.wfd()) << "stdin parent write fd should be closed";
@@ -329,9 +367,14 @@ TEST_F(MultiplexPollTest, FullLifecycleAllThreeAllHandlesClosed) {
   auto err_str = std::string("err_lifecycle_poll");
 
   buffer in_data = make_buf(input_str);
-  Buffer in_buf(in_data);
-  Buffer out_buf;
-  Buffer err_buf;
+  buffer out_buf_data;
+  buffer err_buf_data;
+  StdinRedirector in_redir(in_data);
+  StdoutRedirector out_redir(out_buf_data);
+  StderrRedirector err_redir(err_buf_data);
+  auto& in_buf = in_redir.get<Buffer>();
+  auto& out_buf = out_redir.get<Buffer>();
+  auto& err_buf = err_redir.get<Buffer>();
 
   // Feed stdout and stderr data, then close the write ends (child side).
   auto out_data = make_buf(output_str);
@@ -349,8 +392,7 @@ TEST_F(MultiplexPollTest, FullLifecycleAllThreeAllHandlesClosed) {
     in_buf.close_read();
   });
 
-  read_write_to_buffer_use_poll(std::ref(in_buf), std::ref(out_buf),
-                                std::ref(err_buf));
+  read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
 
   drain_thread.join();
 
@@ -365,8 +407,8 @@ TEST_F(MultiplexPollTest, FullLifecycleAllThreeAllHandlesClosed) {
   yield_for_threads();
 
   ASSERT_EQ(drained, input_str);
-  ASSERT_EQ(out_buf.buf(), output_str);
-  ASSERT_EQ(err_buf.buf(), err_str);
+  ASSERT_EQ(out_buf_data, output_str);
+  ASSERT_EQ(err_buf_data, err_str);
 }
 
 #endif  // !defined(_WIN32)

@@ -1696,188 +1696,6 @@ class Buffer {
   Pipe pipe_;
 };
 
-#if !defined(_WIN32)
-// Overload that accepts a child pid. When the child process exits,
-// the poll loop stops waiting for pipe I/O and returns. This prevents
-// hanging when the child's grandchildren inherit pipe fds and keep
-// them open after the direct child has exited.
-// If child_status is non-null and the child is reaped during polling,
-// the status is stored there so wait() can retrieve it.
-[[maybe_unused]]
-inline void read_write_to_buffer_use_poll(
-    std::optional<std::reference_wrapper<Buffer>> in,
-    std::optional<std::reference_wrapper<Buffer>> out,
-    std::optional<std::reference_wrapper<Buffer>> err, pid_t child_pid,
-    int* child_status = nullptr) {
-  if (in) {
-    in->get().wfd().set_nonblocking();
-  }
-  if (out) {
-    out->get().rfd().set_nonblocking();
-  }
-  if (err) {
-    err->get().rfd().set_nonblocking();
-  }
-
-  struct pollfd fds[3]{
-      {.fd = in ? in->get().wfd().get() : INVALID_NATIVE_HANDLE_VALUE,
-       .events = POLLOUT,
-       .revents = 0},
-      {.fd = out ? out->get().rfd().get() : INVALID_NATIVE_HANDLE_VALUE,
-       .events = POLLIN,
-       .revents = 0},
-      {.fd = err ? err->get().rfd().get() : INVALID_NATIVE_HANDLE_VALUE,
-       .events = POLLIN,
-       .revents = 0}};
-
-  // If a child pid was provided, use a timed poll loop so we can
-  // periodically check whether the direct child has exited. This
-  // avoids hanging forever when grandchildren inherit and hold open
-  // the write ends of stdout/stderr pipes.
-  const bool monitor_child = (!invalid_handle(child_pid));
-  // After the child exits, drain any remaining buffered pipe data
-  // before giving up. This gives us 2 seconds to collect final output.
-  auto drain_deadline = std::chrono::steady_clock::time_point::max();
-  bool child_exited = false;
-
-  while (!invalid_handle(fds[0].fd) || !invalid_handle(fds[1].fd) ||
-         !invalid_handle(fds[2].fd)) {
-    // Use a 200ms timeout when monitoring the child so we can
-    // periodically check liveness; otherwise block indefinitely.
-    int poll_count = poll(fds, 3, monitor_child ? 200 : -1);
-    if (poll_count == -1) {
-      if (errno == EINTR || errno == EAGAIN) {
-        continue;
-      }
-      print_error("poll() failed");
-      break;
-    }
-
-    // Check if the direct child has exited. We use waitpid(WNOHANG)
-    // rather than kill(pid, 0) because a zombie process still exists
-    // in the process table and responds to kill(), giving a false
-    // positive that the child is still running.
-    if (monitor_child && !child_exited) {
-      int status = 0;
-      pid_t result = ::waitpid(static_cast<pid_t>(child_pid), &status, WNOHANG);
-      if (result > 0) {
-        // Child has exited — reap it and store the status.
-        child_exited = true;
-        if (child_status != nullptr) {
-          *child_status = status;
-        }
-        // Start the drain timer — collect any last buffered data
-        // from the pipes for a limited time, then stop.
-        drain_deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-      }
-    }
-
-    // If the child exited and the drain deadline has passed, stop
-    // waiting for more pipe data — grandchildren may still be running,
-    // but we don't want to block the caller indefinitely.
-    if (child_exited && std::chrono::steady_clock::now() >= drain_deadline) {
-      break;
-    }
-
-    if (poll_count == 0) {
-      // Timeout only — check child again on next iteration.
-      continue;
-    }
-    if (!invalid_handle(fds[0].fd) && (fds[0].revents & POLLOUT)) {
-      ssize_t write_count;
-      while ((write_count = in->get().write_some()) > 0) {
-      }
-      if (write_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          print_error("write() error: " + std::to_string(errno));
-          in->get().close_write();
-          fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
-          break;
-        }
-      }
-      if (in->get().empty()) {
-        in->get().close_write();
-        fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
-      }
-    }
-    if (!invalid_handle(fds[1].fd) && (fds[1].revents & POLLIN)) {
-      ssize_t read_count;
-      do {
-        read_count = out->get().read_some();
-      } while (read_count > 0);
-      if (read_count == 0) {
-        out->get().close_read();
-        fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
-      }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          print_error(get_last_error_message());
-          out->get().close_read();
-          fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
-          break;
-        }
-      }
-    } else if (!invalid_handle(fds[1].fd) &&
-               (fds[1].revents & (POLLHUP | POLLERR))) {
-      out->get().close_read();
-      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    if (!invalid_handle(fds[2].fd) && (fds[2].revents & POLLIN)) {
-      ssize_t read_count;
-      do {
-        read_count = err->get().read_some();
-      } while (read_count > 0);
-      if (read_count == 0) {
-        err->get().close_read();
-        fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
-      }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          print_error(get_last_error_message());
-          err->get().close_read();
-          fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
-          break;
-        }
-      }
-    } else if (!invalid_handle(fds[2].fd) &&
-               (fds[2].revents & (POLLHUP | POLLERR))) {
-      err->get().close_read();
-      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    if (!invalid_handle(fds[0].fd) &&
-        (fds[0].revents & (POLLNVAL | POLLHUP | POLLERR))) {
-      in->get().close_write();
-      fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    if (!invalid_handle(fds[1].fd) &&
-        (fds[1].revents & (POLLNVAL | POLLHUP | POLLERR))) {
-      out->get().close_read();
-      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    if (!invalid_handle(fds[2].fd) &&
-        (fds[2].revents & (POLLNVAL | POLLHUP | POLLERR))) {
-      err->get().close_read();
-      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    if (invalid_handle(fds[0].fd) && invalid_handle(fds[1].fd) &&
-        invalid_handle(fds[2].fd)) {
-      break;
-    }
-  }
-  if (in) {
-    in->get().close_write();
-  }
-  if (out) {
-    out->get().close_read();
-  }
-  if (err) {
-    err->get().close_read();
-  }
-}
-
-#endif
-
 class Redirector {
   using value_type = std::variant<Pipe, File, Buffer, FileHandler>;
 
@@ -2099,21 +1917,6 @@ class Redirector {
                *redirect_);
   }
 #endif  // !_WIN32
-  std::optional<std::reference_wrapper<Buffer>> get_buffer() const {
-    if (!redirect_) {
-      return std::nullopt;
-    }
-    return std::visit(
-        visitor{
-            [](Buffer& value) -> std::optional<std::reference_wrapper<Buffer>> {
-              return std::ref(value);
-            },
-            [](auto&) -> std::optional<std::reference_wrapper<Buffer>> {
-              return std::nullopt;
-            },
-        },
-        *redirect_);
-  }
   [[nodiscard]] virtual int fileno() const = 0;
   [[nodiscard]] bool inherit() const { return !redirect_; }
 
@@ -2164,6 +1967,184 @@ class StderrRedirector : public Redirector {
   [[nodiscard]] int fileno() const override { return 2; }
   ~StderrRedirector() override {}
 };
+
+#if !defined(_WIN32)
+[[maybe_unused]]
+inline void read_write_to_buffer_use_poll(StdinRedirector& in,
+                                          StdoutRedirector& out,
+                                          StderrRedirector& err,
+                                          pid_t child_pid,
+                                          int* child_status = nullptr) {
+  if (in.is<Buffer>()) {
+    in.get<Buffer>().wfd().set_nonblocking();
+  }
+  if (out.is<Buffer>()) {
+    out.get<Buffer>().rfd().set_nonblocking();
+  }
+  if (err.is<Buffer>()) {
+    err.get<Buffer>().rfd().set_nonblocking();
+  }
+
+  struct pollfd fds[3]{{.fd = in.is<Buffer>() ? in.get<Buffer>().wfd().get()
+                                              : INVALID_NATIVE_HANDLE_VALUE,
+                        .events = POLLOUT,
+                        .revents = 0},
+                       {.fd = out.is<Buffer>() ? out.get<Buffer>().rfd().get()
+                                               : INVALID_NATIVE_HANDLE_VALUE,
+                        .events = POLLIN,
+                        .revents = 0},
+                       {.fd = err.is<Buffer>() ? err.get<Buffer>().rfd().get()
+                                               : INVALID_NATIVE_HANDLE_VALUE,
+                        .events = POLLIN,
+                        .revents = 0}};
+
+  // If a child pid was provided, use a timed poll loop so we can
+  // periodically check whether the direct child has exited. This
+  // avoids hanging forever when grandchildren inherit and hold open
+  // the write ends of stdout/stderr pipes.
+  const bool monitor_child = (!invalid_handle(child_pid));
+  // After the child exits, drain any remaining buffered pipe data
+  // before giving up. This gives us 2 seconds to collect final output.
+  auto drain_deadline = std::chrono::steady_clock::time_point::max();
+  bool child_exited = false;
+
+  while (!invalid_handle(fds[0].fd) || !invalid_handle(fds[1].fd) ||
+         !invalid_handle(fds[2].fd)) {
+    // Use a 200ms timeout when monitoring the child so we can
+    // periodically check liveness; otherwise block indefinitely.
+    int poll_count = poll(fds, 3, monitor_child ? 200 : -1);
+    if (poll_count == -1) {
+      if (errno == EINTR || errno == EAGAIN) {
+        continue;
+      }
+      print_error("poll() failed");
+      break;
+    }
+
+    // Check if the direct child has exited. We use waitpid(WNOHANG)
+    // rather than kill(pid, 0) because a zombie process still exists
+    // in the process table and responds to kill(), giving a false
+    // positive that the child is still running.
+    if (monitor_child && !child_exited) {
+      int status = 0;
+      pid_t result = ::waitpid(static_cast<pid_t>(child_pid), &status, WNOHANG);
+      if (result > 0) {
+        // Child has exited — reap it and store the status.
+        child_exited = true;
+        if (child_status != nullptr) {
+          *child_status = status;
+        }
+        // Start the drain timer — collect any last buffered data
+        // from the pipes for a limited time, then stop.
+        drain_deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+      }
+    }
+
+    // If the child exited and the drain deadline has passed, stop
+    // waiting for more pipe data — grandchildren may still be running,
+    // but we don't want to block the caller indefinitely.
+    if (child_exited && std::chrono::steady_clock::now() >= drain_deadline) {
+      break;
+    }
+
+    if (poll_count == 0) {
+      // Timeout only — check child again on next iteration.
+      continue;
+    }
+    if (!invalid_handle(fds[0].fd) && (fds[0].revents & POLLOUT)) {
+      ssize_t write_count;
+      while ((write_count = in.get<Buffer>().write_some()) > 0) {
+      }
+      if (write_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          print_error("write() error: " + std::to_string(errno));
+          in.get<Buffer>().close_write();
+          fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+          break;
+        }
+      }
+      if (in.get<Buffer>().empty()) {
+        in.get<Buffer>().close_write();
+        fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+    }
+    if (!invalid_handle(fds[1].fd) && (fds[1].revents & POLLIN)) {
+      ssize_t read_count;
+      do {
+        read_count = out.get<Buffer>().read_some();
+      } while (read_count > 0);
+      if (read_count == 0) {
+        out.get<Buffer>().close_read();
+        fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          print_error(get_last_error_message());
+          out.get<Buffer>().close_read();
+          fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+          break;
+        }
+      }
+    } else if (!invalid_handle(fds[1].fd) &&
+               (fds[1].revents & (POLLHUP | POLLERR))) {
+      out.get<Buffer>().close_read();
+      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (!invalid_handle(fds[2].fd) && (fds[2].revents & POLLIN)) {
+      ssize_t read_count;
+      do {
+        read_count = err.get<Buffer>().read_some();
+      } while (read_count > 0);
+      if (read_count == 0) {
+        err.get<Buffer>().close_read();
+        fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
+      if (read_count == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          print_error(get_last_error_message());
+          err.get<Buffer>().close_read();
+          fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+          break;
+        }
+      }
+    } else if (!invalid_handle(fds[2].fd) &&
+               (fds[2].revents & (POLLHUP | POLLERR))) {
+      err.get<Buffer>().close_read();
+      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (!invalid_handle(fds[0].fd) &&
+        (fds[0].revents & (POLLNVAL | POLLHUP | POLLERR))) {
+      in.get<Buffer>().close_write();
+      fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (!invalid_handle(fds[1].fd) &&
+        (fds[1].revents & (POLLNVAL | POLLHUP | POLLERR))) {
+      out.get<Buffer>().close_read();
+      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (!invalid_handle(fds[2].fd) &&
+        (fds[2].revents & (POLLNVAL | POLLHUP | POLLERR))) {
+      err.get<Buffer>().close_read();
+      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
+    if (invalid_handle(fds[0].fd) && invalid_handle(fds[1].fd) &&
+        invalid_handle(fds[2].fd)) {
+      break;
+    }
+  }
+  if (in.is<Buffer>()) {
+    in.get<Buffer>().close_write();
+  }
+  if (out.is<Buffer>()) {
+    out.get<Buffer>().close_read();
+  }
+  if (err.is<Buffer>()) {
+    err.get<Buffer>().close_read();
+  }
+}
+
+#endif
 
 inline std::vector<std::thread> read_write_to_buffer_with_threads(
     StdinRedirector& in, StdoutRedirector& out, StderrRedirector& err) {
@@ -2853,8 +2834,7 @@ class process {
   // parent pump data to/from child processes
   void pump_pipe_data() {
     close_child_end();
-    read_write_to_buffer_use_poll(stdin_.get_buffer(), stdout_.get_buffer(),
-                                  stderr_.get_buffer(), pid_.get(),
+    read_write_to_buffer_use_poll(stdin_, stdout_, stderr_, pid_.get(),
                                   &exit_code_);
     {
       int status = 0;
