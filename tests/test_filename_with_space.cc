@@ -9,7 +9,7 @@
 
 #include <string>
 
-#include "./utils.h"
+#include "./temp_file.h"
 #include "gtest/gtest.h"
 #include "subprocess/subprocess.hpp"
 

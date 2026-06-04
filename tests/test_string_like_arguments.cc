@@ -30,7 +30,7 @@
 #include <string_view>
 #include <vector>
 
-#include "./utils.h"
+#include "./temp_file.h"
 #include "subprocess/subprocess.hpp"
 
 using subprocess::buffer;
@@ -39,39 +39,6 @@ using subprocess::detach_run;
 using subprocess::run;
 using subprocess::named_arguments::std_err;
 using subprocess::named_arguments::std_out;
-
-// ===========================================================================
-// Helper: wait for file content (used by detach_run tests)
-// ===========================================================================
-namespace {
-bool wait_for_file_content(
-    const std::string& path,
-    std::chrono::milliseconds max_wait = std::chrono::seconds(5)) {
-  auto start = std::chrono::steady_clock::now();
-  while (true) {
-    std::error_code ec;
-    auto sz = std::filesystem::file_size(path, ec);
-    if (!ec && sz > 0) {
-      return true;
-    }
-    if (std::chrono::steady_clock::now() - start > max_wait) {
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  }
-}
-
-std::string read_trimmed(const std::string& path) {
-  std::ifstream f(path);
-  std::string content((std::istreambuf_iterator<char>(f)),
-                      std::istreambuf_iterator<char>());
-  while (!content.empty() &&
-         (content.back() == '\n' || content.back() == '\r')) {
-    content.pop_back();
-  }
-  return content;
-}
-}  // namespace
 
 // ===========================================================================
 // Platform helpers: command + arguments for producing known output
@@ -389,8 +356,8 @@ TEST(StringLikeDetachRunTest, ConstCharPtr) {
                        static_cast<const char*>(cmd[1].c_str()),
                        static_cast<const char*>(cmd[2].c_str()));
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "detach_const_char_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detach_const_char_ptr");
 }
 
 TEST(StringLikeDetachRunTest, CharPtr) {
@@ -415,8 +382,8 @@ TEST(StringLikeDetachRunTest, CharPtr) {
 #endif
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "detach_char_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detach_char_ptr");
 }
 
 TEST(StringLikeDetachRunTest, StdString) {
@@ -425,8 +392,8 @@ TEST(StringLikeDetachRunTest, StdString) {
   bool ok =
       detach_run(std::string(cmd[0]), std::string(cmd[1]), std::string(cmd[2]));
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "detach_std_string");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detach_std_string");
 }
 
 TEST(StringLikeDetachRunTest, StdStringView) {
@@ -436,8 +403,8 @@ TEST(StringLikeDetachRunTest, StdStringView) {
   std::string_view app(s0), a1(s1), a2(s2);
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "detach_string_view");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detach_string_view");
 }
 
 TEST(StringLikeDetachRunTest, RvalueStdString) {
@@ -446,8 +413,8 @@ TEST(StringLikeDetachRunTest, RvalueStdString) {
   bool ok =
       detach_run(std::string(cmd[0]), std::string(cmd[1]), std::string(cmd[2]));
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "detach_rvalue_string");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detach_rvalue_string");
 }
 
 TEST(StringLikeDetachRunTest, MixedNarrowTypes) {
@@ -464,8 +431,8 @@ TEST(StringLikeDetachRunTest, MixedNarrowTypes) {
   std::string_view a2(a2_s);
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "detach_mixed_narrow");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detach_mixed_narrow");
 }
 
 TEST(StringLikeDetachRunTest, StringLiteralCArrayDecay) {
@@ -475,8 +442,8 @@ TEST(StringLikeDetachRunTest, StringLiteralCArrayDecay) {
   // strings first
   bool ok = detach_run(cmd[0].c_str(), cmd[1].c_str(), cmd[2].c_str());
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "detach_literal");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detach_literal");
 }
 
 // ===========================================================================
@@ -633,8 +600,8 @@ TEST(StringLikeDetachRunWideTest, ConstWCharPtr) {
                       L"&exit /b 0";
   bool ok = detach_run(app, a1, a2_s.c_str());
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "w_detach_const_char_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "w_detach_const_char_ptr");
 }
 
 TEST(StringLikeDetachRunWideTest, WCharPtr) {
@@ -655,8 +622,8 @@ TEST(StringLikeDetachRunWideTest, WCharPtr) {
 #endif
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "w_detach_char_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "w_detach_char_ptr");
 }
 
 TEST(StringLikeDetachRunWideTest, StdWString) {
@@ -668,8 +635,8 @@ TEST(StringLikeDetachRunWideTest, StdWString) {
                   L"&exit /b 0");
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "w_detach_std_wstring");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "w_detach_std_wstring");
 }
 
 TEST(StringLikeDetachRunWideTest, StdWStringView) {
@@ -684,8 +651,8 @@ TEST(StringLikeDetachRunWideTest, StdWStringView) {
   std::wstring_view a2(a2_s);
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "w_detach_string_view");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "w_detach_string_view");
 }
 
 TEST(StringLikeDetachRunWideTest, RvalueStdWString) {
@@ -696,8 +663,8 @@ TEST(StringLikeDetachRunWideTest, RvalueStdWString) {
                               subprocess::detail::utf8_to_utf16(tmp.path()) +
                               L"&exit /b 0"));
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "w_detach_rvalue");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "w_detach_rvalue");
 }
 
 TEST(StringLikeDetachRunWideTest, MixedWideTypes) {
@@ -710,8 +677,8 @@ TEST(StringLikeDetachRunWideTest, MixedWideTypes) {
   std::wstring_view a2(a2_s);
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "w_detach_mixed");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "w_detach_mixed");
 }
 
 TEST(StringLikeDetachRunWideTest, WideStringLiteralDecay) {
@@ -721,8 +688,8 @@ TEST(StringLikeDetachRunWideTest, WideStringLiteralDecay) {
                       L"&exit /b 0";
   bool ok = detach_run(L"cmd.exe", L"/c", a2_s.c_str());
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "w_detach_literal");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "w_detach_literal");
 }
 
 #endif  // _WIN32
@@ -754,8 +721,8 @@ TEST(StringLikeEdgeCaseTest, DetachRunWithVectorForm) {
   auto cmd = detach_cmd("vector_form", tmp.path());
   bool ok = detach_run(cmd[0], std::vector<std::string>{cmd[1], cmd[2]});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "vector_form");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "vector_form");
 }
 
 TEST(StringLikeEdgeCaseTest, RunWithOnlyNamedArgs) {

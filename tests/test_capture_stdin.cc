@@ -2,12 +2,13 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "subprocess/subprocess.hpp"
-#include "utils.h"
+#include "temp_file.h"
 
 using namespace subprocess::named_arguments;
 using subprocess::buffer;

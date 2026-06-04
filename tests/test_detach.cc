@@ -33,7 +33,7 @@
 #include <string_view>
 #include <thread>
 
-#include "./utils.h"
+#include "./temp_file.h"
 #include "subprocess/subprocess.hpp"
 
 #if !defined(_WIN32)
@@ -42,47 +42,7 @@
 #endif
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
 using subprocess::detach_run;
-
-// ===========================================================================
-// Helper: wait for a file to be created and contain non-empty content.
-// We poll for content (not just existence) because on all platforms
-// shell redirect (">") creates/truncates the file before the command
-// writes to it, so there is a brief window where the file exists but
-// is empty.
-// ===========================================================================
-inline bool wait_for_file(
-    const std::string& path,
-    std::chrono::milliseconds max_wait = std::chrono::seconds(5)) {
-  auto start = std::chrono::steady_clock::now();
-  while (true) {
-    std::error_code ec;
-    auto sz = std::filesystem::file_size(path, ec);
-    if (!ec && sz > 0) {
-      return true;
-    }
-    if (std::chrono::steady_clock::now() - start > max_wait) {
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  }
-}
-
-// ===========================================================================
-// Helper: read file content as string, trim trailing whitespace
-// ===========================================================================
-inline std::string read_file_trimmed(const std::string& path) {
-  std::ifstream f(path);
-  std::string content((std::istreambuf_iterator<char>(f)),
-                      std::istreambuf_iterator<char>());
-  // Trim trailing newlines / carriage returns
-  while (!content.empty() &&
-         (content.back() == '\n' || content.back() == '\r')) {
-    content.pop_back();
-  }
-  return content;
-}
 
 // ===========================================================================
 // 1. Basic smoke test — detach_run returns true for a simple command
@@ -97,8 +57,8 @@ TEST(DetachTest, SmokeTest) {
 #endif
   );
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "ok");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "ok");
 }
 
 // ===========================================================================
@@ -114,8 +74,8 @@ TEST(DetachTest, ActuallyExecutes) {
 #endif
   );
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "executed");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "executed");
 }
 
 // ===========================================================================
@@ -176,8 +136,8 @@ TEST(DetachTest, CwdSetToHome) {
       detach_run("/bin/sh", {"-c", "pwd > '" + tmp.path() + "'"}, cwd = "/tmp");
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string out = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string out = tmp.read_trimmed();
 #if defined(_WIN32)
   EXPECT_EQ(out, "C:\\Windows");
 #elif defined(__APPLE__)
@@ -202,8 +162,8 @@ TEST(DetachTest, CwdVariadicForm) {
   bool ok = detach_run("/bin/sh", "-c", "pwd > '" + tmp.path() + "'", cwd = wd);
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string out = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string out = tmp.read_trimmed();
 #if defined(_WIN32)
   EXPECT_EQ(out, "C:\\Windows");
 #elif defined(__APPLE__)
@@ -230,8 +190,8 @@ TEST(DetachTest, EnvFullReplacement) {
       env = {{"MY_DETACH_VAR", "detached_value"}});
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "detached_value");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "detached_value");
 }
 
 // ===========================================================================
@@ -247,8 +207,8 @@ TEST(DetachTest, EnvFullReplacementClearsOtherVars) {
       "cmd.exe", {"/c", "<nul set /p=%PATH%>" + tmp.path() + "&exit /b 0"},
       env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "%PATH%");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "%PATH%");
 
   TempFile tmp2;
   ok = detach_run(
@@ -256,8 +216,8 @@ TEST(DetachTest, EnvFullReplacementClearsOtherVars) {
       {"/c", "<nul set /p=%ONLY_THIS%>" + tmp2.path() + "&exit /b 0"},
       env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp2.path()));
-  EXPECT_EQ(read_file_trimmed(tmp2.path()), "present");
+  ASSERT_TRUE(tmp2.wait_for_file());
+  EXPECT_EQ(tmp2.read_trimmed(), "present");
 #else
   // Use `env` to dump actual environment.
   // NOTE: we only verify that the explicitly-set variable is present.
@@ -267,8 +227,8 @@ TEST(DetachTest, EnvFullReplacementClearsOtherVars) {
   bool ok = detach_run("/bin/sh", {"-c", "env > '" + tmp.path() + "'"},
                        env = {{"ONLY_THIS", "present"}});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string env_output = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string env_output = tmp.read_trimmed();
   EXPECT_TRUE(env_output.find("ONLY_THIS=present") != std::string::npos);
 #endif
 }
@@ -290,8 +250,8 @@ TEST(DetachTest, EnvAppend) {
       env += {{"MY_APPEND_DETACH", "appended_val"}});
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "appended_val");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "appended_val");
 }
 
 // ===========================================================================
@@ -315,8 +275,8 @@ TEST(DetachTest, EnvAppendPreservesExistingVars) {
       env += {{"EXTRA_DETACH", "yes"}});
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "path_exists");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "path_exists");
 }
 
 // ===========================================================================
@@ -334,8 +294,8 @@ TEST(DetachTest, EnvItemAppend) {
                        env["PATH"] += "DETACH_SUFFIX");
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string out = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string out = tmp.read_trimmed();
   // The env var content should end with the separator + suffix
   EXPECT_TRUE(out.size() >= std::string("DETACH_SUFFIX").size());
   auto pos = out.rfind("DETACH_SUFFIX");
@@ -357,8 +317,8 @@ TEST(DetachTest, EnvItemPrepend) {
                        env["PATH"] <<= "DETACH_PREFIX");
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string out = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string out = tmp.read_trimmed();
   // Verify the prepended value is present
   auto pos = out.find("DETACH_PREFIX");
   EXPECT_NE(pos, std::string::npos);
@@ -389,8 +349,8 @@ TEST(DetachTest, EnvItemPrependKnownValue) {
       env += {{"DETACH_PRE_KNOWN", "original"}},
       env["DETACH_PRE_KNOWN"] <<= "prepended");
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "prepended;original");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "prepended;original");
 #else
   bool ok = detach_run(
       "/bin/sh",
@@ -398,8 +358,8 @@ TEST(DetachTest, EnvItemPrependKnownValue) {
       env += {{"DETACH_PRE_KNOWN", "original"}},
       env["DETACH_PRE_KNOWN"] <<= "prepended");
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "prepended:original");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "prepended:original");
 #endif
 }
 
@@ -420,8 +380,8 @@ TEST(DetachTest, EnvItemAppendNewKey) {
       env["DETACH_NEW_VAR"] += "new_value");
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "new_value");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "new_value");
 }
 
 // ===========================================================================
@@ -441,8 +401,8 @@ TEST(DetachTest, EnvCombined) {
       env["COMBINED"] += "suffix");
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string out = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string out = tmp.read_trimmed();
   // "base" + separator + "suffix"
   EXPECT_TRUE(out.find("base") != std::string::npos);
   EXPECT_TRUE(out.find("suffix") != std::string::npos);
@@ -477,12 +437,12 @@ TEST(DetachTest, MultipleConcurrent) {
   EXPECT_TRUE(ok1);
   EXPECT_TRUE(ok2);
   EXPECT_TRUE(ok3);
-  ASSERT_TRUE(wait_for_file(tmp1.path()));
-  ASSERT_TRUE(wait_for_file(tmp2.path()));
-  ASSERT_TRUE(wait_for_file(tmp3.path()));
-  EXPECT_EQ(read_file_trimmed(tmp1.path()), "one");
-  EXPECT_EQ(read_file_trimmed(tmp2.path()), "two");
-  EXPECT_EQ(read_file_trimmed(tmp3.path()), "three");
+  ASSERT_TRUE(tmp1.wait_for_file());
+  ASSERT_TRUE(tmp2.wait_for_file());
+  ASSERT_TRUE(tmp3.wait_for_file());
+  EXPECT_EQ(tmp1.read_trimmed(), "one");
+  EXPECT_EQ(tmp2.read_trimmed(), "two");
+  EXPECT_EQ(tmp3.read_trimmed(), "three");
 }
 
 // ===========================================================================
@@ -502,12 +462,12 @@ TEST(DetachTest, LongRunningProcess) {
 #endif
   EXPECT_TRUE(ok);
   // The start marker should appear quickly
-  ASSERT_TRUE(wait_for_file(tmp_start.path(), std::chrono::seconds(3)));
-  EXPECT_EQ(read_file_trimmed(tmp_start.path()), "started");
+  ASSERT_TRUE(tmp_start.wait_for_file(std::chrono::seconds(3)));
+  EXPECT_EQ(tmp_start.read_trimmed(), "started");
   // The done marker should appear after the sleep
   // CI runners can be slow; use a generous timeout for the done marker.
-  ASSERT_TRUE(wait_for_file(tmp_done.path(), std::chrono::seconds(20)));
-  EXPECT_EQ(read_file_trimmed(tmp_done.path()), "done");
+  ASSERT_TRUE(tmp_done.wait_for_file(std::chrono::seconds(20)));
+  EXPECT_EQ(tmp_done.read_trimmed(), "done");
 }
 
 // ===========================================================================
@@ -526,8 +486,8 @@ TEST(DetachTest, PathWithSpaces) {
 #endif
   );
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "spaces_ok");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "spaces_ok");
 }
 
 // ===========================================================================
@@ -551,8 +511,8 @@ TEST(DetachTest, EnvSpecialCharacters) {
       env = {{"DETACH_SPECIAL", special_val}});
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), special_val);
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), special_val);
 }
 #endif
 
@@ -577,8 +537,8 @@ TEST(DetachTest, EnvEmptyValue) {
       env = {{"DETACH_EMPTY", ""}});
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "empty");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "empty");
 }
 #endif
 
@@ -598,8 +558,8 @@ TEST(DetachTest, ProcessSurvivesDetachReturn) {
 #endif
   EXPECT_TRUE(ok);
   // detach_run has already returned; process should still be running.
-  ASSERT_TRUE(wait_for_file(tmp.path(), std::chrono::seconds(10)));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "survived_detach");
+  ASSERT_TRUE(tmp.wait_for_file(std::chrono::seconds(10)));
+  EXPECT_EQ(tmp.read_trimmed(), "survived_detach");
 }
 
 // ===========================================================================
@@ -615,8 +575,8 @@ TEST(DetachTest, ManyArguments) {
       "/bin/sh", {"-c", "echo a b c d e f g h i j > '" + tmp.path() + "'"});
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "a b c d e f g h i j");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "a b c d e f g h i j");
 }
 
 // ===========================================================================
@@ -638,8 +598,8 @@ TEST(DetachTest, VariadicConstCharPtr) {
   bool ok = detach_run(app, a1, full_cmd.c_str());
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "const_char_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "const_char_ptr");
 }
 
 // 25. char* arguments
@@ -667,8 +627,8 @@ TEST(DetachTest, VariadicCharPtr) {
 #endif
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "char_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "char_ptr");
 }
 
 // 26. std::string arguments
@@ -685,8 +645,8 @@ TEST(DetachTest, VariadicStdString) {
 #endif
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "std_string");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "std_string");
 }
 
 // 27. std::string_view arguments
@@ -709,8 +669,8 @@ TEST(DetachTest, VariadicStdStringView) {
 #endif
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "string_view");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "string_view");
 }
 
 // 28. Mixed narrow types
@@ -729,8 +689,8 @@ TEST(DetachTest, VariadicMixedNarrowTypes) {
 #endif
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "mixed_narrow");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "mixed_narrow");
 }
 
 // 29. Variadic with named args mixed in
@@ -745,8 +705,8 @@ TEST(DetachTest, VariadicWithNamedArgs) {
                        cwd = std::string("/tmp"));
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string out = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string out = tmp.read_trimmed();
 #if defined(_WIN32)
   EXPECT_EQ(out, "C:\\Windows");
 #elif defined(__APPLE__)
@@ -771,8 +731,8 @@ TEST(DetachTest, VariadicConstWCharPtr) {
                       subprocess::detail::utf8_to_utf16(tmp.path());
   bool ok = detach_run(app, a1, a2_s.c_str());
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "const_wchar_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "const_wchar_ptr");
 }
 
 // 31. wchar_t* arguments
@@ -793,8 +753,8 @@ TEST(DetachTest, VariadicWCharPtr) {
 #endif
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "wchar_ptr");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "wchar_ptr");
 }
 
 // 32. std::wstring arguments
@@ -806,8 +766,8 @@ TEST(DetachTest, VariadicStdWString) {
                   subprocess::detail::utf8_to_utf16(tmp.path()));
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "std_wstring");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "std_wstring");
 }
 
 // 33. std::wstring_view arguments
@@ -822,8 +782,8 @@ TEST(DetachTest, VariadicStdWStringView) {
   std::wstring_view a2(a2_s);
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "wstring_view");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "wstring_view");
 }
 
 // 34. Mixed wide types
@@ -836,8 +796,8 @@ TEST(DetachTest, VariadicMixedWideTypes) {
   std::wstring_view a2(a2_s);
   bool ok = detach_run(app, a1, a2);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "mixed_wide");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "mixed_wide");
 }
 
 // 35. Wide types with env + cwd named args
@@ -850,8 +810,8 @@ TEST(DetachTest, VariadicWideWithEnvAndCwd) {
       env = std::map<std::wstring, std::wstring>{{L"WDETACH", L"wide_env"}},
       cwd = std::wstring(L"C:\\Windows"));
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "wide_env");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "wide_env");
 }
 
 // 36. Wide string vector form
@@ -861,8 +821,8 @@ TEST(DetachTest, WideVectorForm) {
                           subprocess::detail::utf8_to_utf16(tmp.path());
   bool ok = detach_run(L"cmd.exe", L"/c", full_cmd);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "wide_vector");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "wide_vector");
 }
 
 #endif  // _WIN32
@@ -885,8 +845,8 @@ TEST(DetachTest, DetachedProcessInOwnSession) {
   bool ok = detach_run(
       "/bin/sh", {"-c", "echo $$ $(ps -o pgid= -p $$) > '" + tmp.path() + "'"});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  std::string out = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file());
+  std::string out = tmp.read_trimmed();
   // Parse "PID PGID" from the file.
   std::istringstream iss(out);
   pid_t child_pid = -1, child_pgid = -1;
@@ -910,8 +870,8 @@ TEST(DetachTest, DetachedGrandchildParentIsInit) {
   TempFile tmp;
   bool ok = detach_run("/bin/sh", {"-c", "echo $PPID > '" + tmp.path() + "'"});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path(), std::chrono::seconds(5)));
-  std::string ppid_str = read_file_trimmed(tmp.path());
+  ASSERT_TRUE(tmp.wait_for_file(std::chrono::seconds(5)));
+  std::string ppid_str = tmp.read_trimmed();
   if (!ppid_str.empty()) {
     pid_t ppid = std::stol(ppid_str);
     // Should not be the test process (reparented to init/sub-reaper)
@@ -937,26 +897,25 @@ TEST(DetachTest, NoZombieFromIntermediateChild) {
 
 // 40. Detach with CWD and Env together
 TEST(DetachTest, CwdAndEnvTogether) {
-  TempFile tmp;
+  TempFile tmp_env;
+  TempFile tmp_cwd;
   bool ok = detach_run("/bin/sh",
-                       {"-c", "pwd > '" + tmp.path() +
-                                  ".cwd' && "
+                       {"-c", "pwd > '" + tmp_cwd.path() +
+                                  "' && "
                                   "printf '%s' \"$DTVAR\" > '" +
-                                  tmp.path() + ".env'"},
+                                  tmp_env.path() + "'"},
                        cwd = "/tmp", env = {{"DTVAR", "cwd_env_value"}});
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path() + ".cwd"));
-  ASSERT_TRUE(wait_for_file(tmp.path() + ".env"));
-  std::string cwd_out = read_file_trimmed(tmp.path() + ".cwd");
-  std::string env_out = read_file_trimmed(tmp.path() + ".env");
+  ASSERT_TRUE(tmp_env.wait_for_file());
+  ASSERT_TRUE(tmp_cwd.wait_for_file());
+  std::string cwd_out = tmp_cwd.read_trimmed();
+  std::string env_out = tmp_env.read_trimmed();
 #if defined(__APPLE__)
   EXPECT_TRUE(cwd_out == "/tmp" || cwd_out == "/private/tmp");
 #else
   EXPECT_EQ(cwd_out, "/tmp");
 #endif
   EXPECT_EQ(env_out, "cwd_env_value");
-  std::filesystem::remove(tmp.path() + ".cwd");
-  std::filesystem::remove(tmp.path() + ".env");
 }
 
 // 41. Detached process stdin/stdout/stderr are redirected to /dev/null.
@@ -970,7 +929,7 @@ TEST(DetachTest, StdinIsDevNull) {
   // should produce an empty file (or not even create it).
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   if (std::filesystem::exists(tmp.path())) {
-    EXPECT_TRUE(read_file_trimmed(tmp.path()).empty());
+    EXPECT_TRUE(tmp.read_trimmed().empty());
   }
   // Either way, the process didn't hang — SUCCEED
   SUCCEED();
@@ -993,6 +952,6 @@ TEST(DetachTest, VectorOnlyForm) {
 #endif
   );
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file(tmp.path()));
-  EXPECT_EQ(read_file_trimmed(tmp.path()), "vector_only");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "vector_only");
 }

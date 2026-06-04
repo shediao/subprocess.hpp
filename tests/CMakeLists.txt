@@ -201,15 +201,17 @@ endfunction()
 file(
   GLOB test_sources
   RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
-  "*.cc")
+  "test_*.cc")
 
 # Create a separate test executable for each source file.
 foreach(test_source IN LISTS test_sources)
   get_filename_component(test_name ${test_source} NAME_WE)
-  add_subprocess_test_suite(${test_name} ${test_source})
+  add_subprocess_test_suite(${test_name} ${test_source}
+                            ${CMAKE_CURRENT_SOURCE_DIR}/temp_file.cc)
 endforeach()
 
-add_subprocess_test_suite(all_test "${test_sources}")
+add_subprocess_test_suite(all_test "${test_sources}"
+                          ${CMAKE_CURRENT_SOURCE_DIR}/temp_file.cc)
 
 # ── Coverage target ──────────────────────────────────────────────────
 if(SUBPROCESS_ENABLE_COVERAGE)

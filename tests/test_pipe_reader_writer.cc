@@ -21,7 +21,7 @@
 #include <string>
 #include <thread>
 
-#include "./utils.h"
+#include "./temp_file.h"
 #include "subprocess/subprocess.hpp"
 
 using subprocess::detail::Pipe;

@@ -15,7 +15,7 @@
 
 #include <string>
 
-#include "./utils.h"
+#include "./temp_file.h"
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
@@ -240,7 +240,7 @@ TEST(IOTest, RedirectStdoutToFileOverwrite) {
   run("cmd.exe", "/c", "<nul set /p=" + content.to_string(),
       std_out > tmp_file.path());
 #endif
-  ASSERT_EQ(content.to_string(), tmp_file.content_str());
+  ASSERT_EQ(content.to_string(), tmp_file.content().value_or(""));
 }
 
 TEST(IOTest, RedirectStderrToFileOverwrite) {
@@ -253,7 +253,7 @@ TEST(IOTest, RedirectStderrToFileOverwrite) {
   run("cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2",
       std_err > tmp_file.path());
 #endif
-  ASSERT_EQ(content.to_string(), tmp_file.content_str());
+  ASSERT_EQ(content.to_string(), tmp_file.content().value_or(""));
 }
 
 TEST(IOTest, RedirectStdoutToFileOverwrite2) {
@@ -268,7 +268,7 @@ TEST(IOTest, RedirectStdoutToFileOverwrite2) {
       ,
       std_out > temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(temp_file.content_str(), "Overwrite Content");
+  ASSERT_EQ(temp_file.content().value_or(""), "Overwrite Content");
 }
 
 TEST(IOTest, RedirectStderrToFileOverwrite2) {
@@ -283,7 +283,7 @@ TEST(IOTest, RedirectStderrToFileOverwrite2) {
       ,
       std_err > temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(temp_file.content_str(), "Error Overwrite");
+  ASSERT_EQ(temp_file.content().value_or(""), "Error Overwrite");
 }
 
 // ===========================================================================
@@ -300,7 +300,7 @@ TEST(IOTest, RedirectStdoutToFileAppend) {
   run("cmd.exe", "/c", "<nul set /p=" + content.to_string(),
       std_out >> tmp_file.path());
 #endif
-  ASSERT_EQ("000123", tmp_file.content_str());
+  ASSERT_EQ("000123", tmp_file.content().value_or(""));
 }
 
 TEST(IOTest, RedirectStderrToFileAppend) {
@@ -314,7 +314,7 @@ TEST(IOTest, RedirectStderrToFileAppend) {
   run("cmd.exe", "/c", "<nul set /p=" + content.to_string() + ">&2",
       std_err >> tmp_file.path());
 #endif
-  ASSERT_EQ("999123", tmp_file.content_str());
+  ASSERT_EQ("999123", tmp_file.content().value_or(""));
 }
 
 TEST(IOTest, RedirectStdoutToFileAppend2) {
@@ -330,7 +330,7 @@ TEST(IOTest, RedirectStdoutToFileAppend2) {
       ,
       std_out >> temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(temp_file.content_str(), "Initial\nAppended");
+  ASSERT_EQ(temp_file.content().value_or(""), "Initial\nAppended");
 }
 
 TEST(IOTest, RedirectStderrToFileAppend2) {
@@ -346,7 +346,7 @@ TEST(IOTest, RedirectStderrToFileAppend2) {
       ,
       std_err >> temp_file.path());
   ASSERT_EQ(exit_code, 0);
-  ASSERT_EQ(temp_file.content_str(), "InitialError\nAppendedError");
+  ASSERT_EQ(temp_file.content().value_or(""), "InitialError\nAppendedError");
 }
 
 // ===========================================================================

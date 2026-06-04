@@ -20,10 +20,9 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
-#include "./utils.h"
+#include "./temp_file.h"
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
@@ -71,35 +70,6 @@ std::vector<fs::path> detach_cmd_args(const std::string& label,
           fs::path("echo '" + label + "' > '" + file_path + "'")};
 }
 #endif
-
-// For detach_run: helper to wait for file content
-bool wait_for_file_content(
-    const std::string& path,
-    std::chrono::milliseconds max_wait = std::chrono::seconds(5)) {
-  auto start = std::chrono::steady_clock::now();
-  while (true) {
-    std::error_code ec;
-    auto sz = fs::file_size(path, ec);
-    if (!ec && sz > 0) {
-      return true;
-    }
-    if (std::chrono::steady_clock::now() - start > max_wait) {
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  }
-}
-
-std::string read_trimmed(const std::string& path) {
-  std::ifstream f(path);
-  std::string content((std::istreambuf_iterator<char>(f)),
-                      std::istreambuf_iterator<char>());
-  while (!content.empty() &&
-         (content.back() == '\n' || content.back() == '\r')) {
-    content.pop_back();
-  }
-  return content;
-}
 
 }  // namespace
 
@@ -272,8 +242,8 @@ TEST(FilesystemPathDetachRunTest, PathAppAndArgs) {
   auto args = detach_cmd_args("fs_detach_path", tmp.path());
   bool ok = detach_run(args[0], args[1], args[2]);
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "fs_detach_path");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "fs_detach_path");
 }
 
 TEST(FilesystemPathDetachRunTest, PathAppOnly) {
@@ -291,8 +261,8 @@ TEST(FilesystemPathDetachRunTest, PathAppOnly) {
   bool ok = detach_run(app, a1, a2_s);
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "fs_detach_app_only");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "fs_detach_app_only");
 }
 
 TEST(FilesystemPathDetachRunTest, RvaluePath) {
@@ -300,8 +270,8 @@ TEST(FilesystemPathDetachRunTest, RvaluePath) {
   auto args = detach_cmd_args("fs_detach_rvalue", tmp.path());
   bool ok = detach_run(fs::path(args[0]), fs::path(args[1]), fs::path(args[2]));
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "fs_detach_rvalue");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "fs_detach_rvalue");
 }
 
 TEST(FilesystemPathDetachRunTest, MixedPathAndString) {
@@ -318,8 +288,8 @@ TEST(FilesystemPathDetachRunTest, MixedPathAndString) {
   bool ok = detach_run(app, a1, a2);
 #endif
   EXPECT_TRUE(ok);
-  ASSERT_TRUE(wait_for_file_content(tmp.path()));
-  EXPECT_EQ(read_trimmed(tmp.path()), "fs_detach_mixed");
+  ASSERT_TRUE(tmp.wait_for_file());
+  EXPECT_EQ(tmp.read_trimmed(), "fs_detach_mixed");
 }
 
 // ===========================================================================
