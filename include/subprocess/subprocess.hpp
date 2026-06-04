@@ -1964,6 +1964,9 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
                                           StderrRedirector& err,
                                           pid_t child_pid,
                                           int* child_status = nullptr) {
+  if (!in.is<Buffer>() && !out.is<Buffer>() && !err.is<Buffer>()) {
+    return;
+  }
   if (in.is<Buffer>()) {
     in.get<Buffer>().wfd().set_nonblocking();
   }
@@ -1999,6 +2002,10 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
 
   while (!invalid_handle(fds[0].fd) || !invalid_handle(fds[1].fd) ||
          !invalid_handle(fds[2].fd)) {
+    if (in.is<Buffer>() && in.get<Buffer>().empty()) {
+      in.get<Buffer>().close_write();
+      fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+    }
     // Use a 200ms timeout when monitoring the child so we can
     // periodically check liveness; otherwise block indefinitely.
     int poll_count = poll(fds, 3, monitor_child ? 200 : -1);
@@ -2006,7 +2013,7 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
       if (errno == EINTR || errno == EAGAIN) {
         continue;
       }
-      print_error("poll() failed");
+      print_error(get_last_error_message());
       break;
     }
 
@@ -2041,82 +2048,48 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
       // Timeout only — check child again on next iteration.
       continue;
     }
-    if (!invalid_handle(fds[0].fd) && (fds[0].revents & POLLOUT)) {
-      ssize_t write_count;
-      while ((write_count = in.get<Buffer>().write_some()) > 0) {
-      }
-      if (write_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          print_error("write() error: " + std::to_string(errno));
-          in.get<Buffer>().close_write();
-          fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
-          break;
-        }
-      }
+    if (!invalid_handle(fds[0].fd) &&
+        (fds[0].revents & (POLLOUT | POLLHUP | POLLERR))) {
+      ssize_t write_count = in.get<Buffer>().write_some();
       if (in.get<Buffer>().empty()) {
         in.get<Buffer>().close_write();
         fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
+      if (write_count < 0 && errno != EAGAIN) {
+        print_error(get_last_error_message());
+        in.get<Buffer>().close_write();
+        fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
+      }
     }
-    if (!invalid_handle(fds[1].fd) && (fds[1].revents & POLLIN)) {
-      ssize_t read_count;
-      do {
-        read_count = out.get<Buffer>().read_some();
-      } while (read_count > 0);
+
+    if (!invalid_handle(fds[1].fd) &&
+        (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+      ssize_t read_count = out.get<Buffer>().read_some();
       if (read_count == 0) {
         out.get<Buffer>().close_read();
         fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          print_error(get_last_error_message());
-          out.get<Buffer>().close_read();
-          fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
-          break;
-        }
+      if (read_count < 0 && errno != EAGAIN) {
+        print_error(get_last_error_message());
+        out.get<Buffer>().close_read();
+        fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
-    } else if (!invalid_handle(fds[1].fd) &&
-               (fds[1].revents & (POLLHUP | POLLERR))) {
-      out.get<Buffer>().close_read();
-      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
     }
-    if (!invalid_handle(fds[2].fd) && (fds[2].revents & POLLIN)) {
-      ssize_t read_count;
-      do {
-        read_count = err.get<Buffer>().read_some();
-      } while (read_count > 0);
+
+    if (!invalid_handle(fds[2].fd) &&
+        (fds[2].revents & (POLLIN | POLLHUP | POLLERR))) {
+      ssize_t read_count = err.get<Buffer>().read_some();
       if (read_count == 0) {
         err.get<Buffer>().close_read();
         fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
-      if (read_count == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          print_error(get_last_error_message());
-          err.get<Buffer>().close_read();
-          fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
-          break;
-        }
+      if (read_count < 0 && errno != EAGAIN) {
+        print_error(get_last_error_message());
+        err.get<Buffer>().close_read();
+        fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
-    } else if (!invalid_handle(fds[2].fd) &&
-               (fds[2].revents & (POLLHUP | POLLERR))) {
-      err.get<Buffer>().close_read();
-      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
     }
-    if (!invalid_handle(fds[0].fd) &&
-        (fds[0].revents & (POLLNVAL | POLLHUP | POLLERR))) {
-      in.get<Buffer>().close_write();
-      fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    if (!invalid_handle(fds[1].fd) &&
-        (fds[1].revents & (POLLNVAL | POLLHUP | POLLERR))) {
-      out.get<Buffer>().close_read();
-      fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
-    if (!invalid_handle(fds[2].fd) &&
-        (fds[2].revents & (POLLNVAL | POLLHUP | POLLERR))) {
-      err.get<Buffer>().close_read();
-      fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
-    }
+
     if (invalid_handle(fds[0].fd) && invalid_handle(fds[1].fd) &&
         invalid_handle(fds[2].fd)) {
       break;
