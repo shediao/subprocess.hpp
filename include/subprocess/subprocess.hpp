@@ -1610,14 +1610,7 @@ class Buffer {
     auto size = pipe_.read_some(tmp, sizeof(tmp));
     if (size > 0) {
       std::visit(
-          visitor{
-              [tmp, size](buffer_container_type& buf) {
-                buf.append(tmp, size);
-              },
-              [tmp, size](std::reference_wrapper<buffer_container_type> ref) {
-                ref.get().append(tmp, size);
-              },
-          },
+          [tmp, size](buffer_container_type& buf) { buf.append(tmp, size); },
           *buf_);
     }
     return size;
@@ -1625,55 +1618,32 @@ class Buffer {
 
   ssize_t write_some() {
     return std::visit(
-        visitor{
-            [this](const buffer_container_type& buf) {
-              if (buf.size() <= written_size_) {
-                return static_cast<ssize_t>(0);  // EOF0;
-              }
-              const auto written = pipe_.write_some(buf.data() + written_size_,
-                                                    buf.size() - written_size_);
-              if (written > 0) {
-                written_size_ += written;
-              }
-              return written;
-            },
-            [this](const std::reference_wrapper<buffer_container_type> ref) {
-              const auto& buf = ref.get();
-              if (buf.size() <= written_size_) {
-                return static_cast<ssize_t>(0);  // EOF0;
-              }
-              const auto written = pipe_.write_some(buf.data() + written_size_,
-                                                    buf.size() - written_size_);
-              if (written > 0) {
-                written_size_ += written;
-              }
-              return written;
-            },
+        [this](const buffer_container_type& buf) {
+          if (buf.size() <= written_size_) {
+            return static_cast<ssize_t>(0);  // EOF0;
+          }
+          const auto written = pipe_.write_some(buf.data() + written_size_,
+                                                buf.size() - written_size_);
+          if (written > 0) {
+            written_size_ += written;
+          }
+          return written;
         },
         *buf_);
   }
 
   [[nodiscard]] bool empty() const {
     return std::visit(
-        visitor{
-            [this](buffer_container_type const& buf) {
-              return buf.size() <= written_size_;
-            },
-            [this](std::reference_wrapper<buffer_container_type> const ref) {
-              return ref.get().size() <= written_size_;
-            },
+        [this](buffer_container_type const& buf) {
+          return buf.size() <= written_size_;
         },
         *buf_);
   }
 
   buffer& buf() {
     return std::visit(
-        visitor{
-            [](buffer_container_type& value) -> buffer_container_type& {
-              return value;
-            },
-            [](std::reference_wrapper<buffer_container_type>& value)
-                -> buffer_container_type& { return value.get(); },
+        [](buffer_container_type& value) -> buffer_container_type& {
+          return value;
         },
         *buf_);
   }
