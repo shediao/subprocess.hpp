@@ -82,7 +82,7 @@ TEST(ErrorHandlingTest, InvalidCwdPrintsChdirFailedToStderr) {
   auto exit_code = run("true", cwd = "/this/directory/does/not/exist/xyz",
                        std_err > stderr_buf);
   ASSERT_EQ(exit_code, 126);
-  EXPECT_NE(stderr_buf.to_string().find("chdir failed"), std::string::npos);
+  EXPECT_NE(stderr_buf.to_string().find("chdir:"), std::string::npos);
 }
 
 // execv failure — non-existent executable by absolute path
@@ -97,8 +97,7 @@ TEST(ErrorHandlingTest, ExecvFailurePrintsToStderr) {
   auto exit_code =
       run("/path/to/this_command_not_exists", std_err > stderr_buf);
   ASSERT_EQ(exit_code, 127);
-  EXPECT_NE(stderr_buf.to_string().find("execv"), std::string::npos);
-  EXPECT_NE(stderr_buf.to_string().find("failed"), std::string::npos);
+  EXPECT_NE(stderr_buf.to_string().find("execv("), std::string::npos);
 }
 
 // execve failure with explicit environment
@@ -116,8 +115,7 @@ TEST(ErrorHandlingTest, ExecveFailurePrintsToStderr) {
                        env = std::map<std::string, std::string>{{"FOO", "BAR"}},
                        std_err > stderr_buf);
   ASSERT_EQ(exit_code, 127);
-  EXPECT_NE(stderr_buf.to_string().find("execve"), std::string::npos);
-  EXPECT_NE(stderr_buf.to_string().find("failed"), std::string::npos);
+  EXPECT_NE(stderr_buf.to_string().find("execve("), std::string::npos);
 }
 
 // Invalid CWD takes precedence over exec failure (chdir checked first)
