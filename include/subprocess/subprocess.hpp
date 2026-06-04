@@ -2458,7 +2458,7 @@ class Shell {
 #endif
 };
 
-namespace named_args {
+namespace named_arguments {
 #if defined(_WIN32)
 [[maybe_unused]] inline constexpr static auto devnull = Device{L"NUL"};
 [[maybe_unused]] inline constexpr static auto devttyout = Device{L"CONOUT$"};
@@ -2504,7 +2504,7 @@ namespace named_args {
 [[maybe_unused]] inline constexpr static newgroup_operator $newgroup;
 [[maybe_unused]] inline constexpr static Shell $bash{Shell::Bash()};
 #endif
-}  // namespace named_args
+}  // namespace named_arguments
 template <typename T>
 concept named_argument_type = std::same_as<Env, std::decay_t<T>> ||
                               std::same_as<StdinRedirector, std::decay_t<T>> ||
@@ -2892,7 +2892,7 @@ class builder {
              }
              if constexpr (std::is_same_v<ArgType, Timeout>) {
                if (arg.timeout ==
-                   std::chrono::seconds(named_args::timeout_infinite)) {
+                   std::chrono::seconds(named_arguments::timeout_infinite)) {
                  timeout_ = std::nullopt;
                } else {
                  timeout_ = arg.timeout;
@@ -3170,7 +3170,8 @@ class builder {
                             StdinRedirector{},  StdoutRedirector{},
                             StderrRedirector{}, std::nullopt};
     if (!requested_pgid_.has_value()) {
-      File stdin_file{detail::named_args::devttyin, File::OpenType::ReadOnly};
+      File stdin_file{detail::named_arguments::devttyin,
+                      File::OpenType::ReadOnly};
       if (stdin_.inherit() && !stdin_file.fd().isatty()) {
         requested_pgid_ = 0;
       } else {
@@ -3326,8 +3327,8 @@ class pipeline {
 
     for (auto it = builders_.begin(); it != builders_.end() - 1; ++it) {
       pipes.push_back(Pipe::create());
-      it->stdout_ = (named_args::std_out > pipes.back());
-      (it + 1)->stdin_ = (named_args::std_in < pipes.back());
+      it->stdout_ = (named_arguments::std_out > pipes.back());
+      (it + 1)->stdin_ = (named_arguments::std_in < pipes.back());
     }
     for (auto it = builders_.begin(); it != builders_.end(); ++it) {
 #if defined(_WIN32)
@@ -3387,40 +3388,7 @@ inline pipeline operator|(pipeline lhs, builder&& rhs) {
 using detail::buffer;
 
 namespace named_arguments {
-#if defined(USE_DOLLAR_NAMED_VARIABLES) && USE_DOLLAR_NAMED_VARIABLES
-using detail::named_args::$bash;
-using detail::named_args::$cwd;
-using detail::named_args::$devnull;
-using detail::named_args::$devttyin;
-using detail::named_args::$devttyout;
-using detail::named_args::$env;
-using detail::named_args::$newgroup;
-using detail::named_args::$shell;
-using detail::named_args::$stderr;
-using detail::named_args::$stdin;
-using detail::named_args::$stdout;
-using detail::named_args::$timeout;
-using detail::named_args::$timeout_infinite;
-#if defined(_WIN32)
-using detail::named_args::$powershell;
-#endif
-#endif
-using detail::named_args::bash;
-using detail::named_args::cwd;
-using detail::named_args::devnull;
-using detail::named_args::devttyin;
-using detail::named_args::devttyout;
-using detail::named_args::env;
-using detail::named_args::newgroup;
-using detail::named_args::shell;
-using detail::named_args::std_err;
-using detail::named_args::std_in;
-using detail::named_args::std_out;
-using detail::named_args::timeout;
-using detail::named_args::timeout_infinite;
-#if defined(_WIN32)
-using detail::named_args::powershell;
-#endif
+using namespace detail::named_arguments;
 }  // namespace named_arguments
 
 template <detail::string_like_type T, detail::named_argument_type... Args>
