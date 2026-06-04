@@ -871,9 +871,13 @@ inline std::string get_last_error_message() {
 inline void print_last_error(std::string_view context = "") {
   if (context.empty()) {
     print_error(get_last_error_message());
-  } else {
-    print_error(std::string(context) + ": " + get_last_error_message());
+    return;
   }
+#if defined(_WIN32)
+  print_error(utf8_to_utf16(context) + L": " + get_last_error_message());
+#else
+  print_error(std::string(context) + ": " + get_last_error_message());
+#endif
 }
 
 // return value: -1 on error, >=0 on success
