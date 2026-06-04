@@ -868,6 +868,14 @@ inline std::string get_last_error_message() {
 }
 #endif  // !_WIN32
 
+inline void print_last_error(std::string_view context = "") {
+  if (context.empty()) {
+    print_error(get_last_error_message());
+  } else {
+    print_error(std::string(context) + ": " + get_last_error_message());
+  }
+}
+
 // return value: -1 on error, >=0 on success
 inline ssize_t write_some(unique_fd const& fd, void const* data,
                           std::size_t size) {
@@ -1345,25 +1353,25 @@ class Pipe {
     at.lpSecurityDescriptor = nullptr;
 
     if (!CreatePipe(&fds[0], &fds[1], &at, 64 * 1024)) {
-      print_error(get_last_error_message());
+      print_last_error();
       return;
     }
 #else
 #if defined(__linux__)
     if (-1 == pipe2(fds, O_CLOEXEC)) {
-      print_error("pipe2() failed");
+      print_last_error("pipe2()");
       return;
     }
 #else
     if (-1 == pipe(fds)) {
-      print_error("pipe() failed");
+      print_last_error("pipe()");
       return;
     }
     // Set close-on-exec manually on platforms without pipe2().
     // This prevents pipe fds from leaking into grandchildren via exec().
     if (-1 == fcntl(fds[0], F_SETFD, FD_CLOEXEC) ||
         -1 == fcntl(fds[1], F_SETFD, FD_CLOEXEC)) {
-      print_error("fcntl(FD_CLOEXEC) failed");
+      print_last_error("fcntl(FD_CLOEXEC)");
       close(fds[0]);
       close(fds[1]);
       fds[0] = INVALID_NATIVE_HANDLE_VALUE;
@@ -1717,8 +1725,7 @@ class Redirector {
                 if (!SetHandleInformation(inheritable_handle.get(),
                                           HANDLE_FLAG_INHERIT,
                                           HANDLE_FLAG_INHERIT)) {
-                  print_error(L"SetHandleInformation failed: " +
-                              std::to_wstring(GetLastError()));
+                  print_last_error();
                   return;
                 }
               }
@@ -1731,8 +1738,7 @@ class Redirector {
               if (value.fd()) {
                 if (!SetHandleInformation(value.fd().get(), HANDLE_FLAG_INHERIT,
                                           HANDLE_FLAG_INHERIT)) {
-                  print_error(L"SetHandleInformation failed: " +
-                              std::to_wstring(GetLastError()));
+                  print_last_error();
                   return;
                 }
               }
@@ -1752,8 +1758,7 @@ class Redirector {
                 if (!SetHandleInformation(inheritable_handle.get(),
                                           HANDLE_FLAG_INHERIT,
                                           HANDLE_FLAG_INHERIT)) {
-                  print_error(L"SetHandleInformation failed: " +
-                              std::to_wstring(GetLastError()));
+                  print_last_error();
                   return;
                 }
               }
@@ -1983,7 +1988,7 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
       if (errno == EINTR || errno == EAGAIN) {
         continue;
       }
-      print_error(get_last_error_message());
+      print_last_error();
       break;
     }
 
@@ -2026,7 +2031,7 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
         fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
       if (write_count < 0 && errno != EAGAIN) {
-        print_error(get_last_error_message());
+        print_last_error();
         in.get<Buffer>().close_write();
         fds[0].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
@@ -2040,7 +2045,7 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
         fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
       if (read_count < 0 && errno != EAGAIN) {
-        print_error(get_last_error_message());
+        print_last_error();
         out.get<Buffer>().close_read();
         fds[1].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
@@ -2054,7 +2059,7 @@ inline void read_write_to_buffer_use_poll(StdinRedirector& in,
         fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
       if (read_count < 0 && errno != EAGAIN) {
-        print_error(get_last_error_message());
+        print_last_error();
         err.get<Buffer>().close_read();
         fds[2].fd = INVALID_NATIVE_HANDLE_VALUE;
       }
@@ -3081,8 +3086,7 @@ class builder {
           proc_thread_attr_list_.data());
       if (!InitializeProcThreadAttributeList(attr_list, 1, 0,
                                              &attr_list_size)) {
-        print_error(L"InitializeProcThreadAttributeList failed: " +
-                    std::to_wstring(GetLastError()));
+        print_last_error();
         return invalid_process;
       }
       if (!UpdateProcThreadAttribute(
@@ -3090,8 +3094,7 @@ class builder {
               handles_to_inherit.data(),
               handles_to_inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
         DeleteProcThreadAttributeList(attr_list);
-        print_error(L"UpdateProcThreadAttribute failed: " +
-                    std::to_wstring(GetLastError()));
+        print_last_error();
         return invalid_process;
       }
       startup_info.lpAttributeList = attr_list;
@@ -3131,7 +3134,7 @@ class builder {
                      std::move(stdin_), std::move(stdout_), std::move(stderr_),
                      timeout_, job_handle_);
     }
-    print_error(get_last_error_message());
+    print_last_error();
     stdin_.close_all();
     stdout_.close_all();
     stderr_.close_all();
@@ -3161,7 +3164,7 @@ class builder {
       CloseHandle(pi.hThread);
       return true;
     }
-    print_error(get_last_error_message());
+    print_last_error();
     return false;
   }
 #else
@@ -3207,7 +3210,7 @@ class builder {
   bool detach_spawn_posix() {
     auto pid = fork();
     if (pid < 0) {
-      print_error("fork() failed");
+      print_last_error("fork()");
       return false;
     }
     if (pid == 0) {
@@ -3255,7 +3258,7 @@ class builder {
                            [](std::string& s) { return s.data(); });
     cmd.push_back(nullptr);
     if (!cwd_.empty() && (-1 == ::chdir(cwd_.data()))) {
-      print_error("chdir failed: " + get_last_error_message() + "\n");
+      print_last_error("chdir");
       _Exit(126);
     }
 
@@ -3277,12 +3280,10 @@ class builder {
                              [](auto& s) { return s.data(); });
       envs.push_back(nullptr);
       execve(executable_path.c_str(), cmd.data(), envs.data());
-      print_error("execve(" + executable_path +
-                  ") failed: " + get_last_error_message() + "\n");
+      print_last_error("execve(" + executable_path + ")");
     } else {
       execv(executable_path.c_str(), cmd.data());
-      print_error("execv(" + executable_path +
-                  ") failed: " + get_last_error_message() + "\n");
+      print_last_error("execv(" + executable_path + ")");
     }
     _Exit(127);
   }
