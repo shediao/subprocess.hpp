@@ -6,7 +6,7 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 
 // ===========================================================================
@@ -14,7 +14,7 @@ using subprocess::run;
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackInvokedOnAppend) {
   std::vector<std::pair<const unsigned char*, size_t>> chunks;
-  buffer buf([&chunks](const unsigned char* data, size_t size) {
+  dynamic_buffer buf([&chunks](const unsigned char* data, size_t size) {
     chunks.emplace_back(data, size);
   });
 
@@ -33,7 +33,7 @@ TEST(BufferCallbackTest, CallbackInvokedOnAppend) {
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackReceivesEachChunkSeparately) {
   std::vector<std::string> received;
-  buffer buf([&received](const unsigned char* data, size_t size) {
+  dynamic_buffer buf([&received](const unsigned char* data, size_t size) {
     received.emplace_back(reinterpret_cast<const char*>(data), size);
   });
 
@@ -54,7 +54,7 @@ TEST(BufferCallbackTest, CallbackReceivesEachChunkSeparately) {
 TEST(BufferCallbackTest, StringViewConstructorWithCallback) {
   std::vector<size_t> sizes;
   std::string initial = "initial_data";
-  buffer buf(
+  dynamic_buffer buf(
       std::string_view(initial),
       [&sizes](const unsigned char*, size_t size) { sizes.push_back(size); });
 
@@ -75,10 +75,10 @@ TEST(BufferCallbackTest, StringViewConstructorWithCallback) {
 TEST(BufferCallbackTest, IteratorConstructorWithCallback) {
   std::vector<std::string> chunks;
   std::string data = "iterator_data";
-  buffer buf(data.begin(), data.end(),
-             [&chunks](const unsigned char* d, size_t s) {
-               chunks.emplace_back(reinterpret_cast<const char*>(d), s);
-             });
+  dynamic_buffer buf(data.begin(), data.end(),
+                     [&chunks](const unsigned char* d, size_t s) {
+                       chunks.emplace_back(reinterpret_cast<const char*>(d), s);
+                     });
 
   EXPECT_EQ(buf.to_string(), "iterator_data");
   EXPECT_TRUE(chunks.empty());
@@ -90,11 +90,11 @@ TEST(BufferCallbackTest, IteratorConstructorWithCallback) {
 }
 
 // ===========================================================================
-// 5. Callback-only constructor — buffer starts empty
+// 5. Callback-only constructor — dynamic_buffer starts empty
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackOnlyConstructor) {
   size_t total_bytes = 0;
-  buffer buf([&total_bytes](const unsigned char*, size_t size) {
+  dynamic_buffer buf([&total_bytes](const unsigned char*, size_t size) {
     total_bytes += size;
   });
 
@@ -111,17 +111,17 @@ TEST(BufferCallbackTest, CallbackOnlyConstructor) {
 // 6. No callback — backward compatibility, append should work normally
 // ===========================================================================
 TEST(BufferCallbackTest, NoCallbackBackwardCompatibility) {
-  buffer buf;
+  dynamic_buffer buf;
   buf.append("test", 4);
   EXPECT_EQ(buf.to_string(), "test");
   EXPECT_EQ(buf.size(), 4u);
 
-  buffer buf2(std::string_view("hello"));
+  dynamic_buffer buf2(std::string_view("hello"));
   buf2.append(" world", 6);
   EXPECT_EQ(buf2.to_string(), "hello world");
 
   std::string s = "iterator";
-  buffer buf3(s.begin(), s.end());
+  dynamic_buffer buf3(s.begin(), s.end());
   buf3.append("_test", 5);
   EXPECT_EQ(buf3.to_string(), "iterator_test");
 }
@@ -131,7 +131,7 @@ TEST(BufferCallbackTest, NoCallbackBackwardCompatibility) {
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackWithBinaryData) {
   std::vector<unsigned char> received;
-  buffer buf([&received](const unsigned char* data, size_t size) {
+  dynamic_buffer buf([&received](const unsigned char* data, size_t size) {
     received.insert(received.end(), data, data + size);
   });
 
@@ -150,10 +150,10 @@ TEST(BufferCallbackTest, CallbackWithBinaryData) {
 TEST(BufferCallbackTest, MultipleBuffersIndependentCallbacks) {
   std::vector<std::string> log_a, log_b;
 
-  buffer buf_a([&log_a](const unsigned char* data, size_t size) {
+  dynamic_buffer buf_a([&log_a](const unsigned char* data, size_t size) {
     log_a.emplace_back(reinterpret_cast<const char*>(data), size);
   });
-  buffer buf_b([&log_b](const unsigned char* data, size_t size) {
+  dynamic_buffer buf_b([&log_b](const unsigned char* data, size_t size) {
     log_b.emplace_back(reinterpret_cast<const char*>(data), size);
   });
 
@@ -180,7 +180,8 @@ TEST(BufferCallbackTest, MultipleBuffersIndependentCallbacks) {
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackPersistsAfterClear) {
   int call_count = 0;
-  buffer buf([&call_count](const unsigned char*, size_t) { ++call_count; });
+  dynamic_buffer buf(
+      [&call_count](const unsigned char*, size_t) { ++call_count; });
 
   buf.append("first", 5);
   EXPECT_EQ(call_count, 1);
@@ -200,7 +201,7 @@ TEST(BufferCallbackTest, CallbackPersistsAfterClear) {
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackLineCounter) {
   int line_count = 0;
-  buffer buf([&line_count](const unsigned char* data, size_t size) {
+  dynamic_buffer buf([&line_count](const unsigned char* data, size_t size) {
     for (size_t i = 0; i < size; ++i) {
       if (data[i] == '\n') {
         ++line_count;
@@ -223,7 +224,7 @@ TEST(BufferCallbackTest, CallbackLineCounter) {
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackPreservesAppendOrder) {
   std::string concatenated;
-  buffer buf([&concatenated](const unsigned char* data, size_t size) {
+  dynamic_buffer buf([&concatenated](const unsigned char* data, size_t size) {
     concatenated.append(reinterpret_cast<const char*>(data), size);
   });
 
@@ -242,12 +243,13 @@ TEST(BufferCallbackTest, CallbackPreservesAppendOrder) {
 }
 
 // ===========================================================================
-// 12. Integration: buffer callback with real subprocess to capture streaming
+// 12. Integration: dynamic_buffer callback with real subprocess to capture
+// streaming
 //     stdout, verifying the callback sees each chunk as it arrives
 // ===========================================================================
 TEST(BufferCallbackTest, IntegrationWithSubprocessStdout) {
   std::vector<std::string> chunks;
-  buffer out([&chunks](const unsigned char* data, size_t size) {
+  dynamic_buffer out([&chunks](const unsigned char* data, size_t size) {
     chunks.emplace_back(reinterpret_cast<const char*>(data), size);
   });
 
@@ -271,11 +273,12 @@ TEST(BufferCallbackTest, IntegrationWithSubprocessStdout) {
 }
 
 // ===========================================================================
-// 13. Integration: buffer callback with real subprocess, capturing stderr
+// 13. Integration: dynamic_buffer callback with real subprocess, capturing
+// stderr
 // ===========================================================================
 TEST(BufferCallbackTest, IntegrationWithSubprocessStderr) {
   size_t total_bytes = 0;
-  buffer err([&total_bytes](const unsigned char*, size_t size) {
+  dynamic_buffer err([&total_bytes](const unsigned char*, size_t size) {
     total_bytes += size;
   });
 
@@ -292,15 +295,16 @@ TEST(BufferCallbackTest, IntegrationWithSubprocessStderr) {
 }
 
 // ===========================================================================
-// 14. Integration: buffer callback with stdin — verify callback is NOT
+// 14. Integration: dynamic_buffer callback with stdin — verify callback is NOT
 //     triggered for data passed into a subprocess via stdin
 // ===========================================================================
 TEST(BufferCallbackTest, IntegrationWithSubprocessStdin) {
   int callback_count = 0;
-  buffer in("hello_stdin", [&callback_count](const unsigned char*, size_t) {
-    ++callback_count;
-  });
-  buffer out;
+  std::string in_data_view{"hello_stdin"};
+  dynamic_buffer in(
+      in_data_view,
+      [&callback_count](const unsigned char*, size_t) { ++callback_count; });
+  dynamic_buffer out;
 
   // The stdin buffer's callback should NOT be invoked when the subprocess
   // reads from it — callbacks only fire on append(). The initial data
@@ -315,17 +319,19 @@ TEST(BufferCallbackTest, IntegrationWithSubprocessStdin) {
 
   EXPECT_EQ(ret, 0);
   EXPECT_EQ(callback_count, 0);  // No new data was appended to 'in'
-  EXPECT_EQ(in.to_string(), "hello_stdin");
+  EXPECT_EQ(in_data_view, "hello_stdin");
+  EXPECT_TRUE(in.empty());
 }
 
 // ===========================================================================
-// 15. Integration: buffer callback with a large output to verify callback
+// 15. Integration: dynamic_buffer callback with a large output to verify
+// callback
 //     handles multiple chunks
 // ===========================================================================
 TEST(BufferCallbackTest, IntegrationWithLargeOutput) {
   size_t call_count = 0;
   size_t total_callback_bytes = 0;
-  buffer out(
+  dynamic_buffer out(
       [&call_count, &total_callback_bytes](const unsigned char*, size_t size) {
         ++call_count;
         total_callback_bytes += size;
@@ -353,14 +359,14 @@ TEST(BufferCallbackTest, IntegrationWithLargeOutput) {
 }
 
 // ===========================================================================
-// 16. Callback that copies data to another buffer (tee-like behavior)
+// 16. Callback that copies data to another dynamic_buffer (tee-like behavior)
 // ===========================================================================
 TEST(BufferCallbackTest, CallbackTeeToSecondBuffer) {
-  buffer primary;
-  buffer secondary;
+  dynamic_buffer primary;
+  dynamic_buffer secondary;
 
   // primary's callback feeds into secondary
-  buffer buf([&secondary](const unsigned char* data, size_t size) {
+  dynamic_buffer buf([&secondary](const unsigned char* data, size_t size) {
     secondary.append(reinterpret_cast<const char*>(data), size);
   });
 
@@ -379,8 +385,8 @@ TEST(BufferCallbackTest, CallbackTeeToSecondBuffer) {
 // ===========================================================================
 TEST(BufferCallbackTest, EmptyStringViewWithCallback) {
   int fired = 0;
-  buffer buf(std::string_view(""),
-             [&fired](const unsigned char*, size_t) { ++fired; });
+  dynamic_buffer buf(std::string_view(""),
+                     [&fired](const unsigned char*, size_t) { ++fired; });
 
   EXPECT_TRUE(buf.empty());
   EXPECT_EQ(fired, 0);
@@ -395,7 +401,7 @@ TEST(BufferCallbackTest, EmptyStringViewWithCallback) {
 // ===========================================================================
 TEST(BufferCallbackTest, ManySmallAppends) {
   std::string accumulated;
-  buffer buf([&accumulated](const unsigned char* data, size_t size) {
+  dynamic_buffer buf([&accumulated](const unsigned char* data, size_t size) {
     accumulated.append(reinterpret_cast<const char*>(data), size);
   });
 

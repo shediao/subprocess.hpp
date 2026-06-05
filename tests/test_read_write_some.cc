@@ -17,7 +17,7 @@
  *   - invalid / closed handle → returns -1
  *   - EOF / broken pipe       → returns 0
  *   - partial read / write
- *   - empty buffer write_some → returns 0 (EOF sentinel)
+ *   - empty dynamic_buffer write_some → returns 0 (EOF sentinel)
  */
 
 #include <gtest/gtest.h>
@@ -32,6 +32,7 @@ using namespace subprocess::named_arguments;
 
 // Shorter aliases for the types under test.
 using subprocess::detail::Buffer;
+using subprocess::detail::dynamic_buffer;
 using subprocess::detail::File;
 using subprocess::detail::FileHandler;
 using subprocess::detail::Pipe;
@@ -340,14 +341,15 @@ TEST(ReadWriteSomeTest, BufferReadSome) {
   auto r = buf.read_some();
   ASSERT_EQ(r, w);
 
-  // The data should now be inside buf.buf().
-  ASSERT_EQ(buf.buf(), std::string_view(input, len));
+  // The data should now be inside buf.get<dynamic_buffer>().
+  ASSERT_EQ(buf.get<dynamic_buffer>(), std::string_view(input, len));
 }
 
 TEST(ReadWriteSomeTest, BufferWriteSome) {
-  // Create a Buffer backed by an external buffer with known content, then
-  // write_some() it out and read from the pipe.
-  subprocess::buffer data{"buf_write_some_test"};
+  // Create a Buffer backed by an external dynamic_buffer with known content,
+  // then write_some() it out and read from the pipe.
+  std::string_view data_view{"buf_write_some_test"};
+  subprocess::const_buffer data{data_view};
   Buffer buf(data);
 
   // Write everything out.
@@ -363,14 +365,14 @@ TEST(ReadWriteSomeTest, BufferWriteSome) {
   char out[64] = {};
   auto total_read = subprocess::detail::read_some(buf.rfd(), out, sizeof(out));
   ASSERT_GT(total_read, 0);
-  ASSERT_EQ(static_cast<size_t>(total_read), data.size());
-  ASSERT_EQ(std::string(out, static_cast<size_t>(total_read)),
-            data.to_string());
+  ASSERT_EQ(static_cast<size_t>(total_read), data_view.size());
+  ASSERT_EQ(std::string(out, static_cast<size_t>(total_read)), data_view);
+  ASSERT_TRUE(buf.empty());
 }
 
 TEST(ReadWriteSomeTest, BufferWriteSomeEOF) {
   // After all data has been written, write_some() should return 0 (EOF).
-  subprocess::buffer data{"eof_test"};
+  subprocess::dynamic_buffer data{"eof_test"};
   Buffer buf(data);
 
   // Write everything out.
@@ -382,7 +384,7 @@ TEST(ReadWriteSomeTest, BufferWriteSomeEOF) {
     }
   }
 
-  // Now the buffer should be empty and write_some should return 0.
+  // Now the dynamic_buffer should be empty and write_some should return 0.
   ASSERT_TRUE(buf.empty());
   auto w = buf.write_some();
   ASSERT_EQ(w, 0);
@@ -402,7 +404,8 @@ TEST(ReadWriteSomeTest, BufferReadSomeEOF) {
 }
 
 TEST(ReadWriteSomeTest, BufferReadSomeMultipleChunks) {
-  // Push data in multiple chunks; buf.buf() accumulates everything.
+  // Push data in multiple chunks; buf.get<dynamic_buffer>() accumulates
+  // everything.
   Buffer buf;
   const char chunk1[] = "chunk_one_";
   const char chunk2[] = "chunk_two_";
@@ -421,15 +424,15 @@ TEST(ReadWriteSomeTest, BufferReadSomeMultipleChunks) {
   ASSERT_EQ(r, 0);
 
   std::string expected = std::string(chunk1) + chunk2 + chunk3;
-  ASSERT_EQ(buf.buf(), expected);
+  ASSERT_EQ(buf.get<dynamic_buffer>(), expected);
 }
 
 // ===========================================================================
-// Edge-case: zero-byte buffer contents
+// Edge-case: zero-byte dynamic_buffer contents
 // ===========================================================================
 
 TEST(ReadWriteSomeTest, EmptyBufferWriteSome) {
-  subprocess::buffer empty_data;
+  subprocess::dynamic_buffer empty_data;
   Buffer buf(empty_data);
 
   ASSERT_TRUE(buf.empty());
@@ -470,7 +473,7 @@ TEST(ReadWriteSomeTest, PipeLargeDataWriteAllReadExact) {
 TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdsForOutputBuffers) {
   // Simulate stdout and stderr buffers that have data written to their
   // pipes.  After the pump runs, the read ends must be closed.
-  subprocess::buffer out_buf_data, err_buf_data;
+  subprocess::dynamic_buffer out_buf_data, err_buf_data;
   StdinRedirector in;
   StdoutRedirector out{out_buf_data};
   StderrRedirector err{err_buf_data};
@@ -498,13 +501,13 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdsForOutputBuffers) {
   ASSERT_FALSE(err_buf.rfd()) << "stderr read fd should be closed after pump";
 
   // Data should have been consumed correctly.
-  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
-  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+  ASSERT_EQ(out_buf.get<dynamic_buffer>(), std::string_view(out_data));
+  ASSERT_EQ(err_buf.get<dynamic_buffer>(), std::string_view(err_data));
 }
 
 TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdForEmptyOutputBuffer) {
   // Even when there is no data (EOF immediately), the read fd must be closed.
-  subprocess::buffer out_buf_data;
+  subprocess::dynamic_buffer out_buf_data;
   StdinRedirector in;
   StdoutRedirector out{out_buf_data};
   StderrRedirector err;
@@ -519,14 +522,15 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesReadFdForEmptyOutputBuffer) {
 
   ASSERT_FALSE(out_buf.rfd())
       << "read fd should be closed even for empty output";
-  ASSERT_TRUE(out_buf.buf().empty());
+  ASSERT_TRUE(out_buf.get<dynamic_buffer>().empty());
 }
 
 TEST(ReadWriteSomeTest, PumpThreadsClosesWriteFdForInputBuffer) {
   // The stdin path must close the write end of the pipe after writing all
   // data.  (close_write() was already present before the close_read() fix;
   // this guards against future regressions.)
-  subprocess::buffer data{"stdin_data_for_pump"};
+  std::string_view data_view{"stdin_data_for_pump"};
+  subprocess::dynamic_buffer data{data_view};
   StdinRedirector in{data};
   StdoutRedirector out;
   StderrRedirector err;
@@ -545,12 +549,13 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesWriteFdForInputBuffer) {
   auto n =
       subprocess::detail::read_some(in_buf.rfd(), read_buf, sizeof(read_buf));
   ASSERT_GT(n, 0);
-  ASSERT_EQ(std::string(read_buf, static_cast<size_t>(n)), data.to_string());
+  ASSERT_EQ(std::string(read_buf, static_cast<size_t>(n)), data_view);
+  ASSERT_TRUE(data.empty());
 }
 TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
   // Full scenario: stdin + stdout + stderr.
-  subprocess::buffer in_data{"pump_full_duplex"};
-  subprocess::buffer out_buf_data, err_buf_data;
+  subprocess::dynamic_buffer in_data{"pump_full_duplex"};
+  subprocess::dynamic_buffer out_buf_data, err_buf_data;
   StdinRedirector in{in_data};
   StdoutRedirector out{out_buf_data};
   StderrRedirector err{err_buf_data};
@@ -576,8 +581,8 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
   ASSERT_FALSE(out_buf.rfd()) << "stdout read fd should be closed";
   ASSERT_FALSE(err_buf.rfd()) << "stderr read fd should be closed";
 
-  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
-  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+  ASSERT_EQ(out_buf.get<dynamic_buffer>(), std::string_view(out_data));
+  ASSERT_EQ(err_buf.get<dynamic_buffer>(), std::string_view(err_data));
 }
 //
 // In the real subprocess flow, close_child_end() closes the child-facing
@@ -588,7 +593,7 @@ TEST(ReadWriteSomeTest, PumpThreadsClosesAllFdsForFullDuplex) {
 
 TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdoutBuffer) {
   // stdout: child writes to wfd, parent reads from rfd
-  subprocess::buffer out_buf_data;
+  subprocess::dynamic_buffer out_buf_data;
   StdinRedirector in;
   StdoutRedirector out{out_buf_data};
   StderrRedirector err;
@@ -605,12 +610,12 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdoutBuffer) {
 
   ASSERT_FALSE(out_buf.rfd()) << "stdout parent read fd should be closed";
   ASSERT_FALSE(out_buf.wfd()) << "stdout child write fd should be closed";
-  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
+  ASSERT_EQ(out_buf.get<dynamic_buffer>(), std::string_view(out_data));
 }
 
 TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStderrBuffer) {
   // stderr: child writes to wfd, parent reads from rfd
-  subprocess::buffer err_buf_data;
+  subprocess::dynamic_buffer err_buf_data;
   StdinRedirector in;
   StdoutRedirector out;
   StderrRedirector err{err_buf_data};
@@ -627,20 +632,21 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStderrBuffer) {
 
   ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd should be closed";
   ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd should be closed";
-  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+  ASSERT_EQ(err_buf.get<dynamic_buffer>(), std::string_view(err_data));
 }
 
 TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdinBuffer) {
   // stdin: parent writes to wfd, child reads from rfd.
   // close_child_end() closes the parent's copy of the child read end,
   // but the child still has its dup'd copy — simulate with a drain thread.
-  subprocess::buffer data{"lifecycle_stdin"};
+  std::string_view data_view{"lifecycle_stdin"};
+  subprocess::dynamic_buffer data{data_view};
   StdinRedirector in{data};
   StdoutRedirector out;
   StderrRedirector err;
   auto& in_buf = in.get<Buffer>();
 
-  subprocess::buffer drained;
+  subprocess::dynamic_buffer drained;
   std::thread drain_thread([&]() {
     char buf[256];
     ssize_t n;
@@ -665,13 +671,15 @@ TEST(ReadWriteSomeTest, FullLifecycleAllHandlesClosedForStdinBuffer) {
 
   ASSERT_FALSE(in_buf.wfd()) << "stdin parent write fd should be closed";
   ASSERT_FALSE(in_buf.rfd()) << "stdin child read fd should be closed";
-  ASSERT_EQ(drained, data);
+  ASSERT_EQ(drained, data_view);
+  ASSERT_TRUE(data.empty());
 }
 
 TEST(ReadWriteSomeTest, FullLifecycleAllThreeBuffersAllHandlesClosed) {
   // stdin + stdout + stderr, all with close_child_end simulation.
-  subprocess::buffer in_data{"lifecycle_in"};
-  subprocess::buffer out_buf_data, err_buf_data;
+  std::string_view data_view{"lifecycle_in"};
+  subprocess::dynamic_buffer in_data{data_view};
+  subprocess::dynamic_buffer out_buf_data, err_buf_data;
   StdinRedirector in{in_data};
   StdoutRedirector out{out_buf_data};
   StderrRedirector err{err_buf_data};
@@ -688,7 +696,7 @@ TEST(ReadWriteSomeTest, FullLifecycleAllThreeBuffersAllHandlesClosed) {
   err_buf.close_write();
 
   // Drain thread simulates the child reading from stdin.
-  subprocess::buffer drained;
+  subprocess::dynamic_buffer drained;
   std::thread drain_thread([&]() {
     char buf[256];
     ssize_t n;
@@ -715,7 +723,8 @@ TEST(ReadWriteSomeTest, FullLifecycleAllThreeBuffersAllHandlesClosed) {
   ASSERT_FALSE(err_buf.rfd()) << "stderr parent read fd";
   ASSERT_FALSE(err_buf.wfd()) << "stderr child write fd";
 
-  ASSERT_EQ(drained, in_data);
-  ASSERT_EQ(out_buf.buf(), std::string_view(out_data));
-  ASSERT_EQ(err_buf.buf(), std::string_view(err_data));
+  ASSERT_TRUE(in_data.empty());
+  ASSERT_EQ(drained, data_view);
+  ASSERT_EQ(out_buf.get<dynamic_buffer>(), std::string_view(out_data));
+  ASSERT_EQ(err_buf.get<dynamic_buffer>(), std::string_view(err_data));
 }

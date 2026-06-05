@@ -26,9 +26,9 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
 using subprocess::capture_run;
 using subprocess::detach_run;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 
 namespace fs = std::filesystem;
@@ -78,7 +78,7 @@ std::vector<fs::path> detach_cmd_args(const std::string& label,
 // ===========================================================================
 
 TEST(FilesystemPathRunTest, PathAppAndArgs) {
-  buffer out;
+  dynamic_buffer out;
   auto app = echo_cmd_path("fs_path_run");
   auto args = echo_cmd_args("fs_path_run");
   int ec = run(app, args[0], args[1], std_out > out);
@@ -88,7 +88,7 @@ TEST(FilesystemPathRunTest, PathAppAndArgs) {
 
 TEST(FilesystemPathRunTest, PathAppOnly) {
   // Only the app name as filesystem::path, args as string literals
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   fs::path app("cmd.exe");
   int ec =
@@ -103,7 +103,7 @@ TEST(FilesystemPathRunTest, PathAppOnly) {
 
 TEST(FilesystemPathRunTest, PathArgsOnly) {
   // App as string, first arg as filesystem::path
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   fs::path a1("/c");
   fs::path a2("<nul set /p=fs_path_args_only&exit /b 0");
@@ -118,7 +118,7 @@ TEST(FilesystemPathRunTest, PathArgsOnly) {
 }
 
 TEST(FilesystemPathRunTest, RvaluePath) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ec = run(fs::path("cmd.exe"), fs::path("/c"),
                fs::path("<nul set /p=fs_path_rvalue&exit /b 0"), std_out > out);
@@ -131,7 +131,7 @@ TEST(FilesystemPathRunTest, RvaluePath) {
 }
 
 TEST(FilesystemPathRunTest, MixedPathAndStringTypes) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   fs::path app("cmd.exe");
   std::string a1("/c");
@@ -148,7 +148,7 @@ TEST(FilesystemPathRunTest, MixedPathAndStringTypes) {
 }
 
 TEST(FilesystemPathRunTest, MixedPathAndStringView) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   std::string_view app("cmd.exe");
   fs::path a1("/c");
@@ -297,7 +297,7 @@ TEST(FilesystemPathDetachRunTest, MixedPathAndString) {
 // ===========================================================================
 
 TEST(FilesystemPathEdgeCaseTest, RunWithStderrCapture) {
-  buffer out, err;
+  dynamic_buffer out, err;
 #if defined(_WIN32)
   fs::path app("cmd.exe");
   fs::path a1("/c");

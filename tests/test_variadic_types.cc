@@ -42,7 +42,7 @@ class RunVariadicTypesTest : public ::testing::Test {
 // ---------------------------------------------------------------------------
 
 TEST_F(RunVariadicTypesTest, RunConstCharPtr) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
 #if defined(_WIN32)
   const char* app = "cmd.exe";
   const char* a1 = "/c";
@@ -58,7 +58,7 @@ TEST_F(RunVariadicTypesTest, RunConstCharPtr) {
 }
 
 TEST_F(RunVariadicTypesTest, RunCharPtr) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
 #if defined(_WIN32)
   char app[] = "cmd.exe";
   char a1[] = "/c";
@@ -74,7 +74,7 @@ TEST_F(RunVariadicTypesTest, RunCharPtr) {
 }
 
 TEST_F(RunVariadicTypesTest, RunStdString) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
 #if defined(_WIN32)
   std::string app("cmd.exe");
   std::string a1("/c");
@@ -90,7 +90,7 @@ TEST_F(RunVariadicTypesTest, RunStdString) {
 }
 
 TEST_F(RunVariadicTypesTest, RunStdStringView) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
 #if defined(_WIN32)
   std::string_view app("cmd.exe");
   std::string_view a1("/c");
@@ -106,7 +106,7 @@ TEST_F(RunVariadicTypesTest, RunStdStringView) {
 }
 
 TEST_F(RunVariadicTypesTest, RunMixedNarrowTypes) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   // Mix char*, std::string, std::string_view, const char* in one call
 #if defined(_WIN32)
   char app[] = "cmd.exe";
@@ -212,8 +212,8 @@ TEST_F(RunVariadicTypesTest, CaptureRunMixedNarrowTypes) {
 // ---------------------------------------------------------------------------
 
 TEST_F(RunVariadicTypesTest, RunMixedNarrowWithStderr) {
-  subprocess::buffer out;
-  subprocess::buffer err;
+  subprocess::dynamic_buffer out;
+  subprocess::dynamic_buffer err;
 #if defined(_WIN32)
   char app[] = "cmd.exe";
   std::string a1("/c");
@@ -259,7 +259,7 @@ TEST_F(RunVariadicTypesTest, CaptureRunMixedNarrowWithStderr) {
 // ---------------------------------------------------------------------------
 
 TEST_F(RunVariadicTypesTest, RunConstWCharPtr) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   const wchar_t* app = L"cmd.exe";
   const wchar_t* a1 = L"/c";
   const wchar_t* a2 = L"<nul set /p=hello_const_wchar_ptr&exit /b 0";
@@ -269,7 +269,7 @@ TEST_F(RunVariadicTypesTest, RunConstWCharPtr) {
 }
 
 TEST_F(RunVariadicTypesTest, RunWCharPtr) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   wchar_t app[] = L"cmd.exe";
   wchar_t a1[] = L"/c";
   wchar_t a2[] = L"<nul set /p=hello_wchar_ptr&exit /b 0";
@@ -279,7 +279,7 @@ TEST_F(RunVariadicTypesTest, RunWCharPtr) {
 }
 
 TEST_F(RunVariadicTypesTest, RunStdWString) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   std::wstring app(L"cmd.exe");
   std::wstring a1(L"/c");
   std::wstring a2(L"<nul set /p=hello_std_wstring&exit /b 0");
@@ -289,7 +289,7 @@ TEST_F(RunVariadicTypesTest, RunStdWString) {
 }
 
 TEST_F(RunVariadicTypesTest, RunStdWStringView) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   std::wstring_view app(L"cmd.exe");
   std::wstring_view a1(L"/c");
   std::wstring_view a2(L"<nul set /p=hello_wstring_view&exit /b 0");
@@ -299,7 +299,7 @@ TEST_F(RunVariadicTypesTest, RunStdWStringView) {
 }
 
 TEST_F(RunVariadicTypesTest, RunMixedWideTypes) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   wchar_t app[] = L"cmd.exe";
   std::wstring a1(L"/c");
   std::wstring_view a2(L"<nul set /p=hello_wide_mixed&exit /b 0");
@@ -367,8 +367,8 @@ TEST_F(RunVariadicTypesTest, CaptureRunMixedWideTypes) {
 // ---------------------------------------------------------------------------
 
 TEST_F(RunVariadicTypesTest, RunMixedWideWithStderr) {
-  subprocess::buffer out;
-  subprocess::buffer err;
+  subprocess::dynamic_buffer out;
+  subprocess::dynamic_buffer err;
   wchar_t app[] = L"cmd.exe";
   std::wstring a1(L"/c");
   std::wstring_view a2(
@@ -432,7 +432,7 @@ TEST_F(RunVariadicTypesTest, CaptureRunNonZeroExitCode) {
 // ============================================================================
 
 TEST_F(RunVariadicTypesTest, RunManyMixedArgs) {
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
 #if defined(_WIN32)
   const char* app = "cmd.exe";
   std::string a1("/c");

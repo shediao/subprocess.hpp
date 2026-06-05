@@ -11,13 +11,22 @@
 #include "temp_file.h"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
 using subprocess::capture_run;
+using subprocess::const_buffer;
+using subprocess::dynamic_buffer;
 
+[[maybe_unused]]
 static void write_all_and_close(subprocess::detail::unique_fd& fd,
-                                buffer const& write_data) {
+                                dynamic_buffer const& write_data) {
   auto write_span = write_data.span();
   subprocess::detail::write_all(fd, write_span.data(), write_span.size());
+  fd.close();
+}
+
+[[maybe_unused]]
+static void write_all_and_close(subprocess::detail::unique_fd& fd,
+                                const_buffer write_data) {
+  subprocess::detail::write_all(fd, write_data.data(), write_data.size());
   fd.close();
 }
 
@@ -77,7 +86,7 @@ TEST(CaptureStdinTest, StdinFromFileTwoArgForm) {
 // 4. stdin from Buffer — two-argument form
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferTwoArgForm) {
-  buffer in{"buffer_content\n"};
+  const_buffer in{"buffer_content\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -98,7 +107,7 @@ TEST(CaptureStdinTest, StdinFromBufferTwoArgForm) {
 TEST(CaptureStdinTest, StdinFromPipeTwoArgForm) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string pipe_data = "pipe_data_123\n";
-  write_all_and_close(pipe.wfd(), buffer{pipe_data});
+  write_all_and_close(pipe.wfd(), const_buffer{pipe_data});
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -137,7 +146,7 @@ TEST(CaptureStdinTest, StdinFromFileVariadicForm) {
 // 7. Variadic form: stdin from Buffer
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferVariadicForm) {
-  buffer in{"variadic_buffer_data\n"};
+  dynamic_buffer in{"variadic_buffer_data\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -158,7 +167,7 @@ TEST(CaptureStdinTest, StdinFromBufferVariadicForm) {
 TEST(CaptureStdinTest, StdinFromPipeVariadicForm) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string pipe_data = "variadic_pipe_data\n";
-  write_all_and_close(pipe.wfd(), buffer{pipe_data});
+  write_all_and_close(pipe.wfd(), const_buffer{pipe_data});
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -199,7 +208,7 @@ TEST(CaptureStdinTest, StdinFromFileWithEnvVariadicForm) {
 // 10. stdin from Buffer combined with env and cwd (variadic form)
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferWithEnvAndCwdVariadicForm) {
-  buffer in{"data_with_env_cwd\n"};
+  dynamic_buffer in{"data_with_env_cwd\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] =
       capture_run("cat", std_in < in, env = {{"FOO", "bar"}}, cwd = "/tmp");
@@ -218,7 +227,7 @@ TEST(CaptureStdinTest, StdinFromBufferWithEnvAndCwdVariadicForm) {
 // 11. stdin from Buffer — two-arg form with env
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferWithEnvTwoArgForm) {
-  buffer in{"two_arg_with_env\n"};
+  dynamic_buffer in{"two_arg_with_env\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] =
       capture_run("cat", std_in < in, env = {{"MYVAR", "myval"}});
@@ -258,7 +267,7 @@ TEST(CaptureStdinTest, EmptyStdinFromFile) {
 // 13. Empty stdin from Buffer
 // ===========================================================================
 TEST(CaptureStdinTest, EmptyStdinFromBuffer) {
-  buffer in{};
+  dynamic_buffer in{};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -296,7 +305,7 @@ TEST(CaptureStdinTest, LargeDataStdinFromBuffer) {
   for (int i = 0; i < 10000; ++i) {
     large_data += "line_" + std::to_string(i) + "\n";
   }
-  buffer in{large_data};
+  dynamic_buffer in{large_data};
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("wc", "-l", std_in < in);
@@ -341,7 +350,7 @@ TEST(CaptureStdinTest, LargeDataStdinFromFile) {
 // 17. Multiple lines via stdin from Buffer
 // ===========================================================================
 TEST(CaptureStdinTest, MultiLineStdinFromBuffer) {
-  buffer in{"first line\nsecond line\nthird line\n"};
+  dynamic_buffer in{"first line\nsecond line\nthird line\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -358,7 +367,7 @@ TEST(CaptureStdinTest, MultiLineStdinFromBuffer) {
 // 18. stdin overrides default devnull (override semantics with Buffer)
 // ===========================================================================
 TEST(CaptureStdinTest, StdinOverrideDefaultDevnullWithBuffer) {
-  buffer in{"overridden_stdin\n"};
+  dynamic_buffer in{"overridden_stdin\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -398,7 +407,7 @@ TEST(CaptureStdinTest, StdinOverrideDefaultDevnullWithFile) {
 // 20. stdin redirect with command that writes to stderr
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferWithStderrOutput) {
-  buffer in{"input_data\n"};
+  dynamic_buffer in{"input_data\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] =
       capture_run("bash", "-c", "cat; echo 'to_stderr' >&2", std_in < in);
@@ -419,7 +428,7 @@ TEST(CaptureStdinTest, StdinFromBufferWithStderrOutput) {
 TEST(CaptureStdinTest, StdinFromPipeSpecialChars) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string special_data = "spaces  and\ttabs\n!@#$%^&*()\n";
-  write_all_and_close(pipe.wfd(), buffer{special_data});
+  write_all_and_close(pipe.wfd(), const_buffer{special_data});
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -479,7 +488,7 @@ TEST(CaptureStdinTest, StdinFromFileNoTrailingNewline) {
 // 24. stdin from Buffer with no trailing newline
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferNoTrailingNewline) {
-  buffer in{"no_newline_here"};
+  dynamic_buffer in{"no_newline_here"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -496,7 +505,7 @@ TEST(CaptureStdinTest, StdinFromBufferNoTrailingNewline) {
 // 25. stdin from Buffer — variadic form with multiple string args
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferVariadicMultiArgs) {
-  buffer in{"multi_arg_test\n"};
+  dynamic_buffer in{"multi_arg_test\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("grep", "multi", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -537,7 +546,7 @@ TEST(CaptureStdinTest, StdinFromFileTwoArgFormMultiNamedArgs) {
 // 27. Verify exit code is correctly propagated when using stdin
 // ===========================================================================
 TEST(CaptureStdinTest, ExitCodePropagationWithStdin) {
-  buffer in{"success\n"};
+  dynamic_buffer in{"success\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("grep", "success", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -581,7 +590,7 @@ TEST(CaptureStdinTest, StdinFromFileProgramIgnoresStdin) {
 // 29. stdin from Buffer with a program that reads partially
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferProgramReadsPartially) {
-  buffer in{"line1\nline2\nline3\nline4\nline5\n"};
+  dynamic_buffer in{"line1\nline2\nline3\nline4\nline5\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("head", "-n", "2", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -600,7 +609,7 @@ TEST(CaptureStdinTest, StdinFromBufferProgramReadsPartially) {
 TEST(CaptureStdinTest, StdinFromPipeWriteBeforeProcessStart) {
   auto pipe = subprocess::detail::Pipe::create();
   std::string expected = "pipe_streaming_data\n";
-  write_all_and_close(pipe.wfd(), buffer{expected});
+  write_all_and_close(pipe.wfd(), const_buffer{expected});
 
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < pipe);
@@ -618,7 +627,7 @@ TEST(CaptureStdinTest, StdinFromPipeWriteBeforeProcessStart) {
 // 31. stdin from Buffer with UTF-8 content
 // ===========================================================================
 TEST(CaptureStdinTest, StdinFromBufferUnicodeContent) {
-  buffer in{"caf\xc3\xa9\n"};
+  dynamic_buffer in{"caf\xc3\xa9\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] = capture_run("cat", std_in < in);
   ASSERT_EQ(exit_code, 0);
@@ -656,7 +665,7 @@ TEST(CaptureStdinTest, StdinFromFileUnicodeContent) {
 // 33. Combination: variadic form with stdin, env, cwd, and multiple args
 // ===========================================================================
 TEST(CaptureStdinTest, StdinWithAllNamedArgsVariadicForm) {
-  buffer in{"all_args_test\n"};
+  dynamic_buffer in{"all_args_test\n"};
 #if !defined(_WIN32)
   auto [exit_code, out, err] =
       capture_run("bash", "-c", "cat; echo $ALL_ARGS_VAR", std_in < in,

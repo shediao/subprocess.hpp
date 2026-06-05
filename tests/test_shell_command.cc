@@ -24,9 +24,9 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
 using subprocess::capture_run;
 using subprocess::detach_run;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 
 // ===========================================================================
@@ -92,7 +92,7 @@ TEST(ShellCommandTest, BasicRunPowershell) {
 // ===========================================================================
 
 TEST(ShellCommandTest, StdoutCaptureBash) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ret = run($shell, "echo hello_shell", $stdout > out);
 #else
@@ -108,7 +108,7 @@ TEST(ShellCommandTest, StdoutCaptureBash) {
 
 TEST(ShellCommandTest, StdoutCapturePowershell) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret = run(powershell, "Write-Host -NoNewline hello_ps", $stdout > out);
   ASSERT_EQ(ret, 0);
   // PowerShell's Write-Host -NoNewline goes to the console stream, not stdout.
@@ -123,7 +123,7 @@ TEST(ShellCommandTest, StdoutCapturePowershell) {
 }
 
 TEST(ShellCommandTest, StdoutCaptureBashExplicit) {
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "echo -n hello_bash", $stdout > out);
   if (ret != 0) {
     GTEST_SKIP() << "bash not available on this platform";
@@ -137,7 +137,7 @@ TEST(ShellCommandTest, StdoutCaptureBashExplicit) {
 // ===========================================================================
 
 TEST(ShellCommandTest, StderrCaptureBash) {
-  buffer err;
+  dynamic_buffer err;
 #if defined(_WIN32)
   int ret = run($shell, "echo error_text >&2", $stderr > err);
 #else
@@ -149,7 +149,7 @@ TEST(ShellCommandTest, StderrCaptureBash) {
 
 TEST(ShellCommandTest, StderrCaptureCmd) {
 #if defined(_WIN32)
-  buffer err;
+  dynamic_buffer err;
   int ret = run($shell, "echo error_text >&2", $stderr > err);
   ASSERT_EQ(ret, 0);
   ASSERT_FALSE(err.empty());
@@ -196,7 +196,7 @@ TEST(ShellCommandTest, CaptureRunPowershell) {
 // ===========================================================================
 
 TEST(ShellCommandTest, ShellRunWithEnv) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ret =
       run($shell, "echo %SHELL_TEST_VAR%",
@@ -213,7 +213,7 @@ TEST(ShellCommandTest, ShellRunWithEnv) {
 }
 
 TEST(ShellCommandTest, ShellRunWithEnvAppend) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ret = run($shell, "echo %PATH%",
                 $env += {{"SHELL_APPEND_VAR", "appended_val"}}, $stdout > out);
@@ -231,12 +231,12 @@ TEST(ShellCommandTest, ShellRunWithEnvAppend) {
 
 TEST(ShellCommandTest, ShellRunWithCwd) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret = run($shell, "cd", $cwd = "C:\\", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "C:\\\r\n");
 #else
-  buffer out;
+  dynamic_buffer out;
   int ret = run($shell, "pwd", $cwd = "/", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "/\n");
@@ -249,11 +249,11 @@ TEST(ShellCommandTest, ShellRunWithCwd) {
 
 TEST(ShellCommandTest, ShellRunWithStdin) {
 #if defined(_WIN32)
-  buffer in("input_line_1\ninput_line_2\n");
+  dynamic_buffer in("input_line_1\ninput_line_2\n");
   int ret = run($shell, "findstr input_line_1", $stdin < in);
   ASSERT_EQ(ret, 0);
 #else
-  buffer in("input_line_1\ninput_line_2\n");
+  dynamic_buffer in("input_line_1\ninput_line_2\n");
   int ret = run($shell, "grep -q input_line_1", $stdin < in);
   ASSERT_EQ(ret, 0);
 #endif
@@ -287,7 +287,7 @@ TEST(ShellCommandTest, ShellRunStdoutToDevnull) {
 }
 
 TEST(ShellCommandTest, ShellRunStderrToDevnull) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ret = run($shell, "echo visible & echo hidden >&2 & exit /b 0",
                 $stdout > out, $stderr > $devnull);
@@ -365,7 +365,7 @@ TEST(ShellCommandTest, DetachRunShell) {
 // ===========================================================================
 
 TEST(ShellCommandTest, ShellRunMultiLineCommand) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ret = run($shell, "(echo line1 & echo line2 & echo line3) & exit /b 0",
                 $stdout > out);
@@ -380,7 +380,7 @@ TEST(ShellCommandTest, ShellRunMultiLineCommand) {
 }
 
 TEST(ShellCommandTest, ShellRunWithPipes) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ret = run($shell, "echo hello_pipe| findstr hello", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -397,7 +397,7 @@ TEST(ShellCommandTest, ShellRunWithPipes) {
 // ===========================================================================
 
 TEST(ShellCommandTest, ShellCaptureBothStdoutAndStderr) {
-  buffer out, err;
+  dynamic_buffer out, err;
 #if defined(_WIN32)
   int ret = run($shell, "(echo to_out & echo to_err >&2) & exit /b 0",
                 $stdout > out, $stderr > err);
@@ -418,7 +418,7 @@ TEST(ShellCommandTest, ShellCaptureBothStdoutAndStderr) {
 // ===========================================================================
 
 TEST(ShellCommandTest, ShellRunNonZeroExitWithStderr) {
-  buffer err;
+  dynamic_buffer err;
 #if defined(_WIN32)
   int ret = run($shell, "echo failure_msg >&2 & exit /b 99", $stderr > err);
 #else
@@ -433,7 +433,7 @@ TEST(ShellCommandTest, ShellRunNonZeroExitWithStderr) {
 // ===========================================================================
 
 TEST(ShellCommandTest, ShellRunEmptyOutput) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ret = run($shell, "exit /b 0", $stdout > out);
 #else
@@ -460,7 +460,7 @@ TEST(ShellCommandTest, BashDoubleQuotesWithVarExpansion) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "FOO='hello world'; echo \"$FOO\"", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "hello world\n");
@@ -470,7 +470,7 @@ TEST(ShellCommandTest, BashEscapedDoubleQuotesInsideString) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "echo \"quoted string with spaces\"", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "quoted string with spaces\n");
@@ -480,7 +480,7 @@ TEST(ShellCommandTest, BashSingleQuotesLiteral) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   // Single quotes prevent expansion: $HOME is literal
   int ret = run($bash, "echo 'literal $HOME'", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -493,7 +493,7 @@ TEST(ShellCommandTest, BashFunctionDefinitionSimple) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "myfunc() { echo -n 'called'; }; myfunc", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "called");
@@ -503,7 +503,7 @@ TEST(ShellCommandTest, BashFunctionWithArguments) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "greet() { echo -n \"Hello, $1!\"; }; greet World",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -525,7 +525,7 @@ TEST(ShellCommandTest, BashFunctionCallingAnotherFunction) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash,
                 "get_msg() { echo -n 'nested call'; };"
                 " outer() { echo -n \"[$1]\"; };"
@@ -541,7 +541,7 @@ TEST(ShellCommandTest, BashCommandSubstitution) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "echo -n $(echo inner)", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "inner");
@@ -551,7 +551,7 @@ TEST(ShellCommandTest, BashArithmeticExpansion) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "echo -n $((3 * 7 + 1))", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "22");
@@ -561,7 +561,7 @@ TEST(ShellCommandTest, BashBackslashEscapes) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "echo -ne 'tab:\\t newline:\\n backslash:\\\\'",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -572,7 +572,7 @@ TEST(ShellCommandTest, BashPipeChainWithSpecialChars) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "echo -n 'a b c d e' | tr ' ' '|' | tr 'a-z' 'A-Z'",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -583,7 +583,7 @@ TEST(ShellCommandTest, BashRedirectStderrToStdout) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   // Redirect stderr (fd 2) to stdout (fd 1) within the shell command itself.
   // The 2>&1 merges both streams before they reach separate pipes,
   // so all output appears on stdout.
@@ -599,7 +599,7 @@ TEST(ShellCommandTest, BashForLoop) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret =
       run($bash, "for i in 1 2 3; do echo -n \"$i \"; done", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -610,7 +610,7 @@ TEST(ShellCommandTest, BashWhileLoop) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash,
                 "i=0; while [ $i -lt 3 ]; do echo -n \"$i \"; i=$((i+1)); done",
                 $stdout > out);
@@ -624,7 +624,7 @@ TEST(ShellCommandTest, BashIfElseConditional) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "if [ 5 -gt 3 ]; then echo -n yes; else echo -n no; fi",
                 $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -635,7 +635,7 @@ TEST(ShellCommandTest, BashCaseStatement) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash,
                 "x='two'; case $x in one) echo -n 1;; two) echo -n 2;; *) echo "
                 "-n x;; esac",
@@ -648,7 +648,7 @@ TEST(ShellCommandTest, BashHereStringIntoGrep) {
   if (!is_bash_available()) {
     GTEST_SKIP() << "bash not available";
   }
-  buffer out;
+  dynamic_buffer out;
   int ret = run($bash, "grep -o world <<< 'hello world'", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "world\n");
@@ -660,7 +660,7 @@ TEST(ShellCommandTest, BashHereStringIntoGrep) {
 
 TEST(ShellCommandTest, CmdDoubleQuotesWithAmpersand) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   // Double quotes protect the & from being interpreted as command separator
   int ret = run($shell, "echo \"hello & world\"", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -672,7 +672,7 @@ TEST(ShellCommandTest, CmdDoubleQuotesWithAmpersand) {
 
 TEST(ShellCommandTest, CmdPercentVariableExpansion) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   // In cmd /c mode, %FOO% is expanded at parse time (before set runs).
   // Use 'set FOO' (without value) to display the variable instead.
   int ret = run($shell, "set FOO=hello_cmd_var & set FOO", $stdout > out);
@@ -685,7 +685,7 @@ TEST(ShellCommandTest, CmdPercentVariableExpansion) {
 
 TEST(ShellCommandTest, CmdIfElseConditional) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   // cmd supports if/else blocks with parentheses
   int ret = run($shell, "if 1==1 (echo yes_branch) else (echo no_branch)",
                 $stdout > out);
@@ -699,7 +699,7 @@ TEST(ShellCommandTest, CmdIfElseConditional) {
 
 TEST(ShellCommandTest, CmdForLoopCounting) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret = run($shell, "for /L %i in (1,1,3) do @echo %i", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_EQ(out, "1\r\n2\r\n3\r\n");
@@ -722,7 +722,7 @@ TEST(ShellCommandTest, CmdErrorlevelPropagation) {
 
 TEST(ShellCommandTest, CmdVariableInNestedExpansion) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   // In cmd /c, variables set earlier in the line are available via call echo
   // because call triggers a second parse pass.
   int ret = run($shell, "set X=inner_value & call echo %X%", $stdout > out);
@@ -736,7 +736,7 @@ TEST(ShellCommandTest, CmdVariableInNestedExpansion) {
 
 TEST(ShellCommandTest, CmdConditionalExecution) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   // && means execute next only if previous succeeded
   int ret = run($shell, "echo success_msg && echo also_ran", $stdout > out);
   ASSERT_EQ(ret, 0);
@@ -762,7 +762,7 @@ TEST(ShellCommandTest, CmdConditionalExecution) {
 
 TEST(ShellCommandTest, PowerShellFunctionDefinition) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret = run(powershell,
                 "function Test-Func { param($Name) \"Hello, $Name!\" }; "
                 "Test-Func -Name World",
@@ -776,7 +776,7 @@ TEST(ShellCommandTest, PowerShellFunctionDefinition) {
 
 TEST(ShellCommandTest, PowerShellScriptBlock) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret = run(powershell, "& { param($x) $x * $x } 7", $stdout > out);
   ASSERT_EQ(ret, 0);
   ASSERT_TRUE(out.to_string().find("49") != std::string::npos);
@@ -787,7 +787,7 @@ TEST(ShellCommandTest, PowerShellScriptBlock) {
 
 TEST(ShellCommandTest, PowerShellPipelineWithWhere) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret = run(powershell,
                 "1,2,3,4,5 | Where-Object { $_ -gt 3 } | ForEach-Object { "
                 "Write-Output $_ }",
@@ -803,7 +803,7 @@ TEST(ShellCommandTest, PowerShellPipelineWithWhere) {
 
 TEST(ShellCommandTest, PowerShellHereString) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   // PowerShell here-string: @' ... '@ must have content on separate lines.
   // Use embedded newlines (backtick-n) in a regular string for single-line
   // commands, or use a verbatim string with actual newlines.
@@ -822,7 +822,7 @@ TEST(ShellCommandTest, PowerShellHereString) {
 
 TEST(ShellCommandTest, PowerShellErrorActionPreference) {
 #if defined(_WIN32)
-  buffer out, err;
+  dynamic_buffer out, err;
   int ret = run(powershell,
                 "$ErrorActionPreference = 'Stop'; try { Get-Item "
                 "nonexistent_path } catch { Write-Output 'caught' }",
@@ -836,7 +836,7 @@ TEST(ShellCommandTest, PowerShellErrorActionPreference) {
 
 TEST(ShellCommandTest, PowerShellSpecialCharactersInString) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret =
       run(powershell,
           "Write-Output 'dollar$sign backtick`n newline ampersand& pipe|'",
@@ -852,7 +852,7 @@ TEST(ShellCommandTest, PowerShellSpecialCharactersInString) {
 
 TEST(ShellCommandTest, PowerShellCalculatedProperty) {
 #if defined(_WIN32)
-  buffer out;
+  dynamic_buffer out;
   int ret =
       run(powershell,
           "[PSCustomObject]@{Name='test';Value=42} | Select-Object Name,Value",
@@ -871,7 +871,7 @@ TEST(ShellCommandTest, PowerShellCalculatedProperty) {
 
 TEST(ShellCommandTest, ComplexMixedStdoutStderr) {
 #if defined(_WIN32)
-  buffer out, err;
+  dynamic_buffer out, err;
   // cmd: odd numbers to stdout, even to stderr
   int ret =
       run($shell,
@@ -883,7 +883,7 @@ TEST(ShellCommandTest, ComplexMixedStdoutStderr) {
   ASSERT_TRUE(out.to_string().find("5") != std::string::npos);
   ASSERT_FALSE(err.empty());
 #else
-  buffer out, err;
+  dynamic_buffer out, err;
   // bash: odd numbers to stdout, even to stderr
   int ret = run($shell,
                 "for i in 1 2 3 4 5; do if [ $((i%2)) -eq 0 ]; then printf "

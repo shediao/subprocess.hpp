@@ -574,44 +574,98 @@ class unique_pid
 };
 #endif
 
-class buffer {
+class const_buffer {
+ public:
+  constexpr const_buffer() noexcept = default;
+  template <typename T>
+    requires(requires(T t) {
+              typename T::value_type;
+              { t.data() } -> std::convertible_to<const void*>;
+              { t.size() } -> std::convertible_to<size_t>;
+            } && std::is_standard_layout_v<typename T::value_type> &&
+             std::contiguous_iterator<typename T::iterator>)
+  constexpr explicit const_buffer(T const& t) noexcept
+      : data_(t.data()), size_(t.size() * sizeof(typename T::value_type)) {}
+  constexpr explicit const_buffer(std::string_view s) noexcept
+      : data_(static_cast<const void*>(s.data())), size_(s.size()) {}
+  constexpr explicit const_buffer(std::wstring_view s) noexcept
+      : data_(static_cast<const void*>(s.data())),
+        size_(s.size() * sizeof(wchar_t)) {}
+  constexpr const_buffer(const void* data, size_t size) noexcept
+      : data_(data), size_(size) {}
+
+  constexpr const unsigned char* data() const noexcept {
+    return static_cast<const unsigned char*>(data_);
+  }
+  constexpr size_t size() const noexcept { return size_; }
+  constexpr bool empty() const noexcept { return size_ == 0; }
+
+ private:
+  const void* data_;
+  size_t size_;
+};
+
+class dynamic_buffer {
   using callback = std::function<void(const unsigned char*, size_t)>;
 
  public:
-  buffer() = default;
-  ~buffer() = default;
-  buffer(const buffer&) = delete;
-  buffer& operator=(const buffer&) = delete;
-  buffer(buffer&& other) noexcept
+  dynamic_buffer() = default;
+  ~dynamic_buffer() = default;
+  dynamic_buffer(const dynamic_buffer&) = delete;
+  dynamic_buffer& operator=(const dynamic_buffer&) = delete;
+  dynamic_buffer(dynamic_buffer&& other) noexcept
       : buf_(std::move(other.buf_)), callback_(std::move(other.callback_)) {}
-  buffer& operator=(buffer&& other) noexcept {
-    buf_ = std::move(other.buf_);
-    callback_ = std::move(other.callback_);
+  dynamic_buffer& operator=(dynamic_buffer&& other) noexcept {
+    if (this != &other) {
+      buf_ = std::move(other.buf_);
+      callback_ = std::move(other.callback_);
+    }
     return *this;
   }
-  explicit buffer(callback&& cb) : callback_(std::move(cb)) {}
-  explicit buffer(std::string_view str) : buf_(str.begin(), str.end()) {}
-  buffer(std::string_view const str, callback&& cb)
+  explicit dynamic_buffer(callback&& cb) : callback_(std::move(cb)) {}
+  explicit dynamic_buffer(std::string_view str)
+      : buf_(str.begin(), str.end()) {}
+  dynamic_buffer(std::string_view const str, callback&& cb)
       : buf_(str.begin(), str.end()), callback_(std::move(cb)) {}
-  buffer(const std::string::iterator first, const std::string::iterator last)
+  dynamic_buffer(const std::string::iterator first,
+                 const std::string::iterator last)
       : buf_(first, last) {}
-  buffer(const std::string::iterator first, const std::string::iterator last,
-         callback&& cb)
+  dynamic_buffer(const std::string::iterator first,
+                 const std::string::iterator last, callback&& cb)
       : buf_(first, last), callback_(std::move(cb)) {}
 
-  [[nodiscard]] auto* data() const { return buf_.data(); }
+  template <typename T>
+    requires(requires(T t) {
+      typename T::value_type;
+      { t.data() } -> std::convertible_to<const void*>;
+      { t.size() } -> std::convertible_to<size_t>;
+    } && std::is_standard_layout_v<typename T::value_type> &&
+             std::contiguous_iterator<typename T::iterator>)
+  constexpr explicit dynamic_buffer(T const& t) noexcept
+      : buf_(reinterpret_cast<const unsigned char*>(t.data()),
+             reinterpret_cast<const unsigned char*>(t.data()) +
+                 (t.size() * sizeof(typename T::value_type))) {}
+
   [[nodiscard]] auto size() const { return buf_.size(); }
   [[nodiscard]] auto span() const {
     return std::span(buf_.data(), buf_.size());
   }
-  [[nodiscard]] auto to_string() const {
-    return std::string(buf_.data(), buf_.data() + buf_.size());
+  template <typename T>
+    requires(requires { typename T::value_type; } &&
+             std::is_standard_layout_v<typename T::value_type> &&
+             std::constructible_from<T, typename T::value_type*,
+                                     typename T::value_type*>)
+  T to() const {
+    if (buf_.size() % sizeof(typename T::value_type) == 0) {
+      auto* data = reinterpret_cast<T::value_type const*>(buf_.data());
+      size_t size = buf_.size() / sizeof(typename T::value_type);
+      return T{data, data + size};
+    }
+    throw std::runtime_error("invalid size");
   }
+  [[nodiscard]] auto to_string() const { return to<std::string>(); }
   [[nodiscard]] auto empty() const { return buf_.empty(); }
   auto clear() { return buf_.clear(); }
-
-  [[nodiscard]] auto begin() const { return buf_.begin(); }
-  [[nodiscard]] auto end() const { return buf_.end(); }
 
   void append(const char* data, size_t size) {
     buf_.insert(buf_.end(), data, data + size);
@@ -619,50 +673,56 @@ class buffer {
       callback_(reinterpret_cast<const unsigned char*>(data), size);
     }
   }
+  std::span<unsigned char> prepare(size_t n) {
+    if (n > prepare_.size()) {
+      prepare_.resize(n);
+    }
+    return {prepare_.data(), n};
+  }
+  void commit(size_t n) {
+    buf_.insert(buf_.end(), prepare_.begin(), prepare_.begin() + n);
+    if (callback_) {
+      callback_(prepare_.data(), n);
+    }
+  }
+
+  void consume(size_t size) { buf_.erase(buf_.begin(), buf_.begin() + size); }
+
   // operator== for test
-  bool operator==(const buffer& other) const { return buf_ == other.buf_; }
+  bool operator==(const dynamic_buffer& other) const {
+    return buf_ == other.buf_;
+  }
   template <typename T>
-    requires(!std::same_as<T, char> && !std::same_as<T, wchar_t> &&
-             !std::same_as<T, char8_t> && !std::same_as<T, char16_t> &&
-             !std::same_as<T, char32_t>)
-  bool operator==(std::span<T> other) const {
-    std::span<const unsigned char> other_span{
-        reinterpret_cast<const unsigned char*>(other.data()),
-        other.size() * sizeof(T)};
-    return std::ranges::equal(buf_, other_span);
+    requires(requires(T t) {
+      typename T::value_type;
+      { t.data() } -> std::convertible_to<const void*>;
+      { t.size() } -> std::convertible_to<size_t>;
+    } && std::is_standard_layout_v<typename T::value_type> &&
+             std::contiguous_iterator<typename T::iterator>)
+  bool operator==(T const& other) const {
+    size_t bytes = other.size() * sizeof(typename T::value_type);
+    return buf_.size() == bytes &&
+           0 == std::memcmp(other.data(), buf_.data(), bytes);
   }
-  template <typename CharT>
-  bool operator==(std::basic_string_view<CharT> other) const {
-    std::span<const unsigned char> other_span{
-        reinterpret_cast<const unsigned char*>(other.data()),
-        other.size() * sizeof(CharT)};
-    return std::ranges::equal(buf_, other_span);
+  bool operator==(std::u8string_view other) const {
+    return this->operator== <std::u8string_view>(other);
   }
-  template <typename CharT>
-  bool operator==(const std::basic_string<CharT>& other) const {
-    std::span<const unsigned char> other_span{
-        reinterpret_cast<const unsigned char*>(other.data()),
-        other.size() * sizeof(CharT)};
-    return std::ranges::equal(buf_, other_span);
+  bool operator==(std::u16string_view other) const {
+    return this->operator== <std::u16string_view>(other);
   }
-  bool operator==(const char* other) const {
-    return this->operator==(std::string_view(other));
+  bool operator==(std::u32string_view other) const {
+    return this->operator== <std::u32string_view>(other);
   }
-  bool operator==(const wchar_t* other) const {
-    return this->operator==(std::wstring_view(other));
+  bool operator==(std::string_view other) const {
+    return this->operator== <std::string_view>(other);
   }
-  bool operator==(const char8_t* other) const {
-    return this->operator==(std::u8string_view(other));
-  }
-  bool operator==(const char16_t* other) const {
-    return this->operator==(std::u16string_view(other));
-  }
-  bool operator==(const char32_t* other) const {
-    return this->operator==(std::u32string_view(other));
+  bool operator==(std::wstring_view other) const {
+    return this->operator== <std::wstring_view>(other);
   }
 
  private:
   std::vector<unsigned char> buf_;
+  std::vector<unsigned char> prepare_;
   callback callback_{nullptr};
 };
 
@@ -1601,16 +1661,20 @@ class FileHandler {
 };
 
 class Buffer {
-  using buffer_container_type = buffer;
-  using value_type = std::variant<std::reference_wrapper<buffer_container_type>,
-                                  buffer_container_type>;
+  using value_type = std::variant<std::reference_wrapper<dynamic_buffer>,
+                                  dynamic_buffer, const_buffer>;
 
  public:
-  explicit Buffer(buffer_container_type& buf)
+  explicit Buffer(dynamic_buffer& buf)
       : buf_{std::make_shared<value_type>(std::ref(buf))},
         pipe_{Pipe::create()} {}
+  explicit Buffer(dynamic_buffer&& buf)
+      : buf_{std::make_shared<value_type>(std::move(buf))},
+        pipe_{Pipe::create()} {}
+  explicit Buffer(const_buffer buf)
+      : buf_{std::make_shared<value_type>(buf)}, pipe_{Pipe::create()} {}
   Buffer()
-      : buf_{std::make_shared<value_type>(buffer_container_type{})},
+      : buf_{std::make_shared<value_type>(dynamic_buffer{})},
         pipe_{Pipe::create()} {}
 
   Buffer(Buffer&& o) = default;
@@ -1620,47 +1684,60 @@ class Buffer {
   Buffer& operator=(Buffer const&) = delete;
 
   [[nodiscard]] ssize_t read_some() const {
-    char tmp[1024];
-    auto size = pipe_.read_some(tmp, sizeof(tmp));
-    if (size > 0) {
-      std::visit(
-          [tmp, size](buffer_container_type& buf) { buf.append(tmp, size); },
-          *buf_);
-    }
-    return size;
+    return std::visit(visitor{[this](dynamic_buffer& buf) {
+                                auto prepare = buf.prepare(1024);
+                                auto size = pipe_.read_some(prepare.data(),
+                                                            prepare.size());
+                                if (size > 0) {
+                                  buf.commit(size);
+                                }
+                                return size;
+                              },
+                              [](const_buffer&) -> ssize_t {
+                                errno = 0;
+                                return -1;
+                              }},
+                      *buf_);
   }
 
   ssize_t write_some() {
     return std::visit(
-        [this](const buffer_container_type& buf) {
-          if (buf.size() <= written_size_) {
-            return static_cast<ssize_t>(0);  // EOF0;
-          }
-          const auto written = pipe_.write_some(buf.data() + written_size_,
-                                                buf.size() - written_size_);
-          if (written > 0) {
-            written_size_ += written;
-          }
-          return written;
-        },
+        visitor{
+            [this](dynamic_buffer& buf) {
+              if (buf.empty()) {
+                return static_cast<ssize_t>(0);  // EOF0;
+              }
+              auto span = buf.span();
+              const auto written = pipe_.write_some(span.data(), span.size());
+              if (written > 0) {
+                buf.consume(written);
+              }
+              return written;
+            },
+
+            [this](const_buffer& buf) -> ssize_t {
+              if (buf.empty()) {
+                return static_cast<ssize_t>(0);  // EOF0;
+              }
+              const auto written = pipe_.write_some(buf.data(), buf.size());
+              if (written > 0) {
+                auto* data = static_cast<const void*>(
+                    static_cast<const unsigned char*>(buf.data()) + written);
+                auto size = buf.size() - written;
+                buf = const_buffer(data, size);
+              }
+              return written;
+            }},
         *buf_);
   }
 
   [[nodiscard]] bool empty() const {
     return std::visit(
-        [this](buffer_container_type const& buf) {
-          return buf.size() <= written_size_;
-        },
+        visitor{[](dynamic_buffer const& buf) { return buf.empty(); },
+                [](const_buffer const& buf) { return buf.empty(); }},
         *buf_);
   }
 
-  buffer& buf() {
-    return std::visit(
-        [](buffer_container_type& value) -> buffer_container_type& {
-          return value;
-        },
-        *buf_);
-  }
   Pipe& pipe() { return pipe_; }
   unique_fd const& rfd() const { return pipe_.rfd(); }
   unique_fd const& wfd() const { return pipe_.wfd(); }
@@ -1672,11 +1749,30 @@ class Buffer {
 
   Buffer dup() const { return Buffer{buf_, pipe_.dup()}; }
 
+  template <typename T>
+  bool is() const {
+    return buf_ && (std::holds_alternative<T>(*buf_) ||
+                    std::holds_alternative<std::reference_wrapper<T>>(*buf_));
+  }
+  template <typename T>
+  T& get() {
+    if (std::holds_alternative<std::reference_wrapper<T>>(*buf_)) {
+      return std::get<std::reference_wrapper<T>>(*buf_).get();
+    }
+    return std::get<T>(*buf_);
+  }
+  template <typename T>
+  const T& get() const {
+    if (std::holds_alternative<std::reference_wrapper<T>>(*buf_)) {
+      return std::get<std::reference_wrapper<T>>(*buf_).get();
+    }
+    return std::get<T>(*buf_);
+  }
+
  private:
   Buffer(std::shared_ptr<value_type> buf, Pipe&& pipe)
       : buf_{std::move(buf)}, pipe_{std::move(pipe)} {}
   std::shared_ptr<value_type> buf_;
-  std::size_t written_size_{0};
   Pipe pipe_;
 };
 
@@ -1691,7 +1787,9 @@ class Redirector {
       : redirect_(std::make_unique<value_type>(std::move(f))) {}
   explicit Redirector(FileHandler f)
       : redirect_(std::make_unique<value_type>(std::move(f))) {}
-  explicit Redirector(buffer& buf)
+  explicit Redirector(dynamic_buffer& buf)
+      : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
+  explicit Redirector(const_buffer buf)
       : redirect_(std::make_unique<value_type>(Buffer(buf))) {}
   Redirector(Redirector&&) noexcept = default;
   Redirector& operator=(Redirector&&) noexcept = default;
@@ -2144,7 +2242,12 @@ struct stdin_redirector {
     return StdinRedirector{File{file, File::OpenType::ReadOnly}};
   }
 #endif
-  StdinRedirector operator<(buffer& buf) const { return StdinRedirector{buf}; }
+  StdinRedirector operator<(dynamic_buffer& buf) const {
+    return StdinRedirector{buf};
+  }
+  StdinRedirector operator<(const_buffer buf) const {
+    return StdinRedirector{buf};
+  }
 };
 
 struct stdout_redirector {
@@ -2162,11 +2265,11 @@ struct stdout_redirector {
     return StdoutRedirector{File{file, File::OpenType::WriteTruncate}};
   }
 #endif
-  StdoutRedirector operator>(buffer& buf) const {
+  StdoutRedirector operator>(dynamic_buffer& buf) const {
     buf.clear();
     return StdoutRedirector{buf};
   }
-  StdoutRedirector operator>>(buffer& buf) const {
+  StdoutRedirector operator>>(dynamic_buffer& buf) const {
     return StdoutRedirector{buf};
   }
 
@@ -2198,11 +2301,11 @@ struct stderr_redirector {
     return StderrRedirector{File{file, File::OpenType::WriteTruncate}};
   }
 #endif
-  StderrRedirector operator>(buffer& buf) const {
+  StderrRedirector operator>(dynamic_buffer& buf) const {
     buf.clear();
     return StderrRedirector{buf};
   }
-  StderrRedirector operator>>(buffer& buf) const {
+  StderrRedirector operator>>(dynamic_buffer& buf) const {
     return StderrRedirector{buf};
   }
   StderrRedirector operator>>(std::string_view file) const {
@@ -3392,7 +3495,9 @@ inline pipeline operator|(pipeline lhs, builder&& rhs) {
 }
 }  // namespace detail
 
-using detail::buffer;
+using detail::const_buffer;
+using detail::dynamic_buffer;
+using buffer = detail::dynamic_buffer;
 
 namespace named_arguments {
 using namespace detail::named_arguments;
@@ -3470,11 +3575,12 @@ inline int $(Args... args) {
 
 template <detail::string_like_type T,
           detail::named_argument_for_capture_type... Args>
-inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    T&& app, std::vector<detail::to_string_t<T>> args, Args&&... named_args) {
+inline std::tuple<int, subprocess::dynamic_buffer, subprocess::dynamic_buffer>
+capture_run(T&& app, std::vector<detail::to_string_t<T>> args,
+            Args&&... named_args) {
   using namespace named_arguments;
   using namespace detail;
-  std::tuple<int, buffer, buffer> result;
+  std::tuple<int, dynamic_buffer, dynamic_buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ =
       run(detail::to_string_t<T>(std::forward<T>(app)), std::move(args),
@@ -3485,8 +3591,8 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 }
 
 template <detail::string_like_type T, detail::capture_run_args_type... Args>
-inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    T&& app, Args... args) {
+inline std::tuple<int, subprocess::dynamic_buffer, subprocess::dynamic_buffer>
+capture_run(T&& app, Args... args) {
   using namespace named_arguments;
   std::tuple<Args...> args_tuple{std::move(args)...};
   using NamedArgTypeList =
@@ -3509,11 +3615,11 @@ inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
 
 template <detail::string_like_type Command,
           detail::capture_run_args_type... Args>
-inline std::tuple<int, subprocess::buffer, subprocess::buffer> capture_run(
-    detail::Shell s, Command&& command, Args&&... args) {
+inline std::tuple<int, subprocess::dynamic_buffer, subprocess::dynamic_buffer>
+capture_run(detail::Shell s, Command&& command, Args&&... args) {
   using namespace named_arguments;
   using namespace detail;
-  std::tuple<int, buffer, buffer> result;
+  std::tuple<int, dynamic_buffer, dynamic_buffer> result;
   auto& [exit_code_, std_out_, std_err_] = result;
   exit_code_ =
       detail::builder(

@@ -118,11 +118,11 @@ TEST(NewgroupTest, CaptureRunStdinIsDevNull) {
 
 // When newgroup = false, the library does NOT auto-redirect stdin to
 // /dev/null.  The inherited stdin (test-runner pipe) may already be at EOF
-// in CI, so we provide explicit input via a buffer and verify the child
+// in CI, so we provide explicit input via a dynamic_buffer and verify the child
 // reads it correctly — proving that stdin is functional, not /dev/null.
 TEST(NewgroupTest, NewgroupFalseStdinNotReplaced) {
-  subprocess::buffer in("hello_stdin");
-  subprocess::buffer out;
+  subprocess::dynamic_buffer in("hello_stdin");
+  subprocess::dynamic_buffer out;
   auto exit_code = run("cat", newgroup = false, std_in<in, std_out> out,
                        $timeout = std::chrono::seconds(3));
 
@@ -132,11 +132,11 @@ TEST(NewgroupTest, NewgroupFalseStdinNotReplaced) {
 
 // With the removal of the implicit constructor-side stdin→/dev/null
 // redirection, run() with newgroup=true also does NOT auto-redirect
-// stdin.  Provide explicit input via a buffer and verify the child reads
-// it correctly — proving that stdin is functional, not /dev/null.
+// stdin.  Provide explicit input via a dynamic_buffer and verify the child
+// reads it correctly — proving that stdin is functional, not /dev/null.
 TEST(NewgroupTest, NewgroupTrueRunDoesNotAutoRedirectStdin) {
-  subprocess::buffer in("hello_stdin_bg");
-  subprocess::buffer out;
+  subprocess::dynamic_buffer in("hello_stdin_bg");
+  subprocess::dynamic_buffer out;
   auto exit_code = run("cat", newgroup = true, std_in<in, std_out> out,
                        $timeout = std::chrono::seconds(3));
 
@@ -286,7 +286,7 @@ TEST(NewgroupTest, CaptureRunNewgroupProducesOutput) {
 //    Verify the pipeline runs correctly and exit codes propagate.
 TEST(NewgroupTest, PipelineWithNewgroupOnWindows) {
   using std::string_literals::operator""s;
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   auto pipeline = subprocess::detail::builder(
                       "cmd.exe"s, {"/c", "echo hello_pipeline&exit /b 0"},
                       newgroup = true) |

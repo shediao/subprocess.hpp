@@ -33,9 +33,9 @@
 #include "./temp_file.h"
 #include "subprocess/subprocess.hpp"
 
-using subprocess::buffer;
 using subprocess::capture_run;
 using subprocess::detach_run;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 using subprocess::named_arguments::std_err;
 using subprocess::named_arguments::std_out;
@@ -86,7 +86,7 @@ std::vector<std::string> detach_cmd(const std::string& label,
 // ===========================================================================
 
 TEST(StringLikeRunTest, ConstCharPtr) {
-  buffer out;
+  dynamic_buffer out;
   auto [app, a1, a2] = echo_cmd("const_char_ptr");
   int ec = run(static_cast<const char*>(app), static_cast<const char*>(a1),
                static_cast<const char*>(a2), std_out > out);
@@ -95,7 +95,7 @@ TEST(StringLikeRunTest, ConstCharPtr) {
 }
 
 TEST(StringLikeRunTest, CharPtr) {
-  buffer out;
+  dynamic_buffer out;
   auto parts = echo_cmd("char_ptr");
 #if defined(_WIN32)
   char app[] = "cmd.exe";
@@ -121,7 +121,7 @@ TEST(StringLikeRunTest, CharPtr) {
 }
 
 TEST(StringLikeRunTest, StdString) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   std::string app("cmd.exe");
   std::string a1("/c");
@@ -137,7 +137,7 @@ TEST(StringLikeRunTest, StdString) {
 }
 
 TEST(StringLikeRunTest, StdStringView) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   std::string_view app("cmd.exe");
   std::string_view a1("/c");
@@ -153,7 +153,7 @@ TEST(StringLikeRunTest, StdStringView) {
 }
 
 TEST(StringLikeRunTest, RvalueStdString) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ec =
       run(std::string("cmd.exe"), std::string("/c"),
@@ -167,7 +167,7 @@ TEST(StringLikeRunTest, RvalueStdString) {
 }
 
 TEST(StringLikeRunTest, MixedNarrowTypes) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   char app[] = "cmd.exe";
   std::string a1("/c");
@@ -184,7 +184,7 @@ TEST(StringLikeRunTest, MixedNarrowTypes) {
 
 TEST(StringLikeRunTest, StringLiteralCArrayDecay) {
   // String literals decay to const char* — must work directly
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ec = run("cmd.exe", "/c", "<nul set /p=literal_decay&exit /b 0",
                std_out > out);
@@ -207,7 +207,7 @@ TEST(StringLikeRunTest, SingleArgumentCommandOnly) {
 }
 
 TEST(StringLikeRunTest, ManyMixedArgs) {
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   const char* app = "cmd.exe";
   std::string a1("/c");
@@ -455,7 +455,7 @@ TEST(StringLikeDetachRunTest, StringLiteralCArrayDecay) {
 // --- subprocess::run with wide types ---
 
 TEST(StringLikeRunWideTest, ConstWCharPtr) {
-  buffer out;
+  dynamic_buffer out;
   const wchar_t* app = L"cmd.exe";
   const wchar_t* a1 = L"/c";
   const wchar_t* a2 = L"<nul set /p=w_const_char_ptr&exit /b 0";
@@ -465,7 +465,7 @@ TEST(StringLikeRunWideTest, ConstWCharPtr) {
 }
 
 TEST(StringLikeRunWideTest, WCharPtr) {
-  buffer out;
+  dynamic_buffer out;
   wchar_t app[] = L"cmd.exe";
   wchar_t a1[] = L"/c";
   wchar_t a2[] = L"<nul set /p=w_char_ptr&exit /b 0";
@@ -475,7 +475,7 @@ TEST(StringLikeRunWideTest, WCharPtr) {
 }
 
 TEST(StringLikeRunWideTest, StdWString) {
-  buffer out;
+  dynamic_buffer out;
   std::wstring app(L"cmd.exe");
   std::wstring a1(L"/c");
   std::wstring a2(L"<nul set /p=w_std_wstring&exit /b 0");
@@ -485,7 +485,7 @@ TEST(StringLikeRunWideTest, StdWString) {
 }
 
 TEST(StringLikeRunWideTest, StdWStringView) {
-  buffer out;
+  dynamic_buffer out;
   std::wstring_view app(L"cmd.exe");
   std::wstring_view a1(L"/c");
   std::wstring_view a2(L"<nul set /p=w_string_view&exit /b 0");
@@ -495,7 +495,7 @@ TEST(StringLikeRunWideTest, StdWStringView) {
 }
 
 TEST(StringLikeRunWideTest, RvalueStdWString) {
-  buffer out;
+  dynamic_buffer out;
   int ec = run(std::wstring(L"cmd.exe"), std::wstring(L"/c"),
                std::wstring(L"<nul set /p=w_rvalue&exit /b 0"), std_out > out);
   ASSERT_EQ(ec, 0);
@@ -503,7 +503,7 @@ TEST(StringLikeRunWideTest, RvalueStdWString) {
 }
 
 TEST(StringLikeRunWideTest, MixedWideTypes) {
-  buffer out;
+  dynamic_buffer out;
   wchar_t app[] = L"cmd.exe";
   std::wstring a1(L"/c");
   std::wstring_view a2(L"<nul set /p=w_mixed&exit /b 0");
@@ -513,7 +513,7 @@ TEST(StringLikeRunWideTest, MixedWideTypes) {
 }
 
 TEST(StringLikeRunWideTest, WideStringLiteralDecay) {
-  buffer out;
+  dynamic_buffer out;
   int ec =
       run(L"cmd.exe", L"/c", L"<nul set /p=w_literal&exit /b 0", std_out > out);
   ASSERT_EQ(ec, 0);
@@ -699,7 +699,7 @@ TEST(StringLikeDetachRunWideTest, WideStringLiteralDecay) {
 // ===========================================================================
 
 TEST(StringLikeEdgeCaseTest, RunWithStderrCaptureMixedTypes) {
-  buffer out, err;
+  dynamic_buffer out, err;
 #if defined(_WIN32)
   const char* app = "cmd.exe";
   std::string a1("/c");
@@ -727,7 +727,7 @@ TEST(StringLikeEdgeCaseTest, DetachRunWithVectorForm) {
 
 TEST(StringLikeEdgeCaseTest, RunWithOnlyNamedArgs) {
   // All "arguments" are named args; the command is a single string
-  buffer out;
+  dynamic_buffer out;
 #if defined(_WIN32)
   int ec = run(std::string("cmd.exe"), std::string("/c"),
                std::string("<nul set /p=only_named&exit /b 0"), std_out > out);

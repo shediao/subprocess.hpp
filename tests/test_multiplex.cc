@@ -6,11 +6,11 @@
  *
  * Each backend is tested with:
  *   - All handles nullopt (no-op)
- *   - Only stdin active  (write buffer → pipe)
+ *   - Only stdin active  (write dynamic_buffer → pipe)
  *   - Only stdout active (read pipe → buffer)
  *   - Only stderr active (read pipe → buffer)
  *   - All three active simultaneously
- *   - Empty stdin buffer + stdout
+ *   - Empty stdin dynamic_buffer + stdout
  *   - Larger data transfer (stdin + stdout)
  */
 
@@ -30,7 +30,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-using subprocess::buffer;
+using subprocess::dynamic_buffer;
 using subprocess::detail::Buffer;
 using subprocess::detail::INVALID_NATIVE_HANDLE_VALUE;
 using subprocess::detail::StderrRedirector;
@@ -53,7 +53,7 @@ namespace {
 // Read everything from a fd (blocking) and append to |drained|.
 // Used to verify data that was written *through* the pipe by the multiplexer
 // (stdin side).
-void drain_fd(int fd, buffer& drained) {
+void drain_fd(int fd, dynamic_buffer& drained) {
   char buf[256];
   ssize_t n;
   while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
@@ -61,19 +61,20 @@ void drain_fd(int fd, buffer& drained) {
   }
   ::close(fd);
 }
-void drain_fd(subprocess::detail::unique_fd const& fd, buffer& drained) {
+void drain_fd(subprocess::detail::unique_fd const& fd,
+              dynamic_buffer& drained) {
   drain_fd(fd.get(), drained);
 }
 
 // Write |data| to a fd (blocking), then close it to signal EOF.
 // Used to feed data *into* the pipe for the multiplexer to read
 // (stdout / stderr side).
-void feed_and_close(int fd, const buffer& data) {
-  size_t written = 0;
-  while (written < data.size()) {
-    ssize_t n = ::write(fd, data.data() + written, data.size() - written);
+void feed_and_close(int fd, dynamic_buffer& data) {
+  while (!data.empty()) {
+    auto span = data.span();
+    ssize_t n = ::write(fd, span.data(), span.size());
     if (n > 0) {
-      written += static_cast<size_t>(n);
+      data.consume(static_cast<size_t>(n));
     } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
       std::this_thread::yield();
       continue;
@@ -83,14 +84,17 @@ void feed_and_close(int fd, const buffer& data) {
   }
   ::close(fd);
 }
-void feed_and_close(subprocess::detail::unique_fd const& fd,
-                    const buffer& data) {
+void feed_and_close(subprocess::detail::unique_fd& fd, dynamic_buffer& data) {
   feed_and_close(fd.get(), data);
 }
 
-// Make a buffer pre-filled with |s|.
-buffer make_buf(const std::string& s) {
-  return buffer(s);  // string → string_view implicit conversion
+void feed_and_close(subprocess::detail::unique_fd& fd, dynamic_buffer&& data) {
+  feed_and_close(fd.get(), data);
+}
+
+// Make a dynamic_buffer pre-filled with |s|.
+dynamic_buffer make_buf(const std::string& s) {
+  return dynamic_buffer(s);  // string → string_view implicit conversion
 }
 
 // Generate a deterministic pattern of length |n| using alternating letters.
@@ -132,13 +136,13 @@ TEST_F(MultiplexPollTest, AllHandlesNullopt) {
 
 TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
   auto input_str = std::string("hello from stdin poll");
-  buffer in_data = make_buf(input_str);
+  dynamic_buffer in_data = make_buf(input_str);
   StdinRedirector in_redir(in_data);
   StdoutRedirector out_redir;
   StderrRedirector err_redir;
   auto& in_buf = in_redir.get<Buffer>();
 
-  buffer drained;
+  dynamic_buffer drained;
   std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
 
   read_write_to_buffer_use_poll(in_redir, out_redir, err_redir);
@@ -150,8 +154,8 @@ TEST_F(MultiplexPollTest, OnlyStdinActiveWritesData) {
 
 TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
   auto output_str = std::string("hello from stdout poll");
-  buffer out_data = make_buf(output_str);
-  buffer out_buf_data;  // empty buffer, fills via redirector
+  dynamic_buffer out_data = make_buf(output_str);
+  dynamic_buffer out_buf_data;  // empty buffer, fills via redirector
   StdinRedirector in_redir;
   StdoutRedirector out_redir(out_buf_data);
   StderrRedirector err_redir;
@@ -168,8 +172,8 @@ TEST_F(MultiplexPollTest, OnlyStdoutActiveReadsData) {
 
 TEST_F(MultiplexPollTest, OnlyStderrActiveReadsData) {
   auto err_str = std::string("hello from stderr poll");
-  buffer err_data = make_buf(err_str);
-  buffer err_buf_data;  // empty buffer, fills via redirector
+  dynamic_buffer err_data = make_buf(err_str);
+  dynamic_buffer err_buf_data;  // empty buffer, fills via redirector
   StdinRedirector in_redir;
   StdoutRedirector out_redir;
   StderrRedirector err_redir(err_buf_data);
@@ -189,9 +193,9 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   auto output_str = std::string("stdout-data-poll");
   auto err_str = std::string("stderr-data-poll");
 
-  buffer in_data = make_buf(input_str);
-  buffer out_buf_data;
-  buffer err_buf_data;
+  dynamic_buffer in_data = make_buf(input_str);
+  dynamic_buffer out_buf_data;
+  dynamic_buffer err_buf_data;
   StdinRedirector in_redir(in_data);
   StdoutRedirector out_redir(out_buf_data);
   StderrRedirector err_redir(err_buf_data);
@@ -199,7 +203,7 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
   auto& out_buf = out_redir.get<Buffer>();
   auto& err_buf = err_redir.get<Buffer>();
 
-  buffer drained;
+  dynamic_buffer drained;
   std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
   std::thread out_feeder(
       [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
@@ -225,8 +229,8 @@ TEST_F(MultiplexPollTest, AllThreeActive) {
 
 TEST_F(MultiplexPollTest, EmptyStdinBuffer) {
   auto output_str = std::string("only-stdout-poll");
-  buffer in_buf_data;  // empty buffer for stdin
-  buffer out_buf_data;
+  dynamic_buffer in_buf_data;  // empty dynamic_buffer for stdin
+  dynamic_buffer out_buf_data;
   StdinRedirector in_redir(in_buf_data);
   StdoutRedirector out_redir(out_buf_data);
   StderrRedirector err_redir;
@@ -251,15 +255,15 @@ TEST_F(MultiplexPollTest, LargerDataTransfer) {
   auto input_str = make_pattern(128 * 1024, 'A');  // 128 KiB
   auto output_str = make_pattern(64 * 1024, 'a');  //  64 KiB
 
-  buffer in_data = make_buf(input_str);
-  buffer out_buf_data;
+  dynamic_buffer in_data = make_buf(input_str);
+  dynamic_buffer out_buf_data;
   StdinRedirector in_redir(in_data);
   StdoutRedirector out_redir(out_buf_data);
   StderrRedirector err_redir;
   auto& in_buf = in_redir.get<Buffer>();
   auto& out_buf = out_redir.get<Buffer>();
 
-  buffer drained;
+  dynamic_buffer drained;
   std::thread drain_thread([&]() { drain_fd(in_buf.rfd(), drained); });
   std::thread feeder(
       [&]() { feed_and_close(out_buf.wfd(), make_buf(output_str)); });
@@ -295,7 +299,7 @@ TEST_F(MultiplexPollTest, FullLifecycleStdoutBothEndsClosed) {
   // Simulates close_child_end (close child write end) + pump (close parent
   // read end).
   auto output_str = std::string("lifecycle_stdout_poll");
-  buffer out_buf_data;
+  dynamic_buffer out_buf_data;
   StdinRedirector in_redir;
   StdoutRedirector out_redir(out_buf_data);
   StderrRedirector err_redir;
@@ -317,7 +321,7 @@ TEST_F(MultiplexPollTest, FullLifecycleStdoutBothEndsClosed) {
 TEST_F(MultiplexPollTest, FullLifecycleStderrBothEndsClosed) {
   // stderr: child writes to wfd, parent reads from rfd.
   auto err_str = std::string("lifecycle_stderr_poll");
-  buffer err_buf_data;
+  dynamic_buffer err_buf_data;
   StdinRedirector in_redir;
   StdoutRedirector out_redir;
   StderrRedirector err_redir(err_buf_data);
@@ -337,7 +341,7 @@ TEST_F(MultiplexPollTest, FullLifecycleStderrBothEndsClosed) {
 TEST_F(MultiplexPollTest, FullLifecycleStdinBothEndsClosed) {
   // stdin: parent writes to wfd, child reads from rfd.
   auto input_str = std::string("lifecycle_stdin_poll");
-  buffer in_data = make_buf(input_str);
+  dynamic_buffer in_data = make_buf(input_str);
   StdinRedirector in_redir(in_data);
   StdoutRedirector out_redir;
   StderrRedirector err_redir;
@@ -346,7 +350,7 @@ TEST_F(MultiplexPollTest, FullLifecycleStdinBothEndsClosed) {
   // in the real subprocess the child holds a dup'd copy of the read end
   // and close_child_end() only closes the parent's copy.
 
-  buffer drained;
+  dynamic_buffer drained;
   std::thread drain_thread([&]() {
     drain_fd(in_buf.rfd(), drained);
     in_buf.close_read();  // child closes its end after reading
@@ -366,9 +370,9 @@ TEST_F(MultiplexPollTest, FullLifecycleAllThreeAllHandlesClosed) {
   auto output_str = std::string("out_lifecycle_poll");
   auto err_str = std::string("err_lifecycle_poll");
 
-  buffer in_data = make_buf(input_str);
-  buffer out_buf_data;
-  buffer err_buf_data;
+  dynamic_buffer in_data = make_buf(input_str);
+  dynamic_buffer out_buf_data;
+  dynamic_buffer err_buf_data;
   StdinRedirector in_redir(in_data);
   StdoutRedirector out_redir(out_buf_data);
   StderrRedirector err_redir(err_buf_data);
@@ -386,7 +390,7 @@ TEST_F(MultiplexPollTest, FullLifecycleAllThreeAllHandlesClosed) {
   err_buf.close_write();  // sync unique_fd
 
   // Drain thread for stdin (simulates child reading).
-  buffer drained;
+  dynamic_buffer drained;
   std::thread drain_thread([&]() {
     drain_fd(in_buf.rfd(), drained);
     in_buf.close_read();

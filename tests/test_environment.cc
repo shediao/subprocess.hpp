@@ -22,7 +22,7 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 
 static std::optional<std::string> home() {
@@ -59,7 +59,7 @@ static std::optional<std::string> home() {
 // ===========================================================================
 
 TEST(EnvironmentTest, CwdSetToHome) {
-  buffer out;
+  dynamic_buffer out;
   auto home_dir = home();
 
 #if !defined(_WIN32)
@@ -82,7 +82,7 @@ TEST(EnvironmentTest, CwdSetToHome) {
 }
 
 TEST(EnvironmentTest, CwdSetToHomeVariadic) {
-  buffer out;
+  dynamic_buffer out;
   auto home_dir = home();
 
 #if !defined(_WIN32)
@@ -105,7 +105,7 @@ TEST(EnvironmentTest, CwdSetToHomeVariadic) {
 }
 
 TEST(EnvironmentTest, CwdSetToTmpAndPwd) {
-  buffer stdout_buf;
+  dynamic_buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code =
       run("cmd.exe", "/c", "cd", cwd = "C:\\Windows", std_out > stdout_buf);
@@ -137,7 +137,7 @@ TEST(EnvironmentTest, CwdSetAndReadRelativeFile) {
       std::filesystem::path(temp_file.path()).filename().string();
   temp_file.write(std::string{"Relative Content"});
 
-  buffer stdout_buf;
+  dynamic_buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code = run("cmd.exe", "/c", "type " + relative_file_name,
                       cwd = temp_dir_path, std_out > stdout_buf);
@@ -164,7 +164,7 @@ TEST(EnvironmentTest, CwdSetAndReadRelativeFile) {
 // ===========================================================================
 
 TEST(EnvironmentTest, EnvOverrideCheckValue) {
-  buffer stdout_buf;
+  dynamic_buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code =
       run("cmd.exe", "/c", "<nul set /p=%MY_TEST_VAR%&exit /b 0",
@@ -181,7 +181,7 @@ TEST(EnvironmentTest, EnvOverrideCheckValue) {
 }
 
 TEST(EnvironmentTest, EnvOverrideClearsOtherVars) {
-  buffer stdout_buf;
+  dynamic_buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code = run(
       "cmd.exe", "/c",
@@ -206,7 +206,7 @@ fi
 }
 
 TEST(EnvironmentTest, EnvVectorForm) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("/usr/bin/printenv", "env1",
                  subprocess::named_arguments::env = {{"env1", "value1"}},
@@ -227,7 +227,7 @@ TEST(EnvironmentTest, EnvVectorForm) {
 // ===========================================================================
 
 TEST(EnvironmentTest, EnvAppendCheckValue) {
-  buffer stdout_buf;
+  dynamic_buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code =
       run("cmd.exe", "/c",
@@ -248,7 +248,7 @@ TEST(EnvironmentTest, EnvAppendCheckValue) {
 }
 
 TEST(EnvironmentTest, EnvAppendDollarForm) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $env1", $env += {{"env1", "value1"}},
                  $stdout > out);
@@ -265,7 +265,7 @@ TEST(EnvironmentTest, EnvAppendDollarForm) {
 // ===========================================================================
 
 TEST(EnvironmentTest, EnvItemAppendPath) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $PATH", $env["PATH"] += "XXXXXXXXX",
                  $stdout > out);
@@ -288,7 +288,7 @@ TEST(EnvironmentTest, EnvItemAppendPath) {
 // Basic prepend: verify the prepended value is present and some original
 // content follows (original weak test; kept for regression coverage).
 TEST(EnvironmentTest, EnvItemPrependPath) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $PATH", $env["PATH"] <<= "XXXXXXXXX",
                  $stdout > out);
@@ -321,7 +321,7 @@ TEST(EnvironmentTest, EnvItemPrependPath) {
 // Verify prepend produces VALUE:ORIGINAL format using a known base value
 // set via Env.  This isolates the prepend logic from the ambient PATH.
 TEST(EnvironmentTest, EnvItemPrependWithKnownBaseValue) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $TEST_PREPEND_VAR",
                  $env = {{"TEST_PREPEND_VAR", "original"}},
@@ -340,7 +340,7 @@ TEST(EnvironmentTest, EnvItemPrependWithKnownBaseValue) {
 // Verify prepend does NOT insert a leading separator before the value.
 // The buggy code (separator-first insert) produced ":VALUEORIGINAL".
 TEST(EnvironmentTest, EnvItemPrependNoLeadingSeparator) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $TEST_NOLSEP",
                  $env = {{"TEST_NOLSEP", "base"}},
@@ -366,7 +366,7 @@ TEST(EnvironmentTest, EnvItemPrependNoLeadingSeparator) {
 // Verify prepend into a non-existent key creates the key with just the
 // prepended value (no separator).
 TEST(EnvironmentTest, EnvItemPrependNewKey) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $TEST_PREPEND_NEW",
                  $env["TEST_PREPEND_NEW"] <<= "only_me", $stdout > out);
@@ -383,7 +383,7 @@ TEST(EnvironmentTest, EnvItemPrependNewKey) {
 // Verify prepend + append interactions: prepend then append produces the
 // correct sequence VALUE:original:suffix.
 TEST(EnvironmentTest, EnvItemPrependThenAppend) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $TEST_COMBO",
                  $env = {{"TEST_COMBO", "mid"}}, $env["TEST_COMBO"] <<= "head",
@@ -402,7 +402,7 @@ TEST(EnvironmentTest, EnvItemPrependThenAppend) {
 // Verify prepend with empty base value: should be just "VALUE" (no leading
 // or trailing separator).
 TEST(EnvironmentTest, EnvItemPrependEmptyBase) {
-  buffer out;
+  dynamic_buffer out;
 #if !defined(_WIN32)
   auto ret = run("bash", "-c", "echo -n $TEST_EMPTY_BASE",
                  $env = {{"TEST_EMPTY_BASE", ""}},

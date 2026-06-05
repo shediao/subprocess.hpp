@@ -30,7 +30,7 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 #if defined(_WIN32)
 using subprocess::detail::ssize_t;
@@ -40,13 +40,15 @@ using std::string_literals::operator""s;
 
 namespace S = subprocess::detail;
 
-static void write_all_and_close(S::unique_fd& fd, buffer const& write_data) {
+static void write_all_and_close(S::unique_fd& fd,
+                                dynamic_buffer const& write_data) {
   auto write_span = write_data.span();
   S::write_all(fd, write_span.data(), write_span.size());
   fd.close();
 }
 
-static void read_from_native_handle(S::unique_fd const& fd, buffer& read_data) {
+static void read_from_native_handle(S::unique_fd const& fd,
+                                    dynamic_buffer& read_data) {
   char buf[1024];
   ssize_t read;
   do {
@@ -85,12 +87,12 @@ TEST(DupTest, PipeDupReadFromDuppedEnd) {
   auto p2 = p1.dup();
 
   const char* msg = "hello_dup";
-  write_all_and_close(p1.wfd(), buffer{msg});
+  write_all_and_close(p1.wfd(), dynamic_buffer{msg});
 
   // p2.wfd() still shares the same write-end; close it to signal EOF
   p2.close_write();
 
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
@@ -101,12 +103,12 @@ TEST(DupTest, PipeDupReadFromOriginalEnd) {
   auto p2 = p1.dup();
 
   const char* msg = "hello_reverse";
-  write_all_and_close(p2.wfd(), buffer{msg});
+  write_all_and_close(p2.wfd(), dynamic_buffer{msg});
 
   // p1.wfd() still shares the same write-end; close it to signal EOF
   p1.close_write();
 
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(p1.rfd(), out);
   ASSERT_EQ(out, msg);
 }
@@ -120,14 +122,14 @@ TEST(DupTest, PipeDupCloseOriginalReadStillWorks) {
   auto p2 = p1.dup();
 
   const char* msg = "before_close";
-  write_all_and_close(p1.wfd(), buffer{msg});
+  write_all_and_close(p1.wfd(), dynamic_buffer{msg});
 
   // Close BOTH write ends; close original read end
   p2.close_write();
   p1.close_read();
 
   // Duped read end should still read the data
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
@@ -144,9 +146,9 @@ TEST(DupTest, PipeDupCloseDuppedWriteStillWorks) {
   p2.close_write();
 
   const char* msg = "close_dup_write";
-  write_all_and_close(p1.wfd(), buffer{msg});
+  write_all_and_close(p1.wfd(), dynamic_buffer{msg});
 
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(p2.rfd(), out);
   ASSERT_EQ(out, msg);
 }
@@ -185,11 +187,11 @@ TEST(DupTest, PipeDupChained) {
 
   // Write through p3's write, close p1 and p2 writes too, read through p1
   const char* msg = "chained_dup";
-  write_all_and_close(p3.wfd(), buffer{msg});
+  write_all_and_close(p3.wfd(), dynamic_buffer{msg});
   p1.close_write();
   p2.close_write();
 
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(p1.rfd(), out);
   ASSERT_EQ(out, msg);
 }
@@ -217,7 +219,7 @@ TEST(DupTest, PipeDupWithSubprocess) {
   // to the same file description; close it to signal EOF.
   p2.close_write();
 
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(p2.rfd(), out);
 
 #if defined(_WIN32)
@@ -269,7 +271,7 @@ TEST(DupTest, FileDupReadContent) {
   auto f2 = f1.dup();
 
   // Read from duped fd
-  buffer out2;
+  dynamic_buffer out2;
   auto& fd2 = f2.fd();
   read_from_native_handle(fd2, out2);
   ASSERT_EQ(out2, "file_dup_subprocess");
@@ -325,7 +327,7 @@ TEST(DupTest, FileHandlerDupFunctional) {
   auto pipe = S::Pipe::create();
 
   const char* msg = "filehandler_dup_test";
-  write_all_and_close(pipe.wfd(), buffer{msg});
+  write_all_and_close(pipe.wfd(), dynamic_buffer{msg});
 
   S::FileHandler fh(pipe.rfd().release());
   auto fh2 = fh.dup();
@@ -333,7 +335,7 @@ TEST(DupTest, FileHandlerDupFunctional) {
   // Close original, read through duped
   fh.close();
 
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(fh2.fd(), out);
   ASSERT_EQ(out, msg);
 
@@ -345,12 +347,12 @@ TEST(DupTest, FileHandlerDupFunctional) {
 // ===========================================================================
 
 TEST(DupTest, BufferDupSharedBuffer) {
-  buffer out_buf;
+  dynamic_buffer out_buf;
   S::Buffer buf1(out_buf);
   auto buf2 = buf1.dup();
 
   // Both should share the same underlying buffer
-  ASSERT_EQ(&buf1.buf(), &buf2.buf());
+  ASSERT_EQ(&buf1.get<dynamic_buffer>(), &buf2.get<dynamic_buffer>());
 
   // But have different pipes
   ASSERT_NE(buf1.pipe().rfd(), buf2.pipe().rfd());
@@ -362,7 +364,7 @@ TEST(DupTest, BufferDupOwnedBuffer) {
   auto buf2 = buf1.dup();
 
   // Both should share the same underlying buffer
-  ASSERT_EQ(&buf1.buf(), &buf2.buf());
+  ASSERT_EQ(&buf1.get<dynamic_buffer>(), &buf2.get<dynamic_buffer>());
 
   // But have different pipes
   ASSERT_NE(buf1.pipe().rfd(), buf2.pipe().rfd());
@@ -374,12 +376,12 @@ TEST(DupTest, BufferDupOwnedBuffer) {
 // ===========================================================================
 
 TEST(DupTest, BufferDupIntegration) {
-  buffer out_buf;
+  dynamic_buffer out_buf;
   S::Buffer buf(out_buf);
   auto buf2 = buf.dup();
 
   // Both wrap the same underlying buffer
-  ASSERT_EQ(&buf.buf(), &buf2.buf());
+  ASSERT_EQ(&buf.get<dynamic_buffer>(), &buf2.get<dynamic_buffer>());
 
   // buf and buf2 have independent pipes
   ASSERT_NE(buf.pipe().rfd(), buf2.pipe().rfd());
@@ -404,7 +406,7 @@ TEST(DupTest, BufferDupIntegration) {
 // ===========================================================================
 
 TEST(DupTest, BufferDupIndependentPipes) {
-  buffer shared;
+  dynamic_buffer shared;
   S::Buffer buf1(shared);
   auto buf2 = buf1.dup();
 
@@ -413,7 +415,7 @@ TEST(DupTest, BufferDupIndependentPipes) {
   ASSERT_NE(buf1.pipe().wfd(), buf2.pipe().wfd());
 
   // Write through buf1's pipe, close both write ends, read via buf2's pipe
-  write_all_and_close(buf1.pipe().wfd(), buffer{"from_buf1"});
+  write_all_and_close(buf1.pipe().wfd(), dynamic_buffer{"from_buf1"});
   buf2.pipe().close_write();
 
   read_from_native_handle(buf2.pipe().rfd(), shared);
@@ -470,7 +472,7 @@ TEST(DupTest, RedirectorDupFileHandler) {
 }
 
 TEST(DupTest, RedirectorDupBuffer) {
-  buffer buf;
+  dynamic_buffer buf;
   S::StderrRedirector redir(buf);
 
   auto duped = redir.dup();
@@ -478,7 +480,7 @@ TEST(DupTest, RedirectorDupBuffer) {
 
   auto* duped_buffer = std::get_if<S::Buffer>(duped.get());
   ASSERT_NE(duped_buffer, nullptr);
-  ASSERT_EQ(&duped_buffer->buf(), &buf);
+  ASSERT_EQ(&duped_buffer->get<dynamic_buffer>(), &buf);
 }
 
 TEST(DupTest, RedirectorDupNullRedirector) {
@@ -509,7 +511,7 @@ TEST(DupTest, PipeDupBeforeSubprocessPattern) {
   // p's fds were closed by the child; p_reader is independent.
   p_reader.close_write();
 
-  buffer out;
+  dynamic_buffer out;
   read_from_native_handle(p_reader.rfd(), out);
 
 #if defined(_WIN32)

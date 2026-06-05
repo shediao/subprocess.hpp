@@ -19,8 +19,8 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
 using subprocess::capture_run;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 
 // ===========================================================================
@@ -28,8 +28,8 @@ using subprocess::run;
 // ===========================================================================
 
 TEST(IOTest, CaptureStdout) {
-  buffer out;
-  buffer err;
+  dynamic_buffer out;
+  dynamic_buffer err;
 
 #if !defined(_WIN32)
   run("bash", "-c", "echo -n 123; echo -n '345' >&2", std_out > out,
@@ -64,7 +64,7 @@ TEST(IOTest, CaptureStdout) {
 }
 
 TEST(IOTest, CaptureStdoutBasic) {
-  buffer stdout_buf;
+  dynamic_buffer stdout_buf;
   int exit_code = run(
 #if defined(_WIN32)
       "cmd.exe", "/c", "<nul set /p=Hello Stdout&exit /b 0"
@@ -78,7 +78,7 @@ TEST(IOTest, CaptureStdoutBasic) {
 }
 
 TEST(IOTest, CaptureStderrBasic) {
-  buffer stderr_buf;
+  dynamic_buffer stderr_buf;
   int exit_code = run(
 
 #if defined(_WIN32)
@@ -93,8 +93,8 @@ TEST(IOTest, CaptureStderrBasic) {
 }
 
 TEST(IOTest, CaptureBothStdoutAndStderr) {
-  buffer stdout_buf;
-  buffer stderr_buf;
+  dynamic_buffer stdout_buf;
+  dynamic_buffer stderr_buf;
   int exit_code = run(
 
 #if defined(_WIN32)
@@ -110,7 +110,7 @@ TEST(IOTest, CaptureBothStdoutAndStderr) {
 }
 
 TEST(IOTest, CaptureEmptyStdout) {
-  buffer stdout_buf;
+  dynamic_buffer stdout_buf;
   int exit_code = run(
 
 #if defined(_WIN32)
@@ -125,7 +125,7 @@ TEST(IOTest, CaptureEmptyStdout) {
 }
 
 TEST(IOTest, CaptureEmptyStderr) {
-  buffer stderr_buf;
+  dynamic_buffer stderr_buf;
   int exit_code = run(
 #if defined(_WIN32)
       "cmd.exe", "/c", "exit /b 0"
@@ -198,7 +198,7 @@ TEST(IOTest, CaptureRunLargeData) {
   {
     auto [exit_code, out, err] =
         capture_run("powershell", "-NoProfile", "-c", "'A'*400MB");
-    ASSERT_EQ(exit_code, 0) << err.data();
+    ASSERT_EQ(exit_code, 0);
     ASSERT_EQ(out.size(), (400 * 1024 * 1024 + 2));  // \r\n
   }
 #endif
@@ -209,22 +209,16 @@ TEST(IOTest, CaptureRunLargeData) {
 // ===========================================================================
 
 TEST(IOTest, StdinFromBuffer) {
-  buffer in{"123"};
-  buffer out;
+  dynamic_buffer in{"123"};
+  dynamic_buffer out;
 #if !defined(_WIN32)
   run("/bin/cat", "-", std_in<in, std_out> out);
-  ASSERT_EQ(in, out);
+  ASSERT_EQ("123", out);
 #else
   run("more.com", std_in<in, std_out> out);
-  auto out_span = out.span();
-  auto it = std::find_if(out_span.rbegin(), out_span.rend(),
-                         [](char c) { return c != '\r' && c != '\n'; });
-  if (it != out_span.rend()) {
-    out_span = out_span.subspan(0, it.base() - out_span.begin());
-  }
-  ASSERT_TRUE(
-      std::equal(in.begin(), in.end(), out_span.begin(), out_span.end()));
+  ASSERT_TRUE(out.to_string().starts_with("123"));
 #endif
+  ASSERT_TRUE(in.empty());
 }
 
 // ===========================================================================
@@ -233,7 +227,7 @@ TEST(IOTest, StdinFromBuffer) {
 
 TEST(IOTest, RedirectStdoutToFileOverwrite) {
   TempFile tmp_file;
-  buffer content{"123"};
+  dynamic_buffer content{"123"};
 #if !defined(_WIN32)
   run("echo", "-n", content.to_string(), std_out > tmp_file.path());
 #else
@@ -245,7 +239,7 @@ TEST(IOTest, RedirectStdoutToFileOverwrite) {
 
 TEST(IOTest, RedirectStderrToFileOverwrite) {
   TempFile tmp_file;
-  buffer content{"123"};
+  dynamic_buffer content{"123"};
 #if !defined(_WIN32)
   run("bash", "-c", "echo -n " + content.to_string() + " >&2",
       std_err > tmp_file.path());
@@ -293,7 +287,7 @@ TEST(IOTest, RedirectStderrToFileOverwrite2) {
 TEST(IOTest, RedirectStdoutToFileAppend) {
   TempFile tmp_file;
   tmp_file.write(std::string{"000"});
-  buffer content{"123"};
+  dynamic_buffer content{"123"};
 #if !defined(_WIN32)
   run("echo", "-n", content.to_string(), std_out >> tmp_file.path());
 #else
@@ -306,7 +300,7 @@ TEST(IOTest, RedirectStdoutToFileAppend) {
 TEST(IOTest, RedirectStderrToFileAppend) {
   TempFile tmp_file;
   tmp_file.write(std::string{"999"});
-  buffer content{"123"};
+  dynamic_buffer content{"123"};
 #if !defined(_WIN32)
   run("bash", "-c", "echo -n " + content.to_string() + " >&2",
       std_err >> tmp_file.path());

@@ -48,7 +48,7 @@ TEST(ExecutableResolutionTest, CommandWithExtension) {
   ASSERT_EQ(exit_code, 7);
 #else
   // "echo" is a shell built-in but also exists as /bin/echo
-  subprocess::buffer out;
+  subprocess::dynamic_buffer out;
   int exit_code = run("echo", "hello", std_out > out);
   ASSERT_EQ(exit_code, 0);
   ASSERT_FALSE(out.empty());

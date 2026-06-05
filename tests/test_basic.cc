@@ -129,7 +129,7 @@ exit 0
 // Multi-argument commands
 // ===========================================================================
 TEST(BasicTest, CommandWithMultipleArguments) {
-  subprocess::buffer stdout_buf;
+  subprocess::dynamic_buffer stdout_buf;
   int exit_code = run(
 #if defined(_WIN32)
       "cmd.exe", "/c", "echo one two words three"
@@ -150,7 +150,7 @@ TEST(BasicTest, CommandWithMultipleArguments) {
 // Command resolved from system PATH
 // ===========================================================================
 TEST(BasicTest, CommandFromSystemPath) {
-  subprocess::buffer stdout_buf;
+  subprocess::dynamic_buffer stdout_buf;
 #if defined(_WIN32)
   int exit_code = run("cmd.exe", "/c", "echo true", std_out > stdout_buf);
 #else

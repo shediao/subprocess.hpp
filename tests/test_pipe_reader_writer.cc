@@ -212,7 +212,7 @@ TEST(PipeReaderWriterTest, WriteAfterPipeDestroyed) {
   // PipeWriter keeps the write fd alive even after the Pipe is gone.
   PipeWriter writer = [&]() {
     auto pipe = Pipe::create();
-    // Keep the read end open so the pipe buffer doesn't raise SIGPIPE.
+    // Keep the read end open so the pipe dynamic_buffer doesn't raise SIGPIPE.
     auto reader = PipeReader(pipe);
     auto w = PipeWriter(pipe);
     // Return the writer; pipe and reader are destroyed, but the pipe_pair
@@ -598,7 +598,7 @@ TEST(PipeReaderWriterTest, WriteToStdin) {
   using namespace subprocess::named_arguments;
   auto pipe = Pipe::create();
   PipeWriter writer(pipe);
-  subprocess::buffer outbuf;
+  subprocess::dynamic_buffer outbuf;
 #if defined(_WIN32)
   subprocess::detail::builder proc("more.com", {},
                                    $stdin<pipe, $stdout> outbuf);

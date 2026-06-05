@@ -26,8 +26,8 @@ TEST(FilenameWithSpaceTest, ScriptWithSpacesInPath) {
   ASSERT_TRUE(temp_file.write(
       "@echo off\necho script_out\necho script_err 1>&2\nexit /b 5"s));
 
-  buffer stdout_buf;
-  buffer stderr_buf;
+  dynamic_buffer stdout_buf;
+  dynamic_buffer stderr_buf;
   int exit_code =
       run(temp_file.path(), std_out > stdout_buf, std_err > stderr_buf);
 
@@ -45,8 +45,8 @@ TEST(FilenameWithSpaceTest, ScriptWithSpacesInPath) {
   int chmod_exit_code = run("/bin/chmod", "+x", temp_file.path());
   ASSERT_EQ(chmod_exit_code, 0);
 
-  buffer stdout_buf;
-  buffer stderr_buf;
+  dynamic_buffer stdout_buf;
+  dynamic_buffer stderr_buf;
   int script_exit_code =
       run(temp_file.path(), std_out > stdout_buf, std_err > stderr_buf);
 
@@ -65,8 +65,8 @@ TEST(FilenameWithSpaceTest, RunShellScriptFull) {
   ASSERT_TRUE(temp_file.write(
       "@echo off\necho script_out\necho script_err 1>&2\nexit /b 5"s));
 
-  buffer stdout_buf;
-  buffer stderr_buf;
+  dynamic_buffer stdout_buf;
+  dynamic_buffer stderr_buf;
   int exit_code = run("cmd.exe", "/c", temp_file.path(), std_out > stdout_buf,
                       std_err > stderr_buf);
 
@@ -89,8 +89,8 @@ TEST(FilenameWithSpaceTest, RunShellScriptFull) {
   int chmod_exit_code = run("/bin/chmod", "+x", script_path);
   ASSERT_EQ(chmod_exit_code, 0);
 
-  buffer stdout_buf;
-  buffer stderr_buf;
+  dynamic_buffer stdout_buf;
+  dynamic_buffer stderr_buf;
   int script_exit_code =
       run(script_path, std_out > stdout_buf, std_err > stderr_buf);
 

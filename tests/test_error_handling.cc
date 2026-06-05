@@ -23,8 +23,8 @@
 #include "subprocess/subprocess.hpp"
 
 using namespace subprocess::named_arguments;
-using subprocess::buffer;
 using subprocess::capture_run;
+using subprocess::dynamic_buffer;
 using subprocess::run;
 
 #if !defined(_WIN32)
@@ -78,7 +78,7 @@ TEST(ErrorHandlingTest, InvalidCwdWithCaptureRunReturns126) {
 
 // Invalid CWD prints "chdir failed" to stderr
 TEST(ErrorHandlingTest, InvalidCwdPrintsChdirFailedToStderr) {
-  buffer stderr_buf;
+  dynamic_buffer stderr_buf;
   auto exit_code = run("true", cwd = "/this/directory/does/not/exist/xyz",
                        std_err > stderr_buf);
   ASSERT_EQ(exit_code, 126);
@@ -93,7 +93,7 @@ TEST(ErrorHandlingTest, ExecvFailureReturns127) {
 
 // execv failure prints to stderr
 TEST(ErrorHandlingTest, ExecvFailurePrintsToStderr) {
-  buffer stderr_buf;
+  dynamic_buffer stderr_buf;
   auto exit_code =
       run("/path/to/this_command_not_exists", std_err > stderr_buf);
   ASSERT_EQ(exit_code, 127);
@@ -110,7 +110,7 @@ TEST(ErrorHandlingTest, ExecveFailureReturns127) {
 
 // execve failure prints to stderr
 TEST(ErrorHandlingTest, ExecveFailurePrintsToStderr) {
-  buffer stderr_buf;
+  dynamic_buffer stderr_buf;
   auto exit_code = run("/path/to/this_command_not_exists",
                        env = std::map<std::string, std::string>{{"FOO", "BAR"}},
                        std_err > stderr_buf);
@@ -179,9 +179,9 @@ TEST(PosixSpawnErrorHandlingTest, InvalidCwdWithCaptureRunReturns127) {
 }
 
 // On the posix_spawn path, the error is printed to the parent's stderr,
-// so the child stderr buffer is empty.
+// so the child stderr dynamic_buffer is empty.
 TEST(PosixSpawnErrorHandlingTest, InvalidCwdChildStderrIsEmpty) {
-  buffer stderr_buf;
+  dynamic_buffer stderr_buf;
   auto exit_code = run("true", cwd = "/this/directory/does/not/exist/xyz",
                        std_err > stderr_buf);
   ASSERT_EQ(exit_code, 127);
@@ -199,7 +199,7 @@ TEST(PosixSpawnErrorHandlingTest, RegularCommandStillWorks) {
 }
 
 TEST(PosixSpawnErrorHandlingTest, CaptureStdoutWorks) {
-  buffer out;
+  dynamic_buffer out;
   auto exit_code = run("/bin/echo", "-n", "hello", std_out > out);
   ASSERT_EQ(exit_code, 0);
   ASSERT_EQ(out.to_string(), "hello");
