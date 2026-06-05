@@ -857,6 +857,13 @@ inline std::wstring get_last_error_message() {
   return L"Unknown error or FormatMessageW failed, error code: " +
          std::to_wstring(error);
 }
+inline void print_last_error(std::wstring_view context = L"") {
+  if (context.empty()) {
+    print_error(get_last_error_message());
+    return;
+  }
+  print_error(std::wstring(context) + L": " + get_last_error_message());
+}
 #else   // _WIN32
 inline std::string get_last_error_message() {
   const int error = errno;
@@ -866,19 +873,14 @@ inline std::string get_last_error_message() {
   return "Unknown error or strerror failed, error code: " +
          std::to_string(errno);
 }
-#endif  // !_WIN32
-
 inline void print_last_error(std::string_view context = "") {
   if (context.empty()) {
     print_error(get_last_error_message());
     return;
   }
-#if defined(_WIN32)
-  print_error(utf8_to_utf16(context) + L": " + get_last_error_message());
-#else
   print_error(std::string(context) + ": " + get_last_error_message());
-#endif
 }
+#endif  // !_WIN32
 
 // return value: -1 on error, >=0 on success
 inline ssize_t write_some(unique_fd const& fd, void const* data,
