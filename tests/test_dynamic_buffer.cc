@@ -47,10 +47,19 @@ TEST(DynamicBufferTest, SelfMoveAssign) {
   dynamic_buffer buf(std::string_view("self"));
   // Self-move assignment is a no-op due to the `if (this != &other)` guard.
   // The buffer retains its contents unchanged.
+#if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wself-move"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wself-move"
+#endif
   buf = std::move(buf);
+#if defined(__clang__)
 #pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
   // After self-move, the buffer still holds its original data.
   EXPECT_FALSE(buf.empty());
   buf.append("recover", 7);
