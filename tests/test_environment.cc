@@ -13,6 +13,10 @@
 
 #include <gtest/gtest.h>
 
+#if !defined(_WIN32)
+#include <pwd.h>
+#endif
+
 #include <cstdlib>
 #include <filesystem>
 #include <string>

@@ -120,7 +120,6 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
-#include <pwd.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
