@@ -323,7 +323,7 @@ inline std::wstring utf8_to_utf16(std::string_view str_view) {
 inline std::string utf16_to_utf8(std::wstring_view wstr_view) {
   return win_WideCharToMultiByte(wstr_view, CP_UTF8);
 }
-inline void print_error(std::wstring_view msg) {
+inline void print_error(std::wstring_view msg) noexcept {
   if (msg.empty()) {
     return;
   }
@@ -347,7 +347,7 @@ inline void print_error(std::wstring_view msg) {
                   static_cast<DWORD>(utf8_msg.size()), NULL, NULL);
 }
 #else
-inline void print_error(std::string_view const msg) {
+inline void print_error(std::string_view const msg) noexcept {
   if (msg.empty()) {
     return;
   }
@@ -373,11 +373,11 @@ using NativeStringView = std::string_view;
 #define TO_NATIVE_STRING(str) str
 #endif  // !_WIN32
 
-inline bool invalid_handle(NativeHandle handle) {
+inline bool invalid_handle(NativeHandle handle) noexcept {
   return INVALID_NATIVE_HANDLE_VALUE == handle;
 }
 
-inline void close_native_handle(NativeHandle& handle) {
+inline void close_native_handle(NativeHandle& handle) noexcept {
   if (!invalid_handle(handle)) {
 #if defined(_WIN32)
     CloseHandle(handle);
@@ -388,7 +388,7 @@ inline void close_native_handle(NativeHandle& handle) {
   }
 }
 
-inline NativeHandle dup_native_handle(NativeHandle handle) {
+inline NativeHandle dup_native_handle(NativeHandle handle) noexcept {
   if (invalid_handle(handle)) {
     return INVALID_NATIVE_HANDLE_VALUE;
   }
@@ -405,7 +405,7 @@ inline NativeHandle dup_native_handle(NativeHandle handle) {
 }
 
 #if !defined(_WIN32)
-[[maybe_unused]] inline bool set_nonblocking(int fd) {
+[[maybe_unused]] inline bool set_nonblocking(int fd) noexcept {
   if (invalid_handle(fd)) {
     return false;
   }
@@ -454,7 +454,7 @@ struct fd_traits;
 
 template <>
 struct fd_traits<NativeHandle> {
-  static NativeHandle invalid_value() {
+  static NativeHandle invalid_value() noexcept {
 #if defined(_WIN32)
     return INVALID_NATIVE_HANDLE_VALUE;
 #else
@@ -467,8 +467,8 @@ template <typename T, typename Derived, void (*deleter)(T&) = nullptr,
           typename Trait = fd_traits<T>>
 class unique_fd_base {
  public:
-  unique_fd_base() : handle_(Trait::invalid_value()) {}
-  explicit unique_fd_base(NativeHandle handle) : handle_(handle) {}
+  unique_fd_base() noexcept : handle_(Trait::invalid_value()) {}
+  explicit unique_fd_base(NativeHandle handle) noexcept : handle_(handle) {}
   ~unique_fd_base() {
     if (deleter) {
       deleter(handle_);
@@ -492,9 +492,9 @@ class unique_fd_base {
   unique_fd_base(const unique_fd_base&) = delete;
   unique_fd_base& operator=(const unique_fd_base&) = delete;
 
-  NativeHandle get() const { return handle_; }
-  explicit operator bool() const { return !invalid_handle(handle_); }
-  NativeHandle release() {
+  NativeHandle get() const noexcept { return handle_; }
+  explicit operator bool() const noexcept { return !invalid_handle(handle_); }
+  NativeHandle release() noexcept {
     auto handle = handle_;
     handle_ = Trait::invalid_value();
     return handle;
@@ -508,22 +508,22 @@ class unique_fd_base {
 
   void swap(Derived& other) noexcept { std::swap(handle_, other.handle_); }
 
-  friend bool operator==(Derived const& lhs, Derived const& rhs) {
+  friend bool operator==(Derived const& lhs, Derived const& rhs) noexcept {
     return lhs.handle_ == rhs.handle_;
   }
-  friend bool operator!=(Derived const& lhs, Derived const& rhs) {
+  friend bool operator!=(Derived const& lhs, Derived const& rhs) noexcept {
     return lhs.handle_ != rhs.handle_;
   }
-  friend bool operator==(Derived const& lhs, NativeHandle rhs) {
+  friend bool operator==(Derived const& lhs, NativeHandle rhs) noexcept {
     return lhs.handle_ == rhs;
   }
-  friend bool operator!=(Derived const& lhs, NativeHandle rhs) {
+  friend bool operator!=(Derived const& lhs, NativeHandle rhs) noexcept {
     return lhs.handle_ != rhs;
   }
-  friend bool operator==(NativeHandle lhs, Derived const& rhs) {
+  friend bool operator==(NativeHandle lhs, Derived const& rhs) noexcept {
     return lhs == rhs.handle_;
   }
-  friend bool operator!=(NativeHandle lhs, Derived const& rhs) {
+  friend bool operator!=(NativeHandle lhs, Derived const& rhs) noexcept {
     return lhs != rhs.handle_;
   }
 
@@ -540,7 +540,7 @@ class unique_fd
 
   void close() { reset(fd_traits<NativeHandle>::invalid_value()); }
 
-  unique_fd dup() const {
+  unique_fd dup() const noexcept {
     auto duped = dup_native_handle(get());
     if (invalid_handle(duped)) {
       return unique_fd{};
@@ -548,7 +548,7 @@ class unique_fd
     return unique_fd{duped};
   }
 
-  bool isatty() const {
+  bool isatty() const noexcept {
 #if defined(_WIN32)
     DWORD mode;
     return GetConsoleMode(get(), &mode);
@@ -558,7 +558,7 @@ class unique_fd
   }
 
 #if !defined(_WIN32)
-  void set_nonblocking() const { detail::set_nonblocking(get()); }
+  void set_nonblocking() const noexcept { detail::set_nonblocking(get()); }
 #endif
 };
 
@@ -942,7 +942,7 @@ inline void print_last_error(std::string_view context = "") {
 
 // return value: -1 on error, >=0 on success
 inline ssize_t write_some(unique_fd const& fd, void const* data,
-                          std::size_t size) {
+                          std::size_t size) noexcept {
 #if defined(_WIN32)
   DWORD chunk = static_cast<DWORD>((std::min<std::size_t>)(0x7ffff000u, size));
   DWORD written{0};
@@ -962,7 +962,8 @@ inline ssize_t write_some(unique_fd const& fd, void const* data,
 #endif
 }
 
-inline bool write_all(unique_fd const& fd, void const* data, std::size_t size) {
+inline bool write_all(unique_fd const& fd, void const* data,
+                      std::size_t size) noexcept {
   auto* p = static_cast<std::byte const*>(data);
   while (size > 0) {
     const ssize_t written = write_some(fd, p, size);
@@ -975,7 +976,8 @@ inline bool write_all(unique_fd const& fd, void const* data, std::size_t size) {
   return true;
 }
 
-inline ssize_t read_some(unique_fd const& fd, void* data, std::size_t size) {
+inline ssize_t read_some(unique_fd const& fd, void* data,
+                         std::size_t size) noexcept {
   if (size == 0) {
     return 0;
   }
@@ -1002,7 +1004,8 @@ inline ssize_t read_some(unique_fd const& fd, void* data, std::size_t size) {
 #endif
 }
 
-inline bool read_exact(unique_fd const& fd, void* data, std::size_t size) {
+inline bool read_exact(unique_fd const& fd, void* data,
+                       std::size_t size) noexcept {
   auto* p = static_cast<std::byte*>(data);
   while (size > 0) {
     const ssize_t read = read_some(fd, p, size);
@@ -1350,8 +1353,8 @@ class Pipe {
   friend class PipeWriter;
 
  public:
-  Pipe(Pipe&& other) = default;
-  Pipe& operator=(Pipe&& other) = default;
+  Pipe(Pipe&& other) noexcept = default;
+  Pipe& operator=(Pipe&& other) noexcept = default;
 
   Pipe(Pipe const&) = default;
   Pipe& operator=(Pipe const&) = default;
@@ -1376,16 +1379,16 @@ class Pipe {
   unique_fd& rfd() { return pair_->rfd_; }
   unique_fd& wfd() { return pair_->wfd_; }
 
-  ssize_t read_some(void* data, std::size_t size) const {
+  ssize_t read_some(void* data, std::size_t size) const noexcept {
     return detail::read_some(pair_->rfd_, data, size);
   }
-  bool read_exact(void* data, std::size_t size) const {
+  bool read_exact(void* data, std::size_t size) const noexcept {
     return detail::read_exact(pair_->rfd_, data, size);
   }
-  ssize_t write_some(void const* data, std::size_t size) const {
+  ssize_t write_some(void const* data, std::size_t size) const noexcept {
     return detail::write_some(pair_->wfd_, data, size);
   }
-  bool write_all(void const* data, std::size_t size) const {
+  bool write_all(void const* data, std::size_t size) const noexcept {
     return detail::write_all(pair_->wfd_, data, size);
   }
 
@@ -1459,8 +1462,8 @@ class PipeReader : public Readable {
   PipeReader(PipeReader const& pipe) = delete;
   PipeReader& operator=(PipeReader const&) = delete;
 
-  PipeReader(PipeReader&& other) = default;
-  PipeReader& operator=(PipeReader&& other) = default;
+  PipeReader(PipeReader&& other) noexcept = default;
+  PipeReader& operator=(PipeReader&& other) noexcept = default;
 
   ssize_t read(void* data, size_t size) override {
     if (!pair_) {
@@ -1482,8 +1485,8 @@ class PipeWriter : public Writable {
   PipeWriter(PipeWriter const& pipe) = delete;
   PipeWriter& operator=(PipeWriter const&) = delete;
 
-  PipeWriter(PipeWriter&& other) = default;
-  PipeWriter& operator=(PipeWriter&& other) = default;
+  PipeWriter(PipeWriter&& other) noexcept = default;
+  PipeWriter& operator=(PipeWriter&& other) noexcept = default;
 
   ssize_t write(void const* data, size_t size) override {
     if (!pair_) {
@@ -1540,16 +1543,16 @@ class File {
   [[nodiscard]] unique_fd const& fd() const { return fd_; }
   [[nodiscard]] unique_fd& fd() { return fd_; }
 
-  ssize_t read_some(void* data, std::size_t size) const {
+  ssize_t read_some(void* data, std::size_t size) const noexcept {
     return detail::read_some(fd_, data, size);
   }
-  bool read_exact(void* data, std::size_t size) const {
+  bool read_exact(void* data, std::size_t size) const noexcept {
     return detail::read_exact(fd_, data, size);
   }
-  ssize_t write_some(void const* data, std::size_t size) const {
+  ssize_t write_some(void const* data, std::size_t size) const noexcept {
     return detail::write_some(fd_, data, size);
   }
-  bool write_all(void const* data, std::size_t size) const {
+  bool write_all(void const* data, std::size_t size) const noexcept {
     return detail::write_all(fd_, data, size);
   }
 
@@ -1627,25 +1630,25 @@ class FileHandler {
   explicit FileHandler(NativeHandle f) : fd_{f} {}
   explicit FileHandler(unique_fd&& f) : fd_{std::move(f)} {}
 
-  FileHandler(FileHandler&& o) = default;
-  FileHandler& operator=(FileHandler&& o) = default;
+  FileHandler(FileHandler&& o) noexcept = default;
+  FileHandler& operator=(FileHandler&& o) noexcept = default;
   ~FileHandler() = default;
   FileHandler(FileHandler const&) = delete;
   FileHandler& operator=(FileHandler const&) = delete;
 
-  [[nodiscard]] unique_fd const& fd() const { return fd_; }
+  [[nodiscard]] unique_fd const& fd() const noexcept { return fd_; }
   void close() { fd_.close(); }
 
-  ssize_t read_some(void* data, std::size_t size) const {
+  ssize_t read_some(void* data, std::size_t size) const noexcept {
     return detail::read_some(fd_, data, size);
   }
-  bool read_exact(void* data, std::size_t size) const {
+  bool read_exact(void* data, std::size_t size) const noexcept {
     return detail::read_exact(fd_, data, size);
   }
-  ssize_t write_some(void const* data, std::size_t size) const {
+  ssize_t write_some(void const* data, std::size_t size) const noexcept {
     return detail::write_some(fd_, data, size);
   }
-  bool write_all(void const* data, std::size_t size) const {
+  bool write_all(void const* data, std::size_t size) const noexcept {
     return detail::write_all(fd_, data, size);
   }
 
@@ -1675,8 +1678,8 @@ class Buffer {
       : buf_{std::make_shared<value_type>(dynamic_buffer{})},
         pipe_{Pipe::create()} {}
 
-  Buffer(Buffer&& o) = default;
-  Buffer& operator=(Buffer&& o) = default;
+  Buffer(Buffer&& o) noexcept = default;
+  Buffer& operator=(Buffer&& o) noexcept = default;
   ~Buffer() = default;
   Buffer(Buffer const&) = delete;
   Buffer& operator=(Buffer const&) = delete;
@@ -1729,18 +1732,18 @@ class Buffer {
         *buf_);
   }
 
-  [[nodiscard]] bool empty() const {
+  [[nodiscard]] bool empty() const noexcept {
     return std::visit(
         visitor{[](dynamic_buffer const& buf) { return buf.empty(); },
                 [](const_buffer const& buf) { return buf.empty(); }},
         *buf_);
   }
 
-  Pipe& pipe() { return pipe_; }
-  unique_fd const& rfd() const { return pipe_.rfd(); }
-  unique_fd const& wfd() const { return pipe_.wfd(); }
-  unique_fd& rfd() { return pipe_.rfd(); }
-  unique_fd& wfd() { return pipe_.wfd(); }
+  Pipe& pipe() noexcept { return pipe_; }
+  unique_fd const& rfd() const noexcept { return pipe_.rfd(); }
+  unique_fd const& wfd() const noexcept { return pipe_.wfd(); }
+  unique_fd& rfd() noexcept { return pipe_.rfd(); }
+  unique_fd& wfd() noexcept { return pipe_.wfd(); }
 
   void close_write() const { pipe_.close_write(); }
   void close_read() const { pipe_.close_read(); }
@@ -1983,11 +1986,11 @@ class Redirector {
                *redirect_);
   }
 #endif  // !_WIN32
-  [[nodiscard]] virtual int fileno() const = 0;
-  [[nodiscard]] bool inherit() const { return !redirect_; }
+  [[nodiscard]] virtual int fileno() const noexcept = 0;
+  [[nodiscard]] bool inherit() const noexcept { return !redirect_; }
 
   template <typename T>
-  bool is() const {
+  bool is() const noexcept {
     return redirect_ && std::holds_alternative<T>(*redirect_);
   }
   template <typename T>
@@ -2010,7 +2013,7 @@ class StdinRedirector : public Redirector {
   StdinRedirector& operator=(StdinRedirector&&) noexcept = default;
   StdinRedirector(StdinRedirector const&) = delete;
   StdinRedirector& operator=(StdinRedirector const&) = delete;
-  [[nodiscard]] int fileno() const override { return 0; }
+  [[nodiscard]] int fileno() const noexcept override { return 0; }
   ~StdinRedirector() override {}
 };
 class StdoutRedirector : public Redirector {
@@ -2020,7 +2023,7 @@ class StdoutRedirector : public Redirector {
   StdoutRedirector& operator=(StdoutRedirector&&) noexcept = default;
   StdoutRedirector(StdoutRedirector const&) = delete;
   StdoutRedirector& operator=(StdoutRedirector const&) = delete;
-  [[nodiscard]] int fileno() const override { return 1; }
+  [[nodiscard]] int fileno() const noexcept override { return 1; }
   ~StdoutRedirector() override {}
 };
 class StderrRedirector : public Redirector {
@@ -2030,7 +2033,7 @@ class StderrRedirector : public Redirector {
   StderrRedirector& operator=(StderrRedirector&&) noexcept = default;
   StderrRedirector(StderrRedirector const&) = delete;
   StderrRedirector& operator=(StderrRedirector const&) = delete;
-  [[nodiscard]] int fileno() const override { return 2; }
+  [[nodiscard]] int fileno() const noexcept override { return 2; }
   ~StderrRedirector() override {}
 };
 
@@ -2755,8 +2758,8 @@ class process {
 #else
   [[nodiscard]] pid_t pid() const { return pid_.get(); }
 #endif
-  explicit operator bool() const { return is_valid(); }
-  bool is_valid() const {
+  explicit operator bool() const noexcept { return is_valid(); }
+  bool is_valid() const noexcept {
 #if defined(_WIN32)
     return !!process_handle_;
 #else
@@ -2773,7 +2776,7 @@ class process {
 // TODO:
 // void wait_for(std::chrono::milliseconds timeout) {}
 #if defined(_WIN32)
-  int decode(DWORD status) { return static_cast<int>(status); }
+  int decode(DWORD status) noexcept { return static_cast<int>(status); }
   int wait() {
     auto watchdog_guard = detail::make_scope_exit([this] { stop_watchdog(); });
     auto threads_guard =
@@ -2796,7 +2799,7 @@ class process {
     return 127;
   }
 #else
-  int decode(int status) {
+  int decode(int status) noexcept {
     if (WIFEXITED(status)) {
       return WEXITSTATUS(status);
     }
@@ -3419,8 +3422,8 @@ class builder {
 class pipeline {
  public:
   explicit pipeline(builder&& sub) { builders_.push_back(std::move(sub)); }
-  pipeline(pipeline&&) = default;
-  pipeline& operator=(pipeline&&) = default;
+  pipeline(pipeline&&) noexcept = default;
+  pipeline& operator=(pipeline&&) noexcept = default;
   pipeline(pipeline const&) = delete;
   pipeline& operator=(pipeline const&) = delete;
   pipeline& append(builder&& sub) {
