@@ -724,39 +724,19 @@ class dynamic_buffer {
   callback callback_{nullptr};
 };
 
-template <typename C, typename CharT>
-concept has_emplace_back_range = requires(C c, std::basic_string<CharT> s) {
-  c.emplace_back(s.begin(), s.end());
-};
-
-template <typename C, typename CharT, typename F>
-  requires requires(F f, CharT c) {
-    { f(c) } -> std::convertible_to<bool>;
-  } && (has_emplace_back_range<C, CharT> ||
-        requires(C c) {
-          c.insert(c.end(), std::declval<std::basic_string<CharT>>());
-        })
+template <typename Iterator, typename CharT, typename F>
 void split_to_if(
-    C& c, const std::basic_string<CharT>& str, F f,
+    const std::basic_string<CharT>& str, F f, Iterator it,
     std::size_t split_count = (std::numeric_limits<std::size_t>::max)(),
     bool compress_tokens = false) {
   auto begin = str.begin();
   auto delimiter = begin;
   std::size_t count = 0;
 
-  if constexpr (requires { c.reserve(std::declval<std::size_t>()); }) {
-    if (split_count < (std::numeric_limits<std::size_t>::max)()) {
-      c.reserve(c.size() + split_count + 1);
-    }
-  }
-
   while ((count++ < split_count) &&
          (delimiter = std::find_if(begin, str.end(), f)) != str.end()) {
-    if constexpr (has_emplace_back_range<C, CharT>) {
-      c.emplace_back(begin, delimiter);
-    } else {
-      c.insert(c.end(), std::basic_string<CharT>{begin, delimiter});
-    }
+    *it = std::basic_string<CharT>{begin, delimiter};
+    ++it;
     if (compress_tokens) {
       begin = std::find_if_not(delimiter, str.end(), f);
     } else {
@@ -764,18 +744,15 @@ void split_to_if(
     }
   }
 
-  if constexpr (has_emplace_back_range<C, CharT>) {
-    c.emplace_back(begin, str.end());
-  } else {
-    c.insert(c.end(), std::basic_string<CharT>{begin, str.end()});
-  }
+  *it = std::basic_string<CharT>{begin, str.end()};
+  ++it;
 }
 
 template <typename CharT>
 inline std::vector<std::basic_string<CharT>> split(
     const std::basic_string<CharT>& s, CharT delim) {
   std::vector<std::basic_string<CharT>> ret;
-  split_to_if(ret, s, [delim](CharT c) { return c == delim; });
+  split_to_if(s, [delim](CharT c) { return c == delim; }, back_inserter(ret));
   return ret;
 }
 
