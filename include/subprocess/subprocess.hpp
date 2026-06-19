@@ -449,42 +449,50 @@ auto make_scope_exit(F&& f) {
   return scope_exit<std::decay_t<F>>{std::forward<F>(f)};
 }
 
-template <typename Container, typename OutputIterator, typename F>
+template <typename InputIterator, typename OutputIterator, typename F>
 void split_to_if(
-    const Container& container, F&& f, OutputIterator output_it,
+    InputIterator first, InputIterator last, F&& f, OutputIterator output_it,
     std::size_t split_count = (std::numeric_limits<std::size_t>::max)(),
     bool compress_tokens = false) {
-  using std::begin;
-  using std::end;
-  auto const begin_ = begin(container);
-  auto const end_ = end(container);
-  auto current_ = begin_;
+  auto current_ = first;
   std::size_t count = 0;
 
   while (count < split_count) {
-    auto const delimiter = std::find_if(current_, end_, f);
-    if (delimiter == end_) {
+    auto const delimiter = std::find_if(current_, last, f);
+    if (delimiter == last) {
       break;
     }
     *output_it = {current_, delimiter};
     ++output_it;
     if (compress_tokens) {
-      current_ = std::find_if_not(delimiter, end_, f);
+      current_ = std::find_if_not(delimiter, last, f);
     } else {
       current_ = std::next(delimiter);
     }
     ++count;
   }
 
-  *output_it = {current_, end_};
+  *output_it = {current_, last};
   ++output_it;
+}
+template <typename Container, typename OutputIterator, typename F>
+void split_to_if(
+    Container const& container, F&& f, OutputIterator output_it,
+    std::size_t split_count = (std::numeric_limits<std::size_t>::max)(),
+    bool compress_tokens = false) {
+  using std::begin;
+  using std::end;
+  split_to_if(begin(container), end(container), std::forward<F>(f),
+              std::move(output_it), split_count, compress_tokens);
 }
 
 template <typename CharT>
 inline std::vector<std::basic_string<CharT>> split(
     const std::basic_string<CharT>& s, CharT delim) {
   std::vector<std::basic_string<CharT>> ret;
-  split_to_if(s, [delim](CharT c) { return c == delim; }, back_inserter(ret));
+  split_to_if(
+      s.begin(), s.end(), [delim](CharT c) { return c == delim; },
+      back_inserter(ret));
   return ret;
 }
 
