@@ -449,6 +449,42 @@ auto make_scope_exit(F&& f) {
   return scope_exit<std::decay_t<F>>{std::forward<F>(f)};
 }
 
+template <typename Container, typename OutputIterator, typename F>
+void split_to_if(
+    const Container& container, F&& f, OutputIterator output_it,
+    std::size_t split_count = (std::numeric_limits<std::size_t>::max)(),
+    bool compress_tokens = false) {
+  using std::begin;
+  using std::end;
+  auto begin_ = begin(container);
+  auto end_ = end(container);
+  auto it = begin_;
+  auto delimiter = begin_;
+  std::size_t count = 0;
+
+  while ((count++ < split_count) &&
+         (delimiter = std::find_if(it, end_, f)) != end_) {
+    *output_it = {it, delimiter};
+    ++output_it;
+    if (compress_tokens) {
+      it = std::find_if_not(delimiter, end_, f);
+    } else {
+      it = std::next(delimiter);
+    }
+  }
+
+  *output_it = {it, end_};
+  ++output_it;
+}
+
+template <typename CharT>
+inline std::vector<std::basic_string<CharT>> split(
+    const std::basic_string<CharT>& s, CharT delim) {
+  std::vector<std::basic_string<CharT>> ret;
+  split_to_if(s, [delim](CharT c) { return c == delim; }, back_inserter(ret));
+  return ret;
+}
+
 template <typename T>
 struct fd_traits;
 
@@ -662,6 +698,25 @@ class dynamic_buffer {
     throw std::runtime_error("invalid size");
   }
   [[nodiscard]] auto to_string() const { return to<std::string>(); }
+  [[nodiscard]] auto to_lines() const {
+    std::vector<std::string> lines;
+    std::string_view buf{reinterpret_cast<const char*>(buf_.data()),
+                         buf_.size()};
+    if (buf.empty()) {
+      return lines;
+    }
+    if (buf.back() == '\n') {
+      buf.remove_suffix(1);
+    }
+    split_to_if(
+        buf, [](char c) { return c == '\n'; }, std::back_inserter(lines));
+    for (auto& line : lines) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+    }
+    return lines;
+  }
   [[nodiscard]] auto empty() const { return buf_.empty(); }
   auto clear() { return buf_.clear(); }
 
@@ -723,42 +778,6 @@ class dynamic_buffer {
   std::vector<unsigned char> prepare_;
   callback callback_{nullptr};
 };
-
-template <typename Container, typename OutputIterator, typename F>
-void split_to_if(
-    const Container& container, F&& f, OutputIterator output_it,
-    std::size_t split_count = (std::numeric_limits<std::size_t>::max)(),
-    bool compress_tokens = false) {
-  using std::begin;
-  using std::end;
-  auto begin_ = begin(container);
-  auto end_ = end(container);
-  auto it = begin_;
-  auto delimiter = begin_;
-  std::size_t count = 0;
-
-  while ((count++ < split_count) &&
-         (delimiter = std::find_if(it, end_, f)) != end_) {
-    *output_it = {it, delimiter};
-    ++output_it;
-    if (compress_tokens) {
-      it = std::find_if_not(delimiter, end_, f);
-    } else {
-      it = std::next(delimiter);
-    }
-  }
-
-  *output_it = {it, end_};
-  ++output_it;
-}
-
-template <typename CharT>
-inline std::vector<std::basic_string<CharT>> split(
-    const std::basic_string<CharT>& s, CharT delim) {
-  std::vector<std::basic_string<CharT>> ret;
-  split_to_if(s, [delim](CharT c) { return c == delim; }, back_inserter(ret));
-  return ret;
-}
 
 #if defined(_WIN32)
 
