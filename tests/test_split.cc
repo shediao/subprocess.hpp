@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <deque>
 #include <list>
@@ -599,4 +600,75 @@ TEST(SplitTest, WstringReturnTypeIsVector) {
   ASSERT_EQ(v.size(), 2u);
   v.push_back(L"c");
   EXPECT_EQ(v.back(), L"c");
+}
+
+TEST(SplitToIfTest, ReturnTypeIsVectorWithSplitCount) {
+  std::vector<std::string> v{2};
+  split_to_if(
+      std::string("a=b"), [](char c) { return c == '='; }, v.begin(), 1);
+  EXPECT_EQ(v[0], "a");
+  EXPECT_EQ(v[1], "b");
+}
+
+// ============================================================================
+// split_to_if() — generalized container input (non-basic_string)
+// ============================================================================
+
+TEST(SplitToIfTest, VectorCharInput) {
+  std::vector<char> input{'a', ',', 'b', ',', 'c'};
+  std::vector<std::string> v;
+  split_to_if(input, [](char c) { return c == ','; }, back_inserter(v));
+  ASSERT_EQ(v.size(), 3u);
+  EXPECT_EQ(v[0], "a");
+  EXPECT_EQ(v[1], "b");
+  EXPECT_EQ(v[2], "c");
+}
+
+TEST(SplitToIfTest, ArrayCharInput) {
+  std::array<char, 5> input{'a', ',', 'b', ',', 'c'};
+  std::vector<std::string> v;
+  split_to_if(input, [](char c) { return c == ','; }, back_inserter(v));
+  ASSERT_EQ(v.size(), 3u);
+  EXPECT_EQ(v[0], "a");
+  EXPECT_EQ(v[1], "b");
+  EXPECT_EQ(v[2], "c");
+}
+
+TEST(SplitToIfTest, VectorIntInput) {
+  std::vector<int> input{1, 0, 2, 0, 3};
+  std::vector<std::vector<int>> v;
+  split_to_if(input, [](int i) { return i == 0; }, back_inserter(v));
+  ASSERT_EQ(v.size(), 3u);
+  EXPECT_EQ(v[0], (std::vector<int>{1}));
+  EXPECT_EQ(v[1], (std::vector<int>{2}));
+  EXPECT_EQ(v[2], (std::vector<int>{3}));
+}
+
+TEST(SplitToIfTest, ListCharInput) {
+  std::list<char> input{'x', ':', 'y', ':', 'z'};
+  std::vector<std::string> v;
+  split_to_if(input, [](char c) { return c == ':'; }, back_inserter(v));
+  ASSERT_EQ(v.size(), 3u);
+  EXPECT_EQ(v[0], "x");
+  EXPECT_EQ(v[1], "y");
+  EXPECT_EQ(v[2], "z");
+}
+
+TEST(SplitToIfTest, VectorCharWithCompress) {
+  std::vector<char> input{'a', ',', ',', 'b'};
+  std::vector<std::string> v;
+  split_to_if(
+      input, [](char c) { return c == ','; }, back_inserter(v), size_t_max,
+      true);
+  ASSERT_EQ(v.size(), 2u);
+  EXPECT_EQ(v[0], "a");
+  EXPECT_EQ(v[1], "b");
+}
+
+TEST(SplitToIfTest, VectorCharWithSplitCount) {
+  std::vector<char> input{'a', '=', 'b'};
+  std::vector<std::string> v{2};
+  split_to_if(input, [](char c) { return c == '='; }, v.begin(), 1);
+  EXPECT_EQ(v[0], "a");
+  EXPECT_EQ(v[1], "b");
 }

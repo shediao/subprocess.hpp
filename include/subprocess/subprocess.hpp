@@ -724,28 +724,32 @@ class dynamic_buffer {
   callback callback_{nullptr};
 };
 
-template <typename Iterator, typename CharT, typename F>
+template <typename Container, typename OutputIterator, typename F>
 void split_to_if(
-    const std::basic_string<CharT>& str, F f, Iterator it,
+    const Container& container, F&& f, OutputIterator output_it,
     std::size_t split_count = (std::numeric_limits<std::size_t>::max)(),
     bool compress_tokens = false) {
-  auto begin = str.begin();
-  auto delimiter = begin;
+  using std::begin;
+  using std::end;
+  auto begin_ = begin(container);
+  auto end_ = end(container);
+  auto it = begin_;
+  auto delimiter = begin_;
   std::size_t count = 0;
 
   while ((count++ < split_count) &&
-         (delimiter = std::find_if(begin, str.end(), f)) != str.end()) {
-    *it = std::basic_string<CharT>{begin, delimiter};
-    ++it;
+         (delimiter = std::find_if(it, end_, f)) != end_) {
+    *output_it = {it, delimiter};
+    ++output_it;
     if (compress_tokens) {
-      begin = std::find_if_not(delimiter, str.end(), f);
+      it = std::find_if_not(delimiter, end_, f);
     } else {
-      begin = std::next(delimiter);
+      it = std::next(delimiter);
     }
   }
 
-  *it = std::basic_string<CharT>{begin, str.end()};
-  ++it;
+  *output_it = {it, end_};
+  ++output_it;
 }
 
 template <typename CharT>
