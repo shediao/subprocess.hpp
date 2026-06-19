@@ -456,24 +456,27 @@ void split_to_if(
     bool compress_tokens = false) {
   using std::begin;
   using std::end;
-  auto begin_ = begin(container);
-  auto end_ = end(container);
-  auto it = begin_;
-  auto delimiter = begin_;
+  auto const begin_ = begin(container);
+  auto const end_ = end(container);
+  auto current_ = begin_;
   std::size_t count = 0;
 
-  while ((count++ < split_count) &&
-         (delimiter = std::find_if(it, end_, f)) != end_) {
-    *output_it = {it, delimiter};
+  while (count < split_count) {
+    auto const delimiter = std::find_if(current_, end_, f);
+    if (delimiter == end_) {
+      break;
+    }
+    *output_it = {current_, delimiter};
     ++output_it;
     if (compress_tokens) {
-      it = std::find_if_not(delimiter, end_, f);
+      current_ = std::find_if_not(delimiter, end_, f);
     } else {
-      it = std::next(delimiter);
+      current_ = std::next(delimiter);
     }
+    ++count;
   }
 
-  *output_it = {it, end_};
+  *output_it = {current_, end_};
   ++output_it;
 }
 
